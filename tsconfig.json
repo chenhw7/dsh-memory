@@ -12,12 +12,21 @@
     "sourceMap": true,
     "verbatimModuleSyntax": false,
     "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
     "rootDir": "src",
     "outDir": "lib",
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    // Resolve `@deepseek-ai/cordis` to the module that declares `Context` so this
+    // package's own `declare module '@deepseek-ai/cordis' { interface Context }`
+    // augmentation merges with the declared interface instead of shadowing the
+    // re-export in the package root (which would drop `ctx.on/effect/get`).
+    "paths": {
+      "@deepseek-ai/cordis": ["./node_modules/@deepseek-ai/cordis/lib/types/context.ts"]
+    }
   },
   "include": ["src"]
 }

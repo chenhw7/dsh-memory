@@ -41,7 +41,7 @@ const memoryDomainSpec = defineDomain({
   name: 'memory',
   version: 0,
   tables: {
-    entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as z.ZodType<MemoryEntry>),
+    entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as z.ZodType<MemoryEntry>),
   },
 })
 

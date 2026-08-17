@@ -9,6 +9,8 @@
 
 /** MemoryId is imported from ./brand.ts for use in type positions below. */
 import type { MemoryId } from './brand.ts'
+/** Re-exported so the tool and review modules can import the full vocabulary from this module. */
+export type { MemoryId }
 
 /** The scope a memory entry belongs to. */
 export type MemoryScope = 'global' | 'project' | 'user'
