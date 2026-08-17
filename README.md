@@ -18,22 +18,46 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 
 ## Install
 
-### From GitHub (no npm publish required)
+### Prerequisites
+
+- The `dsh` CLI installed and on your PATH (`npx @deepseek-ai/dsh` or built from source).
+- A profile you want to add memory to (this guide uses `web`).
+
+### From GitHub (recommended)
+
+pnpm >= 10 blocks a git dependency's `prepare` (build) script until you explicitly allow it, so installation is **two steps**:
+
+**Step 1: allow the build script.** Edit your profile's `pnpm-workspace.yaml`:
+
+```sh
+# The file lives at ~/.dsh/profiles/web/pnpm-workspace.yaml
+# (or $DSH_HOME/profiles/web/pnpm-workspace.yaml if you set DSH_HOME)
+```
+
+Add this section (merge with existing content if the file already has fields):
+
+```yaml
+onlyBuiltDependencies:
+  - "@chenhw7/dsh-memory"
+```
+
+This grants permission for the package's `prepare` script (`npm run build`) to run on your machine at install time. Only allow packages whose source you trust, and pin a commit so a later push cannot silently change what runs.
+
+**Step 2: install the plugin:**
 
 ```sh
 dsh plugin --profile web add github:chenhw7/dsh-memory
 ```
 
-pnpm ≥10 blocks a git dependency's `prepare` (build) script until allowed, so the first `add` fails with a hint. Copy the exact key pnpm prints into the profile's `pnpm-workspace.yaml` and re-run:
+Or pinned to a specific commit for reproducibility:
 
-```yaml
-allowBuilds:
-  @chenhw7/dsh-memory: true
+```sh
+dsh plugin --profile web add github:chenhw7/dsh-memory#e295960
 ```
 
-Then re-run the `add`. Pin a commit (`github:chenhw7/dsh-memory#<sha>`) so a later push cannot silently change what runs.
-
 ### From a local checkout
+
+If you want to hack on the plugin, clone and build it first, then install from the local path:
 
 ```sh
 git clone https://github.com/chenhw7/dsh-memory.git
@@ -42,18 +66,44 @@ npm install && npm run build
 dsh plugin --profile web add file:.
 ```
 
+A `file:` install still runs `prepare`, so the same `onlyBuiltDependencies` allowance above is needed unless the `lib/` is already built (pnpm skips `prepare` when the entry points exist).
+
 ### From a tarball (no build permission needed)
 
+If you'd rather not grant build-script permission, pack a tarball from a checkout with `lib/` already built, then install it -- a tarball install needs no `onlyBuiltDependencies` entry:
+
 ```sh
-npm pack              # produces chenhw7-dsh-memory-0.1.0.tgz with built lib/
+cd dsh-memory
+npm install && npm run build
+npm pack                    # produces chenhw7-dsh-memory-0.1.0.tgz
 dsh plugin --profile web add ./chenhw7-dsh-memory-0.1.0.tgz
 ```
 
 ## Verify
 
+After install, confirm the four memory rows are in the composed profile tree:
+
 ```sh
-dsh --profile web --dump-config | grep memory   # shows the four memory rows
-dsh web                                          # start; settings UI shows the memory namespace
+dsh --profile web --dump-config | grep memory
+```
+
+You should see four rows pointing at `@chenhw7/dsh-memory/*`:
+
+```
+- id: memory-store
+  name: '@chenhw7/dsh-memory/store'
+- id: tool-memory
+  name: '@chenhw7/dsh-memory/tool'
+- id: memory-review
+  name: '@chenhw7/dsh-memory/review'
+- id: memory-context
+  name: '@chenhw7/dsh-memory/context'
+```
+
+Then start dsh and check the settings UI shows the `memory` namespace:
+
+```sh
+dsh web
 ```
 
 ## Configuration
