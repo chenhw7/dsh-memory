@@ -1,0 +1,32 @@
+# @chenhw7/dsh-memory — long-term memory bundle patch for the DeepSeek Harness.
+#
+# Installs the memory store provider, six model-facing memory tools, automatic
+# review + flush extraction, and system-prompt context injection as ONE layer
+# over dsh-base. The four memory rows point at this package's own export
+# sub-paths; the two storage rows are NOT inserted here because dsh-web-app
+# already provides them (storage-json + storage-domain with the correct root
+# path). For a headless profile that has no storage layer, see the README's
+# "headless" section — add the storage rows to your profile's cordis.patch.yml
+# instead of letting this bundle insert them (last-write-wins would clobber the
+# web-app's root config otherwise).
+#
+# Row order carries no load semantics; the grouping is for readers.
+
+- insert:
+    # Memory store provider — opens the 'memory' domain, registers ctx.memory.
+    # Requires the storage-domain facility (provided by dsh-web-app; headless
+    # users must add storage-domain themselves — see README).
+    - id: memory-store
+      name: '@chenhw7/dsh-memory/store'
+
+    # Model-facing memory tools (memory_search/add/replace/remove/list/get).
+    - id: tool-memory
+      name: '@chenhw7/dsh-memory/tool'
+
+    # Automatic extraction: projection accumulator + compaction/dispose flush.
+    - id: memory-review
+      name: '@chenhw7/dsh-memory/review'
+
+    # System-prompt section injection + frontend settings namespace.
+    - id: memory-context
+      name: '@chenhw7/dsh-memory/context'
