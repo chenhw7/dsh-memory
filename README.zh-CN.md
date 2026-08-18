@@ -31,7 +31,7 @@
 
 ### 前置要求
 
-- 已安装 [Node.js](https://nodejs.org) 和 npm。
+- 已安装 [Node.js](https://nodejs.org)。
 - 可以使用 dsh CLI（全局安装或源码构建）：
 
   ```sh
@@ -60,26 +60,56 @@
 
 - 准备一个要添加记忆能力的 profile（本文以 `web` 为例）。
 
-### 从 GitHub 安装（推荐）
+### 从 npm 安装（推荐）
 
-pnpm 会阻止 git 依赖的 `prepare` 构建脚本，直到你显式允许，因此安装分两步。
+一条命令。npm 上的 tarball 是预构建的，安装时 pnpm 不会在你的机器上运行任何构建脚本，也不需要额外的 pnpm 配置：
 
-**第一步：允许构建脚本**
+```sh
+dsh plugin add --profile web @chenhw7/dsh-memory
+```
 
-编辑 profile 的 `pnpm-workspace.yaml`：
+如果使用源码构建的 dsh，在 `deepseek-harness` 目录下执行：
+
+```sh
+pnpm dsh plugin add --profile web @chenhw7/dsh-memory
+```
+
+需要锁定版本而不跟 `latest` 时：
+
+```sh
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.0
+```
+
+### 从 GitHub 安装（尝鲜最新 commit）
+
+只有当你要测试比最新 npm 版本更新的 commit 时才用这种方式。pnpm 会阻止 git 依赖的 `prepare` 构建脚本，直到你显式允许，所以没有 `allowBuilds` 条目的 profile 需要**跑两次**：
+
+**第一步：先跑一次安装。** 它会停下并报错：
+
+```sh
+dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
+```
+
+```text
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.0"
+needs to execute build scripts but is not in the "allowBuilds" allowlist.
+...
+allowBuilds:
+  @chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<commit>: true
+```
+
+**第二步：把 pnpm 打印的精确 key 加入允许列表。** 编辑 profile 的 `pnpm-workspace.yaml`：
 
 - Windows：`%USERPROFILE%\.dsh\profiles\web\pnpm-workspace.yaml`
 - macOS/Linux：`~/.dsh/profiles/web/pnpm-workspace.yaml`
 - 如果设置了 `DSH_HOME`：`$DSH_HOME/profiles/web/pnpm-workspace.yaml`
 
-添加（如果已有内容则合并）：
+添加报错信息里的那条 key（与已有内容合并）：
 
 ```yaml
 allowBuilds:
-  "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/045a6f4402fac282fb649787bf3de38cad28c6bb": true
+  "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<pnpm 打印的 commit>": true
 ```
-
-> **为什么是这个 URL？** 这是 pnpm 在 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 中打印的依赖 URL，包含解析后的 commit（`045a6f...`）。如果更新 `dsh-memory` 到新 commit，pnpm 可能提示不同的 URL；请同步更新 `allowBuilds`，或继续使用这里固定的 commit。
 
 部分 pnpm 版本使用旧格式：
 
@@ -88,25 +118,9 @@ onlyBuiltDependencies:
   - "@chenhw7/dsh-memory"
 ```
 
-**第二步：安装插件**
+如果你的 pnpm 提示的是这个字段，就用这个格式。然后重新执行 `dsh plugin add` 命令。
 
-```sh
-dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
-```
-
-如果使用源码构建的 dsh，则在 `deepseek-harness` 目录下执行：
-
-```sh
-pnpm dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
-```
-
-profile 路径和 `allowBuilds` 步骤与全局安装相同。
-
-固定 commit 安装：
-
-```sh
-dsh plugin add --profile web https://github.com/chenhw7/dsh-memory/archive/045a6f4402fac282fb649787bf3de38cad28c6bb.tar.gz
-```
+> **key 要从 pnpm 的报错里复制，不要从旧版本文档里复制。** key 包含解析后的 commit，每换一个新 commit 安装都会变。这条允许项的含义是：允许该包的 `prepare` 脚本（`npm run build`）在安装时于你的机器上运行——只允许你信任源码的包。需要可复现的安装时，请固定 commit（`dsh plugin add --profile web https://github.com/chenhw7/dsh-memory/archive/<commit>.tar.gz`），并允许 pnpm 为该固定地址打印的 key。
 
 ### 从本地 checkout 安装
 
@@ -119,11 +133,11 @@ npm install && npm run build
 dsh plugin add --profile web file:.
 ```
 
-`file:` 安装仍然会运行 `prepare`，所以通常也需要同样的 `allowBuilds` 允许配置，除非 `lib/` 已经构建好（pnpm 在入口文件已存在时会跳过 `prepare`）。如果 pnpm 打印了需要批准的精确依赖 key，请将它加入 `allowBuilds`（或使用旧的 `onlyBuiltDependencies` 列表）。
+pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 条目——安装是按原样拷贝文件的，这也正是上面 `npm run build` 步骤的意义：`lib/` 缺失或过期，装到的就是缺失或过期的产物。
 
 ### 从 tarball 安装（无需构建权限）
 
-如果你不想授予构建脚本权限，可以从已构建好 `lib/` 的 checkout 打包 tarball 再安装：
+如果不想从 npm registry 安装，可以从已构建好 `lib/` 的 checkout 打包 tarball 再安装——tarball 是预构建的，同样不需要 `allowBuilds` 条目：
 
 ```sh
 cd dsh-memory
@@ -245,7 +259,7 @@ memory:
 
 ### `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
 
-如果 `dsh plugin add` 报错，例如：
+如果**git 安装**（`dsh plugin add ... https://github.com/...`）报错，例如：（npm 安装 `@chenhw7/dsh-memory` 不会触发此错误。）
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
@@ -272,7 +286,7 @@ The git-hosted package "@chenhw7/dsh-memory@0.1.0" needs to execute build script
 
 - **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的子串匹配，不是 embeddings。
 - **提取质量跟随会话模型** — review/flush 复用会话当前路由的 provider/model。
-- **git 安装需要构建允许** — pnpm 会阻止 `prepare` 脚本，直到你为精确依赖添加 `allowBuilds` 条目。可以使用 tarball 或 npm publish 来避免。
+- **git 安装需要构建允许** — pnpm 会阻止 git 依赖的 `prepare` 脚本，直到你在 profile 的 `pnpm-workspace.yaml` 中允许它（见上文两步流程）。npm 安装路径则完全不需要。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
 
 ## 许可证

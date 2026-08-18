@@ -1,0 +1,37 @@
+# Publish to npm when a version tag (v*) is pushed.
+#
+# Auth: the repo secret NPM_TOKEN must be a GRANULAR access token
+# (Packages: read & write, scope @chenhw7/dsh-memory) with
+# "bypass two-factor authentication" enabled. Classic tokens and tokens
+# without that permission are rejected by npm with E403.
+#
+# Release procedure:
+#   npm version patch --no-git-tag-version   # bump + commit
+#   git tag v<new-version>
+#   git push origin main --tags
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches package.json version
+        run: |
+          ver="${GITHUB_REF#refs/tags/}"
+          ver="${ver#v}"
+          pkg="$(node -p 'require("./package.json").version')"
+          if [ "$ver" != "$pkg" ]; then
+            echo "::error::tag v${ver} does not match package.json version ${pkg}"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
