@@ -10,6 +10,7 @@
 
 - [功能特性](#功能特性)
 - [安装](#安装)
+- [卸载](#卸载)
 - [验证](#验证)
 - [配置](#配置)
 - [架构](#架构)
@@ -77,7 +78,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定版本而不跟 `latest` 时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.1
 ```
 
 ### 从 GitHub 安装（尝鲜最新 commit）
@@ -91,7 +92,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.0"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.1"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -142,9 +143,31 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.1.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.0.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.1.1.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.1.tgz
 ```
+
+## 卸载
+
+从 profile 中移除插件：
+
+```sh
+dsh plugin remove --profile web @chenhw7/dsh-memory
+```
+
+（源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，四个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
+
+卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下的一个文件里：
+
+```sh
+# macOS/Linux
+~/.dsh/storages/memory.json
+# Windows
+%USERPROFILE%\.dsh\storages\memory.json
+# 如果设置了 DSH_HOME，则为 $DSH_HOME/storages/memory.json
+```
+
+先停掉 dsh，再删除该文件即可清空所有已保存的记忆。同一目录下的其他文件属于其他功能，不要删除整个目录。
 
 ## 验证
 
@@ -263,7 +286,7 @@ memory:
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.0" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.1" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 说明 pnpm 还没有被允许执行该包的 `prepare` 构建脚本。

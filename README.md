@@ -10,6 +10,7 @@ This is a **self-contained single package** (not a multi-package workspace). It 
 
 - [Features](#features)
 - [Install](#install)
+- [Uninstall](#uninstall)
 - [Verify](#verify)
 - [Troubleshooting](#troubleshooting)
 - [Configuration](#configuration)
@@ -79,7 +80,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a version instead of `latest`:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.1
 ```
 
 ### From GitHub (bleeding edge)
@@ -93,7 +94,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.0"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.1"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -146,9 +147,31 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.1.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.0.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.1.1.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.1.tgz
 ```
+
+## Uninstall
+
+Remove the plugin from a profile:
+
+```sh
+dsh plugin remove --profile web @chenhw7/dsh-memory
+```
+
+(with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the four `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
+
+Uninstall does **not** delete your saved memories. They live in one file under dsh's storage area:
+
+```sh
+# macOS/Linux
+~/.dsh/storages/memory.json
+# Windows
+%USERPROFILE%\.dsh\storages\memory.json
+# or $DSH_HOME/storages/memory.json if you set DSH_HOME
+```
+
+Stop dsh, then delete that file to wipe all saved memories. Other files in the same directory belong to other features — do not remove the whole directory.
 
 ## Verify
 
@@ -188,7 +211,7 @@ If a **git-hosted** install (`dsh plugin add ... https://github.com/...`) fails 
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.0" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.1" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 It means pnpm has not been told to allow this package's `prepare` build script.
