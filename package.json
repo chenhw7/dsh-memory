@@ -34,6 +34,9 @@
       "types": "./lib/remote/index.d.ts",
       "default": "./lib/remote/index.js"
     },
+    "./client": {
+      "default": "./lib/client/index.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -50,6 +53,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-api-remotes"]
     }
   },
   "scripts": {

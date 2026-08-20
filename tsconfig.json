@@ -28,5 +28,6 @@
       "@deepseek-ai/cordis": ["./node_modules/@deepseek-ai/cordis/lib/types/context.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/client"]
 }
