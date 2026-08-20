@@ -36,7 +36,7 @@ import {
   messageText,
 } from './accumulator.ts'
 import type { AccumulatorState, AccumulatorView } from './accumulator.ts'
-import { runFlushExtraction, runReviewExtraction } from './extract.ts'
+import { runFlushExtraction, runReviewExtraction, type ExtractionModelOverride } from './extract.ts'
 
 /** Cordis function-plugin name. */
 export const name = 'memory-review'
@@ -55,6 +55,12 @@ export interface Config {
   flushOnCompaction?: boolean
   /** Enable the session-disposed flush. Defaults to `true`. */
   flushOnDispose?: boolean
+  /** Override provider for extraction calls; empty string falls back to the session route. */
+  extractionModelProvider?: string
+  /** Override model for extraction calls; empty string falls back to the session route. */
+  extractionModelModel?: string
+  /** Max extraction calls per session before budget exhaustion; defaults to 20. 0 = unlimited. */
+  extractionBudget?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -62,6 +68,9 @@ export const Config: z<Config> = z.object({
   reviewCandidateThreshold: z.number().step(1).min(1).default(10),
   flushOnCompaction: z.boolean().default(true),
   flushOnDispose: z.boolean().default(true),
+  extractionModelProvider: z.string().default(''),
+  extractionModelModel: z.string().default(''),
+  extractionBudget: z.number().step(1).min(0).default(20),
 })
 
 /** Resolved config with every default materialized. */
@@ -70,6 +79,8 @@ interface ResolvedConfig {
   readonly reviewCandidateThreshold: number
   readonly flushOnCompaction: boolean
   readonly flushOnDispose: boolean
+  readonly extractionModel: ExtractionModelOverride | undefined
+  readonly extractionBudget: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -77,11 +88,17 @@ const DISPOSE_FLUSH_TIMEOUT_MS = 5_000
 
 /** Resolve and validate the raw config into the runtime form. */
 function resolveConfig(config: Config): ResolvedConfig {
+  const hasOverride = (config.extractionModelProvider ?? '').length > 0 || (config.extractionModelModel ?? '').length > 0
   return {
     reviewEnabled: config.reviewEnabled ?? true,
     reviewCandidateThreshold: config.reviewCandidateThreshold ?? 10,
     flushOnCompaction: config.flushOnCompaction ?? true,
     flushOnDispose: config.flushOnDispose ?? true,
+    extractionModel: hasOverride ? {
+      ...(config.extractionModelProvider ?? '').length > 0 ? { provider: config.extractionModelProvider } : {},
+      ...(config.extractionModelModel ?? '').length > 0 ? { model: config.extractionModelModel } : {},
+    } : undefined,
+    extractionBudget: config.extractionBudget ?? 20,
   }
 }
 
@@ -125,15 +142,15 @@ function findCompactionSummary(session: Session, compactionId: SessionEvent<'com
 }
 
 /** Fire-and-forget flush on `compaction/end`: extract the shadowed fragments. */
-async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId']): Promise<void> {
+async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined): Promise<void> {
   const summary = findCompactionSummary(session, compactionId)
   if (summary === undefined) return
   const fragments = collectShadowedFragments(session, summary.data.shadowedSeqs)
-  await runFlushExtraction(ctx, session, fragments)
+  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride)
 }
 
 /** Fire-and-forget flush on `session/disposed`: extract recent derived messages. */
-async function flushOnDispose(ctx: Context, session: Session): Promise<void> {
+async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined): Promise<void> {
   const messages = session.deriveMessages()
   const fragments: string[] = []
   for (const message of messages) {
@@ -141,7 +158,7 @@ async function flushOnDispose(ctx: Context, session: Session): Promise<void> {
     if (fragment !== undefined) fragments.push(fragment)
   }
   const signal = AbortSignal.timeout(DISPOSE_FLUSH_TIMEOUT_MS)
-  await runFlushExtraction(ctx, session, fragments, signal)
+  await runFlushExtraction(ctx, session, fragments, signal, modelOverride)
 }
 
 /**
@@ -151,8 +168,20 @@ async function flushOnDispose(ctx: Context, session: Session): Promise<void> {
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved = resolveConfig(config)
+  const modelOverride = resolved.extractionModel as ExtractionModelOverride | undefined
   /** Per-session high-water mark: the seq of the last candidate covered by an extraction. */
   const highWaterMarks = new WeakMap<Session, number>()
+  /** Per-session extraction call count (§3.6 cost guardrail). */
+  const extractionCalls = new WeakMap<Session, number>()
+
+  /** Check and increment the per-session extraction budget. Returns false when exhausted. */
+  function checkBudget(session: Session): boolean {
+    if (resolved.extractionBudget <= 0) return true
+    const used = extractionCalls.get(session) ?? 0
+    if (used >= resolved.extractionBudget) return false
+    extractionCalls.set(session, used + 1)
+    return true
+  }
 
   // Register the projection accumulator (optional: only when sessionProjections
   // is composed; headless assemblies stay unaffected).
@@ -172,7 +201,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
       if (!signal.aborted) {
         try {
-          await maybeRunReview(ctx, agent, resolved.reviewCandidateThreshold, highWaterMarks)
+          await maybeRunReview(ctx, agent, resolved.reviewCandidateThreshold, highWaterMarks, modelOverride, checkBudget)
         } catch (_reviewError) {
           // Best-effort: a review failure must never block the step.
         }
@@ -186,7 +215,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'compaction/end') return
       if (event.data.error !== undefined) return
-      void flushOnCompaction(ctx, session, event.data.compactionId).catch(() => {
+      if (!checkBudget(session)) return
+      void flushOnCompaction(ctx, session, event.data.compactionId, modelOverride).catch(() => {
         // Best-effort: a flush failure is logged by the runtime, not thrown here.
       })
     })
@@ -195,7 +225,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Flush on session/disposed (fire-and-forget; never blocks dispose).
   if (resolved.flushOnDispose) {
     ctx.on('session/disposed', (session) => {
-      void flushOnDispose(ctx, session).catch(() => {
+      if (!checkBudget(session)) return
+      void flushOnDispose(ctx, session, modelOverride).catch(() => {
         // Best-effort: dispose must not block on memory extraction.
       })
     })
@@ -208,6 +239,8 @@ async function maybeRunReview(
   agent: Agent,
   threshold: number,
   highWaterMarks: WeakMap<Session, number>,
+  modelOverride: ExtractionModelOverride | undefined,
+  checkBudget: (session: Session) => boolean,
 ): Promise<void> {
   const projections = ctx.get('sessionProjections')
   if (projections === undefined) return
@@ -218,7 +251,8 @@ async function maybeRunReview(
   const mark = highWaterMarks.get(session) ?? -1
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)
   if (unprocessed.length < threshold) return
-  await runReviewExtraction(ctx, agent, unprocessed)
+  if (!checkBudget(session)) return
+  await runReviewExtraction(ctx, agent, unprocessed, modelOverride)
   const nextMark = unprocessed.reduce((max, candidate) => Math.max(max, candidate.seq), mark)
   highWaterMarks.set(session, nextMark)
 }

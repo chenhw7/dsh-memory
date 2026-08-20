@@ -1,9 +1,9 @@
 /**
  * The periodic-review projection accumulator: a pure, synchronous fold over
- * `user/message` and `assistant/message` events that collects candidate memory
- * fragments using lightweight keyword/correction rules. No LLM runs here —
- * the {@link agent/pre-step} listener drains the accumulator once it reaches
- * the configured threshold and runs one extraction call.
+ * `user/message` events (keyword/correction signals) and `tool/result` events
+ * (tool-call failures) that collects candidate memory fragments. No LLM runs
+ * here — the {@link agent/pre-step} listener drains the accumulator once it
+ * reaches the configured threshold and runs one extraction call.
  *
  * @module @chenhw7/dsh-memory/review/accumulator
  */
@@ -26,7 +26,7 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 export interface MemoryCandidate {
   /** The text fragment that matched a signal. */
   readonly text: string
-  /** Which signal class matched (`keyword` or `correction`). */
+  /** Which signal class matched (`keyword`, `correction`, or `tool-failure`). */
   readonly signal: string
   /** Seq of the session event the fragment came from. */
   readonly seq: number
@@ -103,21 +103,57 @@ export function detectSignal(text: string): string | undefined {
 }
 
 /**
+ * Extract a failure fragment from a `tool/result` event that carries an error.
+ * @param event - a `tool/result` session event.
+ * @returns the failure description text, or `undefined` when the event has no error.
+ */
+export function toolFailureText(event: SessionEvent): string | undefined {
+  if (event.type !== 'tool/result') return undefined
+  const data = event.data as { error?: { name: string; code: string }; message?: { content?: { type: string; text?: string }[] } }
+  if (data.error === undefined) return undefined
+  // Extract text from the result content if available, plus the error code.
+  const parts: string[] = []
+  const content = data.message?.content
+  if (content !== undefined) {
+    for (const block of content) {
+      if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+    }
+  }
+  const errorInfo = `tool error: ${data.error.name} (${data.error.code})`
+  return parts.length > 0 ? `${errorInfo} — ${parts.join(' ')}` : errorInfo
+}
+
+/**
  * The projection's `apply` transition: fold one committed event into the
  * accumulator. Returns the SAME state reference for events that do not
  * contribute a candidate (the registry's `Object.is` gate).
+ *
+ * Signal sources:
+ * - `user/message` — keyword hits (explicit "remember" intent) and corrections
+ *   (user revises a prior statement).
+ * - `tool/result` — tool-call failures (§3.6 richer signals): a failed tool
+ *   execution may carry a durable workaround worth remembering.
+ *
  * @param state - the state covering all prior events.
  * @param event - the next committed session event.
  * @returns the next state (same reference when the event contributes nothing).
  */
 export function applyAccumulator(state: AccumulatorState, event: SessionEvent): AccumulatorState {
-  if (event.type !== 'user/message') return state
-  const text = messageText(event)
-  if (text === undefined) return state
-  const signal = detectSignal(text)
-  if (signal === undefined) return state
-  const candidate: MemoryCandidate = { text, signal, seq: event.seq }
-  return { candidates: [...state.candidates, candidate], count: state.count + 1 }
+  if (event.type === 'user/message') {
+    const text = messageText(event)
+    if (text === undefined) return state
+    const signal = detectSignal(text)
+    if (signal === undefined) return state
+    const candidate: MemoryCandidate = { text, signal, seq: event.seq }
+    return { candidates: [...state.candidates, candidate], count: state.count + 1 }
+  }
+  if (event.type === 'tool/result') {
+    const text = toolFailureText(event)
+    if (text === undefined) return state
+    const candidate: MemoryCandidate = { text, signal: 'tool-failure', seq: event.seq }
+    return { candidates: [...state.candidates, candidate], count: state.count + 1 }
+  }
+  return state
 }
 
 /** Zod schema for the accumulator's wire payload. */

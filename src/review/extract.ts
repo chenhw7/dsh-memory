@@ -139,11 +139,26 @@ export function buildFlushMessages(fragments: readonly string[]): Message[] {
   return [createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })]
 }
 
-/** Resolve the provider/model for an extraction call from the session header. */
-function resolveTarget(session: Session): { provider: string; model: string } | undefined {
+/** An optional provider/model override for extraction calls (§3.6). */
+export interface ExtractionModelOverride {
+  readonly provider?: string
+  readonly model?: string
+}
+
+/**
+ * Resolve the provider/model for an extraction call. When an override is
+ * supplied, its non-empty fields take priority over the session route; fields
+ * absent from the override fall back to the session header. Returns
+ * `undefined` only when neither source yields a complete provider+model pair.
+ */
+function resolveTarget(session: Session, override?: ExtractionModelOverride): { provider: string; model: string } | undefined {
   const config = session.requestHeader()?.config
-  if (config === undefined || config.provider.length === 0 || config.model.length === 0) return undefined
-  return { provider: config.provider, model: config.model }
+  const sessionProvider = config?.provider ?? ''
+  const sessionModel = config?.model ?? ''
+  const provider = override?.provider ?? sessionProvider
+  const model = override?.model ?? sessionModel
+  if (provider.length === 0 || model.length === 0) return undefined
+  return { provider, model }
 }
 
 /**
@@ -206,8 +221,9 @@ export async function extractMemories(
   system: string,
   messages: Message[],
   signal?: AbortSignal,
+  modelOverride?: ExtractionModelOverride,
 ): Promise<ParsedMemory[]> {
-  const target = resolveTarget(session)
+  const target = resolveTarget(session, modelOverride)
   if (target === undefined) return []
   const options: GenerateOptions = {
     provider: target.provider,
@@ -235,6 +251,8 @@ export async function extractMemories(
  * @param attachCategory - optional category to attach to every entry.
  * @param source - provenance tag for the audit trail (`'review'` or `'flush'`).
  * @param sessionId - the session id, recorded in each audit entry.
+ * @param inferredProjectName - when the session cwd implies a project, project-scoped
+ *   entries that lack a projectName get this value (§3.6 project auto-detection).
  */
 export async function storeMemories(
   ctx: Context,
@@ -242,6 +260,7 @@ export async function storeMemories(
   attachCategory?: MemoryCategory,
   source?: AuditSource,
   sessionId?: string,
+  inferredProjectName?: string,
 ): Promise<void> {
   const memory = ctx.get('memory')
   if (memory === undefined) return
@@ -281,9 +300,16 @@ export async function storeMemories(
           continue
         }
       }
-      const input: AddMemoryInput = category === undefined
-        ? { scope: entry.scope, content, source: source ?? 'review', sessionId }
-        : { scope: entry.scope, content, category, source: source ?? 'review', sessionId }
+      const input: AddMemoryInput = {
+        scope: entry.scope,
+        content,
+        source: source ?? 'review',
+        sessionId,
+        ...category !== undefined ? { category } : {},
+        // Project auto-detection: project-scoped entries get the inferred
+        // projectName when they don't carry one (§3.6).
+        ...entry.scope === 'project' && inferredProjectName !== undefined ? { projectName: inferredProjectName } : {},
+      }
       const result = await memory.add(input)
       existing.push({ id: result.entry.id as string, scope: entry.scope, content })
     } catch (_storeError) {
@@ -304,15 +330,25 @@ export async function runReviewExtraction(
   ctx: Context,
   agent: Agent,
   candidates: readonly MemoryCandidate[],
+  modelOverride?: ExtractionModelOverride,
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
   const messages = buildReviewMessages(snapshot, candidates)
-  const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages)
+  const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages, undefined, modelOverride)
   // A correction signal maps naturally to the `correction` category.
   const correctionOnly = candidates.length > 0 && candidates.every(c => c.signal === 'correction')
-  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id)
+  const projectName = inferProjectName(agent.session)
+  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName)
   return parsed.length
+}
+
+/** Infer a project name from the session's working directory basename (§3.6). */
+function inferProjectName(session: Session): string | undefined {
+  const cwd = session.header?.cwd
+  if (cwd === undefined || cwd.length === 0) return undefined
+  const base = cwd.replace(/\/+$/, '').split('/').pop()
+  return base !== undefined && base.length > 0 ? base : undefined
 }
 
 /**
@@ -323,6 +359,7 @@ export async function runReviewExtraction(
  * @param session - the session whose request header routes the call.
  * @param fragments - the raw conversation fragments being shadowed.
  * @param signal - optional abort signal.
+ * @param modelOverride - optional provider/model override (§3.6).
  * @returns the number of parsed entries (before scanner/store filtering).
  */
 export async function runFlushExtraction(
@@ -330,9 +367,11 @@ export async function runFlushExtraction(
   session: Session,
   fragments: readonly string[],
   signal?: AbortSignal,
+  modelOverride?: ExtractionModelOverride,
 ): Promise<number> {
   const messages = buildFlushMessages(fragments)
-  const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal)
-  await storeMemories(ctx, parsed, undefined, 'flush', session.id)
+  const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal, modelOverride)
+  const projectName = inferProjectName(session)
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName)
   return parsed.length
 }
