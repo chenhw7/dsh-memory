@@ -139,6 +139,22 @@ export interface AuditEntry {
   readonly contentPreview: string
 }
 
+/** Health snapshot of the memory store (§3.7 observability). */
+export interface MemoryHealth {
+  /** Total entry count. */
+  readonly totalEntries: number
+  /** Entry count per scope. */
+  readonly byScope: { readonly global: number; readonly project: number; readonly user: number }
+  /** Count of pinned entries. */
+  readonly pinned: number
+  /** Total audit records. */
+  readonly auditRecords: number
+  /** Timestamp of the most recent audit record, or undefined when the audit table is empty. */
+  readonly lastActivityTs?: number | undefined
+  /** Timestamp of the most recent extraction-sourced audit record, or undefined. */
+  readonly lastExtractionTs?: number | undefined
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**

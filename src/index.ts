@@ -20,6 +20,7 @@ import type {
   AuditOp,
   AuditSource,
   MemoryEntry,
+  MemoryHealth,
   MemorySearchQuery,
   SearchMemoryResult,
   UpdateMemoryInput,
@@ -33,6 +34,7 @@ export type {
   AuditSource,
   MemoryCategory,
   MemoryEntry,
+  MemoryHealth,
   MemoryScope,
   MemorySearchQuery,
   ScanResult,
@@ -130,6 +132,19 @@ export abstract class MemoryStore {
    * @returns the number of entries removed.
    */
   abstract janitor(decayDays: number): Promise<number>
+
+  /**
+   * Return a health snapshot of the store: entry counts by scope, pinned
+   * count, audit record count, and last-activity timestamps (§3.7).
+   * @returns the current health snapshot.
+   */
+  abstract health(): MemoryHealth
+
+  /**
+   * Export the full audit log as a JSON-serializable array (§3.7).
+   * @returns all audit entries, oldest first.
+   */
+  abstract exportAuditLog(): readonly AuditEntry[]
 }
 
 /**
