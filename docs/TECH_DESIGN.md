@@ -57,7 +57,7 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 - **G6 — Frontend-configurable, live.** All settings exposed through the dsh settings UI (`memory` namespace) and applied without restart.
 - **G7 — One-command install / uninstall.** `dsh plugin add` / `dsh plugin remove`; uninstall preserves user data.
 
-Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [UI_CONSISTENCY_ROOT_CAUSE.md](./UI_CONSISTENCY_ROOT_CAUSE.md).
+Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [CLIENT_UI_LESSONS.md](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)).
 
 ---
 
@@ -747,4 +747,4 @@ src/ ├── index.ts              # package root: re-exports, MemoryStore abs
 
 ---
 
-*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./UI_CONSISTENCY_ROOT_CAUSE.md).*
+*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)).*
