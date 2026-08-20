@@ -107,6 +107,29 @@ export abstract class MemoryStore {
    * @returns matching entries bounded by `query.limit`, plus the total match count.
    */
   abstract search(query: MemorySearchQuery): SearchMemoryResult
+
+  /**
+   * Pin one entry so it is immune to decay (§3.5). Returns the updated entry,
+   * or `undefined` when the id does not exist.
+   */
+  abstract pin(id: MemoryId): Promise<MemoryEntry | undefined>
+
+  /**
+   * Remove the pin from one entry (§3.5). Returns the updated entry,
+   * or `undefined` when the id does not exist.
+   */
+  abstract unpin(id: MemoryId): Promise<MemoryEntry | undefined>
+
+  /**
+   * Run the janitor pass: decay stale entries per the lifecycle policy (§3.5).
+   * Pinned entries and `global`/`user`-scoped entries are never decayed.
+   * `project`-scoped entries whose `lastRecalledAt` is older than the decay
+   * threshold (or that have never been recalled and whose `createdAt` is older)
+   * are removed. Every action is recorded in the audit store.
+   * @param decayDays - entries not recalled within this many days are decayed.
+   * @returns the number of entries removed.
+   */
+  abstract janitor(decayDays: number): Promise<number>
 }
 
 /**

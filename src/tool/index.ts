@@ -608,4 +608,88 @@ export function apply(ctx: Context, config: Config): void {
       }
     },
   }))
+
+  ctx.tools.register(defineTool({
+    name: 'memory_pin',
+    description: 'Pin a memory entry so it is immune to automatic decay. Use for important '
+      + 'conventions or facts that should never be forgotten, even if not recently recalled.',
+    timeoutMs: 5000,
+    parameters: {
+      id: { type: 'string', required: true, description: 'The id of the entry to pin.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          pinned: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.pinned ? 'Memory entry pinned.' : 'Memory entry not found.',
+      }],
+      presentationMeta: (_args, value) => ({ pinned: value.pinned }),
+    },
+    async execute(args) {
+      const store = requireMemory(ctx)
+      const entry = await store.pin(args.id as MemoryId)
+      return { pinned: entry !== undefined }
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: 'Pin memory',
+      kind: 'edit',
+      rawInput: args.id,
+    }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { pinned?: boolean } | undefined
+      return {
+        card: 'generic',
+        title: meta?.pinned ? 'Memory entry pinned.' : 'Memory entry not found.',
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'memory_unpin',
+    description: 'Remove the pin from a memory entry, allowing it to decay if it is a '
+      + 'project-scoped entry not recently recalled.',
+    timeoutMs: 5000,
+    parameters: {
+      id: { type: 'string', required: true, description: 'The id of the entry to unpin.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          unpinned: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.unpinned ? 'Memory entry unpinned.' : 'Memory entry not found.',
+      }],
+      presentationMeta: (_args, value) => ({ unpinned: value.unpinned }),
+    },
+    async execute(args) {
+      const store = requireMemory(ctx)
+      const entry = await store.unpin(args.id as MemoryId)
+      return { unpinned: entry !== undefined }
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: 'Unpin memory',
+      kind: 'edit',
+      rawInput: args.id,
+    }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { unpinned?: boolean } | undefined
+      return {
+        card: 'generic',
+        title: meta?.unpinned ? 'Memory entry unpinned.' : 'Memory entry not found.',
+      }
+    },
+  }))
 }

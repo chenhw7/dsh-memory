@@ -37,6 +37,8 @@ const memoryEntrySchema = z.object({
   projectName: z.string().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  pinned: z.boolean().optional(),
+  lastRecalledAt: z.number().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
@@ -239,7 +241,62 @@ export class DomainMemoryStore extends MemoryStore {
     let all = scored.map(s => s.entry)
     const total = all.length
     all = limit > 0 ? all.slice(0, limit) : all
+    // Fire-and-forget: stamp the returned entries with a recall timestamp
+    // so the janitor can decay entries that have not been recalled recently.
+    void this.markRecalled(all)
     return { entries: all, total }
+  }
+
+  /**
+   * Stamp returned entries with a recall timestamp (fire-and-forget). Updates
+   * `lastRecalledAt` on each entry so the janitor can track staleness.
+   */
+  private async markRecalled(entries: readonly MemoryEntry[]): Promise<void> {
+    const now = Date.now()
+    for (const entry of entries) {
+      const updated = { ...entry, lastRecalledAt: now }
+      await this.entries.put(entry.id, updated)
+    }
+  }
+
+  override async pin(id: MemoryId): Promise<MemoryEntry | undefined> {
+    const existing = this.entries.get(id)
+    if (existing === undefined) return undefined
+    const updated: MemoryEntry = { ...existing, pinned: true }
+    await this.entries.put(id, updated)
+    return updated
+  }
+
+  override async unpin(id: MemoryId): Promise<MemoryEntry | undefined> {
+    const existing = this.entries.get(id)
+    if (existing === undefined) return undefined
+    const updated: MemoryEntry = { ...existing, pinned: false }
+    await this.entries.put(id, updated)
+    return updated
+  }
+
+  override async janitor(decayDays: number): Promise<number> {
+    if (decayDays <= 0) return 0
+    const now = Date.now()
+    const decayMs = decayDays * 24 * 60 * 60 * 1000
+    let removed = 0
+    for (const [, entry] of this.entries.entries()) {
+      // Never decay pinned, global, or user entries.
+      if (entry.pinned === true) continue
+      if (entry.scope === 'global' || entry.scope === 'user') continue
+      // Only project-scoped entries are candidates for decay.
+      if (entry.scope !== 'project') continue
+      // Use lastRecalledAt if available, otherwise fall back to createdAt.
+      const lastActive = entry.lastRecalledAt ?? entry.createdAt
+      if (now - lastActive < decayMs) continue
+      // Decay: remove and log to the audit store.
+      const didRemove = await this.entries.delete(entry.id)
+      if (didRemove) {
+        removed++
+        await this.appendAudit('remove', entry.id, entry, undefined, undefined)
+      }
+    }
+    return removed
   }
 
   /**

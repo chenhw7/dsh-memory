@@ -131,10 +131,10 @@ function text(result: { content: { type: string; text?: string }[] }): string {
 
 describe('@deepseek-ai/dsh-tool-memory', () => {
   describe('registration', () => {
-    it('registers all six memory tools with stable names', async () => {
+    it('registers all eight memory tools with stable names', async () => {
       const { ctx } = await setup()
       const names = ctx.tools.schemas().map(s => s.name).filter(n => n.startsWith('memory_'))
-      expect(names.sort()).toEqual(['memory_add', 'memory_get', 'memory_list', 'memory_remove', 'memory_replace', 'memory_search'])
+      expect(names.sort()).toEqual(['memory_add', 'memory_get', 'memory_list', 'memory_pin', 'memory_remove', 'memory_replace', 'memory_search', 'memory_unpin'])
     })
 
     it('has the namespace-plugin export shape (no stray default)', () => {

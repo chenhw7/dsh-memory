@@ -63,6 +63,8 @@ export interface Config {
   extractionBudget?: number
   /** Enable the LLM dedup judge on prefilter hits; defaults to `true`. */
   judgeEnabled?: boolean
+  /** Days without recall before a project-scoped entry is decayed by the janitor. 0 = disabled. Defaults to 30. */
+  decayDays?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -74,6 +76,7 @@ export const Config: z<Config> = z.object({
   extractionModelModel: z.string().default(''),
   extractionBudget: z.number().step(1).min(0).default(20),
   judgeEnabled: z.boolean().default(true),
+  decayDays: z.number().step(1).min(0).default(30),
 })
 
 /** Resolved config with every default materialized. */
@@ -85,6 +88,7 @@ interface ResolvedConfig {
   readonly extractionModel: ExtractionModelOverride | undefined
   readonly extractionBudget: number
   readonly judgeEnabled: boolean
+  readonly decayDays: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -104,6 +108,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     } : undefined,
     extractionBudget: config.extractionBudget ?? 20,
     judgeEnabled: config.judgeEnabled ?? true,
+    decayDays: config.decayDays ?? 30,
   }
 }
 
@@ -235,6 +240,18 @@ export function apply(ctx: Context, config: Config = {}): void {
         // Best-effort: dispose must not block on memory extraction.
       })
     })
+  }
+
+  // Janitor: decay stale project-scoped entries on session/created (§3.5).
+  // Runs once per new session; best-effort, never blocks session creation.
+  if (resolved.decayDays > 0) {
+    ctx.on('session/created', () => {
+      const memory = ctx.get('memory')
+      if (memory === undefined) return
+      void memory.janitor(resolved.decayDays).catch(() => {
+        // Best-effort: a janitor failure never blocks session creation.
+      })
+    }, { global: true })
   }
 }
 

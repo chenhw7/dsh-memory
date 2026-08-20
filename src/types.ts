@@ -47,6 +47,10 @@ export interface MemoryEntry {
   readonly createdAt: number
   /** Unix epoch milliseconds when this entry was last updated. */
   readonly updatedAt: number
+  /** Whether this entry is pinned (immune to decay). Defaults to false. */
+  readonly pinned?: boolean | undefined
+  /** Unix epoch ms when this entry was last returned by a search/get; absent if never recalled. */
+  readonly lastRecalledAt?: number | undefined
 }
 
 /** Input for creating a new memory entry. */
