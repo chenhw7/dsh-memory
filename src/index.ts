@@ -157,3 +157,14 @@ export function validateProjectScope(input: AddMemoryInput): void {
     throw new Error('project-scoped memory requires a projectName')
   }
 }
+
+/**
+ * No-op root plugin entry. The root export exists so the host client-module
+ * scanner can resolve this package's `package.json` (and its `dsh.client`
+ * declaration) from a root-package loader entry. The five functional rows
+ * (store/tool/review/context/remote-service) use subpath exports; the
+ * scanner skips subpath entries by design. This row lets the scanner
+ * discover the client bundle without loading any host-side code.
+ */
+export const name = 'dsh-memory-root'
+export function apply(): void { /* no-op: client module discovery only */ }

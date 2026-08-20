@@ -66,7 +66,7 @@
     }
   },
   "scripts": {
-    "build": "node_modules/.bin/tsc -p tsconfig.json && node scripts/fix-imports.cjs",
+    "build": "node_modules/.bin/tsc -p tsconfig.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
     "prepare": "echo skip",
     "test": "node_modules/.bin/vitest run"
   },
