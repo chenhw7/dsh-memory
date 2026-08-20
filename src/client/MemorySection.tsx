@@ -4,7 +4,10 @@
  * Renders the full memory CRUD UI: browse by scope (cards with id, category,
  * timestamps), a search box, add/edit/remove, pin/unpin, and a memory
  * activity panel (timeline over the audit store). All data access goes
- * through `ctx.remote.memory.*` (the @Remote service).
+ * through the typed `ctx.remote.memoryRemote` namespace — the @Remote service
+ * mounted by the `@deepseek-ai/dsh-api-remotes` client assembly from this
+ * package's `./remote` TYPERT_REMOTE contribution (inlined into the host
+ * client bundle via the api-remotes project reference).
  *
  * This component runs in the host's client build pipeline (TSX + React).
  *
@@ -12,7 +15,6 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, IconPlusOutline16, IconTrashOutline16, Input, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -51,24 +53,38 @@ export interface AuditEntryJson {
   contentPreview: string
 }
 
-/** The remote namespace (ctx.remote.memory after dsh-api-remotes mount). */
+/** Remote result envelope — mirrors dsh-typert-protocol `RemoteResult<T>`. */
+export type MemoryRpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string; details: object } }
+
+/**
+ * The typed remote namespace (`ctx.remote.memoryRemote` after the
+ * dsh-api-remotes client assembly $mounts this package's ./remote
+ * contribution). Signatures mirror src/typert.remote-client.d.ts.
+ */
 export interface MemoryRemote {
-  list(request: { scope?: string; limit?: number }): Promise<{ entries: readonly MemoryEntryJson[]; total: number }>
-  search(request: { query?: string; scope?: string; limit?: number }): Promise<{ entries: readonly MemoryEntryJson[]; total: number }>
-  get(request: { id: string }): Promise<{ entry?: MemoryEntryJson; found: boolean }>
-  add(request: { scope: string; content: string; category?: string; projectName?: string }): Promise<{ entry?: MemoryEntryJson; error?: string }>
-  update(request: { id: string; content?: string; category?: string }): Promise<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
-  remove(request: { id: string }): Promise<{ removed: boolean }>
-  pin(request: { id: string; pinned: boolean }): Promise<{ entry?: MemoryEntryJson; found: boolean }>
-  health(): Promise<MemoryHealthJson>
-  auditLog(request: { limit?: number }): Promise<{ entries: readonly AuditEntryJson[] }>
+  list(request: { scope?: string; projectName?: string; limit?: number; offset?: number }): Promise<MemoryRpcResult<{ entries: readonly MemoryEntryJson[]; total: number }>>
+  search(request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }): Promise<MemoryRpcResult<{ entries: readonly MemoryEntryJson[]; total: number }>>
+  get(request: { id: string }): Promise<MemoryRpcResult<{ entry?: MemoryEntryJson; found: boolean }>>
+  add(request: { scope: string; content: string; category?: string; projectName?: string }): Promise<MemoryRpcResult<{ entry?: MemoryEntryJson; error?: string }>>
+  update(request: { id: string; content?: string; category?: string }): Promise<MemoryRpcResult<{ entry?: MemoryEntryJson; found: boolean; error?: string }>>
+  remove(request: { id: string }): Promise<MemoryRpcResult<{ removed: boolean }>>
+  pin(request: { id: string; pinned: boolean }): Promise<MemoryRpcResult<{ entry?: MemoryEntryJson; found: boolean }>>
+  health(): Promise<MemoryRpcResult<MemoryHealthJson>>
+  auditLog(request: { limit?: number }): Promise<MemoryRpcResult<{ entries: readonly AuditEntryJson[] }>>
 }
 
 /** Registration-side business face for the memory section. */
 export interface MemorySectionInjected {
   hooks: {
-    /** Lazy getter for the remote namespace (ctx.remote.memoryRemote). Returns undefined if not yet mounted. */
-    getRemote: () => MemoryRemote | undefined
+    /**
+     * Slot-level Hook factory: the slot renderer binds this hooks source as
+     * the `useMemorySection` hook (the hooks key is the hook name). The hook
+     * hands the section a stable `ensure()` that resolves the typed remote
+     * namespace (self-mounting it on first use when the host bundle is stale).
+     */
+    memorySection: () => () => { ensure: () => Promise<MemoryRemote | undefined> }
   }
 }
 
@@ -84,7 +100,7 @@ const SCOPES = ['global', 'project', 'user'] as const
 const CATEGORIES = ['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure'] as const
 
 export function MemorySection(props: MemorySectionProps) {
-  const { getRemote } = props.useMemorySection().hooks
+  const { ensure } = props.useMemorySection()
   const t = props.t
 
   const [entries, setEntries] = useState<MemoryEntryJson[]>([])
@@ -99,41 +115,51 @@ export function MemorySection(props: MemorySectionProps) {
 
   // ── Load entries ────────────────────────────────────────────────────────
   const loadEntries = useCallback(async () => {
-    const remote = getRemote()
-    if (remote === undefined) { setError('Memory service not available'); setLoading(false); return }
     setLoading(true)
     setError(null)
     try {
-      let result: { entries: readonly MemoryEntryJson[]; total: number }
+      const remote = await ensure()
+      if (remote === undefined) { setError('Memory service not available'); return }
+      const request: { scope?: string; query?: string; limit: number } = { limit: 200 }
+      if (activeScope !== undefined) request.scope = activeScope
+      let result: MemoryRpcResult<{ entries: readonly MemoryEntryJson[]; total: number }>
       if (searchQuery.length > 0) {
-        result = await remote.search({ query: searchQuery, scope: activeScope, limit: 200 })
+        request.query = searchQuery
+        result = await remote.search(request)
       } else {
-        result = await remote.list({ scope: activeScope, limit: 200 })
+        result = await remote.list(request)
       }
-      setEntries([...result.entries])
+      if (result.ok) {
+        setEntries([...result.value.entries])
+      } else {
+        setError(result.error.message)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load memories')
     } finally {
       setLoading(false)
     }
-  }, [getRemote, searchQuery, activeScope])
+  }, [ensure, searchQuery, activeScope])
 
   const loadHealth = useCallback(async () => {
-    const remote = getRemote()
-    if (remote === undefined) return
     try {
-      setHealth(await remote.health())
+      const remote = await ensure()
+      if (remote === undefined) return
+      // health() takes no parameters — the typed proxy sends an empty args
+      // object for a 0-parameter method.
+      const result = await remote.health()
+      if (result.ok) setHealth(result.value)
     } catch { /* best-effort */ }
-  }, [getRemote])
+  }, [ensure])
 
   const loadAuditLog = useCallback(async () => {
-    const remote = getRemote()
-    if (remote === undefined) return
     try {
+      const remote = await ensure()
+      if (remote === undefined) return
       const result = await remote.auditLog({ limit: 50 })
-      setAuditLog([...result.entries])
+      if (result.ok) setAuditLog([...result.value.entries])
     } catch { /* best-effort */ }
-  }, [getRemote])
+  }, [ensure])
 
   useEffect(() => { void loadEntries() }, [loadEntries])
   useEffect(() => { void loadHealth() }, [loadHealth])
@@ -141,10 +167,11 @@ export function MemorySection(props: MemorySectionProps) {
 
   // ── CRUD handlers ────────────────────────────────────────────────────────
   const handleRemove = async (id: string) => {
-    const remote = getRemote()
-    if (remote === undefined) return
     try {
-      await remote.remove({ id })
+      const remote = await ensure()
+      if (remote === undefined) return
+      const result = await remote.remove({ id })
+      if (!result.ok) { setError(result.error.message); return }
       await Promise.all([loadEntries(), loadHealth(), loadAuditLog()])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to remove')
@@ -152,10 +179,11 @@ export function MemorySection(props: MemorySectionProps) {
   }
 
   const handlePin = async (id: string, pinned: boolean) => {
-    const remote = getRemote()
-    if (remote === undefined) return
     try {
-      await remote.pin({ id, pinned })
+      const remote = await ensure()
+      if (remote === undefined) return
+      const result = await remote.pin({ id, pinned })
+      if (!result.ok) { setError(result.error.message); return }
       await loadEntries()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to pin')
@@ -163,17 +191,29 @@ export function MemorySection(props: MemorySectionProps) {
   }
 
   const handleSave = async (entry: { id?: string; scope: string; content: string; category?: string; projectName?: string }) => {
-    const remote = getRemote()
-    if (remote === undefined) { setError('Memory service not available'); return }
     setError(null)
     try {
+      const remote = await ensure()
+      if (remote === undefined) return
+      const request: { scope: string; content: string; category?: string; projectName?: string } = { scope: entry.scope, content: entry.content }
+      if (entry.category !== undefined) request.category = entry.category
+      if (entry.projectName !== undefined) request.projectName = entry.projectName
       if (entry.id !== undefined) {
-        const result = await remote.update({ id: entry.id, content: entry.content, ...entry.category !== undefined ? { category: entry.category } : {} })
-        if (!result.found) { setError('Entry not found'); return }
-        if (result.error) { setError(result.error); return }
+        const updateReq: { id: string; content?: string; category?: string } = { id: entry.id }
+        if (entry.content !== undefined) updateReq.content = entry.content
+        if (entry.category !== undefined) updateReq.category = entry.category
+        const result = await remote.update(updateReq)
+        // RPC transport failure
+        if (!result.ok) { setError(result.error.message); return }
+        // Business-level failure (service down, scanner reject, not found)
+        if (result.value.error !== undefined) { setError(result.value.error); return }
+        if (result.value.found === false) { setError('Entry not found'); return }
       } else {
-        const result = await remote.add({ scope: entry.scope, content: entry.content, ...entry.category !== undefined ? { category: entry.category } : {}, ...entry.projectName !== undefined ? { projectName: entry.projectName } : {} })
-        if (result.error) { setError(result.error); return }
+        const result = await remote.add(request)
+        // RPC transport failure
+        if (!result.ok) { setError(result.error.message); return }
+        // Business-level failure (service down, scanner reject)
+        if (result.value.error !== undefined) { setError(result.value.error); return }
       }
       setEditing(null)
       setAdding(false)
