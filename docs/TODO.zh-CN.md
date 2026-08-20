@@ -159,17 +159,32 @@ v0.1.x 交付了一个刻意保持狭窄、可验证的核心：一个 JSON 文�
   先例：`ui-agent-preset` 的 `AgentPresetSection`（RPC 驱动的卡片列表、删除、只读查看器）。
   同一区域渲染**记忆活动面板**——基于 §3.2 审计存储的时间线（来源、作用域、预览、时间戳），
   作为提取触发的写入（从不经工具卡片）的用户可见答案。
-- **验证注意事项（实施前需做）：** 客户端模块的 manifest 字段（`dsh.client`）、
-  `/plugins/<id>/client.js` 服务路径、以及所引两份宿主文档，都是按文档描述消费的，但**无法
-  从本包已安装的 npm 依赖中验证**——目前没有任何已发布的 `@deepseek-ai/*` 包携带 `dsh.client`
-  manifest，两份文档也不在任何依赖里发布（`@Remote` 网关本身是真的：它在
-  `@deepseek-ai/dsh-typert-protocol` 中落地，并被 `dsh-user-approval` 实际调用）。在 §3.8 任何
-  代码落地之前，需在项目锁定的宿主 checkout（而非 npm tarball）中把两份文档 pin 到具体 dsh
-  发布线，确认 manifest/服务路径约定一致；若约定已漂移，先据真实接缝重新界定本项。这是唯一一个
-  其宿主表面来自宿主文档转述、而非来自本包可导入依赖的 P1 项。
+- **验证注意事项（✅ 已在 `~/deepseek-harness` 中验证）：** 客户端模块 manifest 字段
+  （`dsh.client`）、`/plugins/<id>/client.js` 服务路径、`@Remote` 网关、`settings.section` 插槽
+  全部**在锁定的宿主 checkout 中确认**——`docs/subsystems/client-modules.md`（manifest + 服务路径）、
+  `docs/api-gateway.md`（`@Remote` + `TypertRemoteService` + `ctx.remote.*`）、
+  `packages/client/ui-settings/src/client/contract/slots.ts`（`settings.section` 插槽，`kind: 'list'`，
+  `scope: 'root'`）。确认的真实先例：`dsh-message-feedback`（`MessageFeedbackService`——侧表 CRUD，
+  最接近的类比）、`dsh-goal`（`GoalService`——活 Agent `@Remote`）、`ui-agent-preset`（设置区域注册，
+  任意 React TSX 经 `ctx.slots.inject('settings.section', ...)`）。
+
+  **验证中发现的约束（原方案未提及）：**
+  1. **需要修改宿主代码库：** `@Remote` 服务的客户端面必须在 `packages/api/remotes/src/client/index.ts`
+     中挂载（import + `ctx.remote.$mount()` + peerDependency）。这是宿主代码改动，与 §6 无宿主改动
+     策略冲突。§3.8 因此被阻塞，直到宿主团队接受对 `dsh-api-remotes` 的 PR，或策略放宽。
+  2. **`dsh.client` 在装配包上**（`@deepseek-ai/dsh-api-remotes`），不在记忆插件包本身上。插件
+     只需要 `exports["./typert"]` 和 `exports["./remote"]` 子路径。
+  3. **Typert 代码生成：** `lib/typert.host.js` 和 `lib/typert.remote-client.js` 由宿主构建管线
+     （`tsdown` + `typertPlugin`）自动生成，不能手写。插件必须纳入宿主 workspace 才能被生成器发现。
+  4. **写方法应钉死在 loopback**——通过 `packages/client/connection/src/index.ts` 的
+     `PRIVILEGED_METHODS`；`trustedHosts` 是 DNS 重绑定围栏，不是认证；不钉死的话 LAN 调用者可以
+     访问变更性记忆方法。
+  5. **UI 插槽注册：** `ctx.slots.inject('settings.section', () => ctx.slots.register({
+     name: 'settings.section', id: 'memory', order, label, locale, inject }, Component))`——
+     组件为任意 React TSX，接收 `{ close }` + 框架 hooks。
 - **完成标志：** 完整 CRUD 往返经 `ctx.remote.memory.*` 完成；变更在下一个会话的快照中
-  生效；活动面板显示提取触发的写入；远程（非回环）浏览器访问明确超出范围（需要 apiproxy
-  的 `memory.*` 域，见 §6）。
+  生效；活动面板显示提取触发的写入；`@Remote` 服务已挂载到 `dsh-api-remotes`，写方法通过
+  `PRIVILEGED_METHODS` 钉死在 loopback。
 
 ### 3.9 可插拔存储后端 — P2 — ✅ 契约套件（`26c85e8`）
 
