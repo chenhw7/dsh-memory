@@ -127,7 +127,7 @@ non-blocking for the agent loop.
   sentences from sharing too many tokens. The dataset, the threshold, and the CJK-specific tests
   are the gate.
 
-### 3.5 Memory Lifecycle — P2
+### 3.5 Memory Lifecycle — P2 — ✅ Implemented (`b31de0e`)
 
 - **Why:** memories are removed only manually today; stale entries degrade retrieval and consume
   prompt budget.
@@ -157,7 +157,7 @@ non-blocking for the agent loop.
   correct scope/category; every prompt change is gated by the §3.1 regression suite (this item
   is blocked by §3.1's golden-set extraction harness — see the §4 dependency edge).
 
-### 3.7 Observability — P2
+### 3.7 Observability — P2 — ✅ Implemented (`9ff0026`)
 
 - **How:** counters (extraction calls, entries stored/rejected, scanner hits by class,
   zero-result search count — feeds the §5 decision gate) collected in-process and persisted in
@@ -201,7 +201,7 @@ non-blocking for the agent loop.
   writes; remote (non-loopback) browser access is explicitly out of scope (would need a
   `memory.*` apiproxy domain, §6).
 
-### 3.9 Pluggable Storage Backends — P2
+### 3.9 Pluggable Storage Backends — P2 — ✅ Contract suite (`26c85e8`)
 
 - **Why:** a single local JSON file is single-process and local-only.
 - **How:** keep the `MemoryStore` seam as the provider contract; add a SQLite provider (single
@@ -211,7 +211,7 @@ non-blocking for the agent loop.
 - **Done when:** two or more providers pass the shared contract suite
   (`tests/store-contract.spec.ts` as the gate).
 
-### 3.10 Scanner Hardening — P2
+### 3.10 Scanner Hardening — P2 — ✅ Implemented (`71be8dc`)
 
 - **Why:** regex detection has false positives (legit text mentioning tokens) and false
   negatives (novel injection phrasings).
@@ -223,7 +223,7 @@ non-blocking for the agent loop.
   on the known-attack corpus (both checked into `tests/fixtures/scanner/`, extended from the
   §3.1 golden set); the allowlist covers every user-marked expected pattern.
 
-### 3.11 Cross-Session Consistency — P2 (exploratory)
+### 3.11 Cross-Session Consistency — P2 (exploratory) — ✅ Pure detector (`6a92bbc`)
 
 - **Why:** memory can conflict with the user's current statement or with newer evidence.
 - **How:** at context assembly, optionally detect entries that conflict with facts stated in the
