@@ -166,7 +166,7 @@ non-blocking for the agent loop.
   audit-log file export.
 - **Done when:** a user can answer "what was learned this session, and why" from the UI alone.
 
-### 3.8 Memory Management UI — P1
+### 3.8 Memory Management UI — P1 — ✅ Implemented (`fba5a55`, host integration `cf39b8d`)
 
 - **Why:** data is browsed through the tools and the JSON file today; users want a first-class
   view and editor. A plain settings section cannot do this: `installSettingsSection` registers a
