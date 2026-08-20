@@ -67,10 +67,12 @@ export interface MemoryRemote {
 /** Registration-side business face for the memory section. */
 export interface MemorySectionInjected {
   hooks: {
-    /** The remote namespace (ctx.remote.memoryRemote), available after dsh-api-remotes mount. */
-    remote: MemoryRemote
+    /** Lazy getter for the remote namespace (ctx.remote.memoryRemote). Returns undefined if not yet mounted. */
+    getRemote: () => MemoryRemote | undefined
   }
 }
+
+/** eslint-disable @typescript-eslint/no-explicit-any */
 
 /** Props the settings shell passes to the section component. */
 export interface MemorySectionProps
@@ -82,7 +84,7 @@ const SCOPES = ['global', 'project', 'user'] as const
 const CATEGORIES = ['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure'] as const
 
 export function MemorySection(props: MemorySectionProps) {
-  const { remote } = props.useMemorySection().hooks
+  const { getRemote } = props.useMemorySection().hooks
   const t = props.t
 
   const [entries, setEntries] = useState<MemoryEntryJson[]>([])
@@ -97,6 +99,8 @@ export function MemorySection(props: MemorySectionProps) {
 
   // ── Load entries ────────────────────────────────────────────────────────
   const loadEntries = useCallback(async () => {
+    const remote = getRemote()
+    if (remote === undefined) { setError('Memory service not available'); setLoading(false); return }
     setLoading(true)
     setError(null)
     try {
@@ -112,20 +116,24 @@ export function MemorySection(props: MemorySectionProps) {
     } finally {
       setLoading(false)
     }
-  }, [remote, searchQuery, activeScope])
+  }, [getRemote, searchQuery, activeScope])
 
   const loadHealth = useCallback(async () => {
+    const remote = getRemote()
+    if (remote === undefined) return
     try {
       setHealth(await remote.health())
     } catch { /* best-effort */ }
-  }, [remote])
+  }, [getRemote])
 
   const loadAuditLog = useCallback(async () => {
+    const remote = getRemote()
+    if (remote === undefined) return
     try {
       const result = await remote.auditLog({ limit: 50 })
       setAuditLog([...result.entries])
     } catch { /* best-effort */ }
-  }, [remote])
+  }, [getRemote])
 
   useEffect(() => { void loadEntries() }, [loadEntries])
   useEffect(() => { void loadHealth() }, [loadHealth])
@@ -133,6 +141,8 @@ export function MemorySection(props: MemorySectionProps) {
 
   // ── CRUD handlers ────────────────────────────────────────────────────────
   const handleRemove = async (id: string) => {
+    const remote = getRemote()
+    if (remote === undefined) return
     try {
       await remote.remove({ id })
       await Promise.all([loadEntries(), loadHealth(), loadAuditLog()])
@@ -142,6 +152,8 @@ export function MemorySection(props: MemorySectionProps) {
   }
 
   const handlePin = async (id: string, pinned: boolean) => {
+    const remote = getRemote()
+    if (remote === undefined) return
     try {
       await remote.pin({ id, pinned })
       await loadEntries()
@@ -151,6 +163,8 @@ export function MemorySection(props: MemorySectionProps) {
   }
 
   const handleSave = async (entry: { id?: string; scope: string; content: string; category?: string; projectName?: string }) => {
+    const remote = getRemote()
+    if (remote === undefined) { setError('Memory service not available'); return }
     setError(null)
     try {
       if (entry.id !== undefined) {

@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { MemorySection } from './MemorySection.tsx'
-import type { MemorySectionInjected } from './MemorySection.tsx'
+import type { MemorySectionInjected, MemoryRemote } from './MemorySection.tsx'
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
 import { en, zh } from './locales.ts'
@@ -68,9 +68,9 @@ export function apply(ctx: ClientContext): void {
   // ── Full settings section (Memory management page) ──
   const sectionInjected = (): MemorySectionInjected => ({
     hooks: {
-      // The remote namespace (ctx.remote.memoryRemote) is available after
-      // the contribution is mounted in dsh-api-remotes.
-      remote: ctx.remote.memoryRemote,
+      // Lazy getter: ctx.remote.memoryRemote is created by $mount at runtime,
+      // not available at fiber activation time. Access it lazily on each render.
+      getRemote: () => (ctx.remote as any).memoryRemote as MemoryRemote | undefined,
     },
   })
 
