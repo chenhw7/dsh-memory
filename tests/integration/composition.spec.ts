@@ -72,6 +72,32 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
     expect(store.get(entry.id)).toBeUndefined()
   })
 
+  it('tokenized search matches on any token (OR semantics, §3.3)', async () => {
+    await store.add({ scope: 'global', content: 'The user prefers concise answers in Chinese' })
+    await store.add({ scope: 'global', content: 'This repo uses pnpm for package management' })
+    await store.add({ scope: 'global', content: 'The build fails on Node 18' })
+
+    // "prefers concise" — two tokens, should match the first entry.
+    const r1 = store.search({ query: 'prefers concise' })
+    expect(r1.total).toBe(1)
+    expect(r1.entries[0]!.content).toContain('prefers concise')
+
+    // "pnpm" — single token from the second entry.
+    const r2 = store.search({ query: 'pnpm' })
+    expect(r2.total).toBe(1)
+    expect(r2.entries[0]!.content).toContain('pnpm')
+
+    // "the" — appears in two entries (OR semantics, both match).
+    const r3 = store.search({ query: 'the' })
+    expect(r3.total).toBe(2)
+
+    // CJK per-character matching.
+    await store.add({ scope: 'global', content: '用户偏好简洁的中文回答' })
+    const r4 = store.search({ query: '偏好' })
+    expect(r4.total).toBe(1)
+    expect(r4.entries[0]!.content).toContain('偏好')
+  })
+
   it('persists to a real JSON file on disk', async () => {
     await store.add({ scope: 'global', content: 'durable fact' })
     const file = join(dir, 'memory.json')

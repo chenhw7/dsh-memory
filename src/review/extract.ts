@@ -29,11 +29,24 @@ const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
 
 /** System prompt for the periodic-review extraction. */
 export const REVIEW_SYSTEM_PROMPT =
-  'You are a memory extraction assistant. Read the conversation fragments below and extract durable, reusable memories the assistant should remember across sessions. Output one memory per line in the exact format "scope: content" where scope is one of "global", "project", or "user". Prioritize user preferences, corrections, and recurring patterns over task-specific or one-off details. Omit anything already present in the current memory snapshot. Output only the memory lines, nothing else.'
+  'You are a memory extraction assistant. Read the conversation fragments below and extract durable, reusable memories the assistant should remember across sessions. Output one memory per line in the exact format "scope: content" where scope is one of "global", "project", or "user".'
+  + ' Prioritize user preferences, corrections, and recurring patterns over task-specific or one-off details.'
+  + ' Omit anything already present in the current memory snapshot.'
+  + '\n\nAdmission rules — what to NEVER persist:'
+  + '\n- Transient states, one-time events, and unverified hypotheses are never persisted.'
+  + '\n- Procedural memories (how to do X, including failure workarounds and tool quirks) are admitted only when the action was verified by tool execution within the session. If the procedure was merely discussed but not executed, omit it.'
+  + '\n- For verified procedures, prefix the content with "[procedure] " so they can be tagged with the procedure category.'
+  + '\n\nOutput only the memory lines, nothing else.'
 
 /** System prompt for the compaction/dispose flush (方案 C). */
 export const FLUSH_SYSTEM_PROMPT =
-  'The session is being compressed. Save anything worth remembering — prioritize user preferences, corrections, and recurring patterns over task-specific details. Output one memory per line in the exact format "scope: content" where scope is one of "global", "project", or "user". Output only the memory lines, nothing else.'
+  'The session is being compressed. Save anything worth remembering — prioritize user preferences, corrections, and recurring patterns over task-specific details.'
+  + ' Output one memory per line in the exact format "scope: content" where scope is one of "global", "project", or "user".'
+  + '\n\nAdmission rules — what to NEVER persist:'
+  + '\n- Transient states, one-time events, and unverified hypotheses are never persisted.'
+  + '\n- Procedural memories (how to do X, including failure workarounds and tool quirks) are admitted only when the action was verified by tool execution within the session. If the procedure was merely discussed but not executed, omit it.'
+  + '\n- For verified procedures, prefix the content with "[procedure] " so they can be tagged with the procedure category.'
+  + '\n\nOutput only the memory lines, nothing else.'
 
 /** The valid scope tags a parsed line may declare. */
 const SCOPE_TAGS: readonly MemoryScope[] = ['global', 'project', 'user']
@@ -231,12 +244,19 @@ export async function storeMemories(
   const memory = ctx.get('memory')
   if (memory === undefined) return
   for (const entry of parsed) {
-    const scan = scanContent(entry.content)
+    // The extraction prompt prefixes verified procedures with "[procedure] ";
+    // detect the tag, strip it, and assign the `procedure` category.
+    let content = entry.content
+    let category = entry.category ?? attachCategory
+    if (content.startsWith('[procedure] ')) {
+      content = content.slice('[procedure] '.length)
+      category = 'procedure'
+    }
+    const scan = scanContent(content)
     if (!scan.allowed) continue
-    const category = entry.category ?? attachCategory
     const input: AddMemoryInput = category === undefined
-      ? { scope: entry.scope, content: entry.content, source: source ?? 'review', sessionId }
-      : { scope: entry.scope, content: entry.content, category, source: source ?? 'review', sessionId }
+      ? { scope: entry.scope, content, source: source ?? 'review', sessionId }
+      : { scope: entry.scope, content, category, source: source ?? 'review', sessionId }
     try {
       await memory.add(input)
     } catch (_storeError) {

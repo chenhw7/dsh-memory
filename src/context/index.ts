@@ -29,10 +29,10 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 // text provider can recover the session whose frozen snapshot it reads.
 import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import { buildMemorySectionText, type MemoryMode } from './policy.ts'
+import { buildMemorySectionText, renderMemoryIndex, type MemoryMode, type IndexEntry } from './policy.ts'
 
-export { buildMemorySectionText, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE } from './policy.ts'
-export type { MemoryMode } from './policy.ts'
+export { buildMemorySectionText, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE } from './policy.ts'
+export type { MemoryMode, IndexEntry } from './policy.ts'
 
 /** Cordis plugin name. */
 export const name = 'memory-context'
@@ -49,6 +49,12 @@ const DEFAULT_REVIEW_CANDIDATE_THRESHOLD = 10
 const DEFAULT_FLUSH_ON_COMPACTION = true
 const DEFAULT_FLUSH_ON_DISPOSE = true
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
+
+/** Per-session frozen memory state: the full-content snapshot and the index snapshot. */
+interface FrozenSnapshot {
+  readonly content: string
+  readonly index: string
+}
 
 /** The `memory` system-prompt section name. */
 const SECTION_NAME = 'memory'
@@ -82,7 +88,7 @@ export interface MemoryConfig {
 
 /** Runtime schema for the `memory` settings namespace and plugin config. */
 export const Config: z<MemoryConfig> = z.object({
-  memoryMode: z.union(['full', 'policy-only', 'custom', 'off'] as const).default(DEFAULT_MEMORY_MODE),
+  memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index'] as const).default(DEFAULT_MEMORY_MODE),
   memoryPolicyCustomText: z.string(),
   reviewEnabled: z.boolean().default(DEFAULT_REVIEW_ENABLED),
   reviewCandidateThreshold: z.number().step(1).min(0).default(DEFAULT_REVIEW_CANDIDATE_THRESHOLD),
@@ -120,6 +126,28 @@ export function readMemorySnapshot(memory: MemoryStore, charLimit: number): stri
 }
 
 /**
+ * Read a frozen memory-index snapshot from the store: one existence line per
+ * entry, ordered by relevance, with category roll-up when the budget is
+ * exhausted. The index size grows with the number of categories, not entries.
+ * @param memory - the live memory store.
+ * @param charLimit - character budget; `0` yields no index.
+ * @returns the rendered index text, possibly truncated with roll-up lines.
+ */
+export function readMemoryIndex(memory: MemoryStore, charLimit: number): string {
+  if (charLimit <= 0) return ''
+  const all = memory.list()
+  const entries: IndexEntry[] = all.map(entry => ({
+    id: entry.id as string,
+    scope: entry.scope,
+    ...entry.category !== undefined ? { category: entry.category } : {},
+    ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
+    content: entry.content,
+    updatedAt: entry.updatedAt,
+  }))
+  return renderMemoryIndex(entries, charLimit)
+}
+
+/**
  * Register the `memory` settings namespace and the `memory` system-prompt
  * section. The section text is a function evaluated at each assembly: it reads
  * the live settings mode and the session's frozen memory snapshot, so a
@@ -134,8 +162,8 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   // `installSettingsSection` on attach and detach.
   let current = (): MemoryConfig => config
 
-  // Per-session frozen memory-content snapshot, read once at session/created.
-  const sessionMemory = new WeakMap<Session, string>()
+  // Per-session frozen memory snapshots (content + index), read once at session/created.
+  const sessionMemory = new WeakMap<Session, FrozenSnapshot>()
 
   installSettingsSection(ctx, NS, Config, config, {
     setSource: (source) => {
@@ -149,11 +177,14 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   ctx.on('session/created', (session: Session) => {
     const memory = ctx.get('memory')
     if (memory === undefined) {
-      sessionMemory.set(session, '')
+      sessionMemory.set(session, { content: '', index: '' })
       return
     }
-    const snapshot = readMemorySnapshot(memory, current().memoryCharLimit)
-    sessionMemory.set(session, snapshot)
+    const charLimit = current().memoryCharLimit
+    sessionMemory.set(session, {
+      content: readMemorySnapshot(memory, charLimit),
+      index: readMemoryIndex(memory, charLimit),
+    })
   }, { global: true })
 
   ctx.effect(() => ctx.systemPrompt.section({
@@ -162,8 +193,10 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     text: (context: AssembleContext): string => {
       const settings = current()
       const session = context.agent?.session
-      const memoryContent = session === undefined ? '' : (sessionMemory.get(session) ?? '')
-      return buildMemorySectionText(settings.memoryMode, settings.memoryPolicyCustomText, memoryContent)
+      const snapshot = session === undefined ? undefined : sessionMemory.get(session)
+      const memoryContent = snapshot?.content ?? ''
+      const indexContent = snapshot?.index ?? ''
+      return buildMemorySectionText(settings.memoryMode, settings.memoryPolicyCustomText, memoryContent, indexContent)
     },
   }), 'memory-context.section()')
 }

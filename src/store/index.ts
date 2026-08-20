@@ -32,7 +32,7 @@ import type {
 const memoryEntrySchema = z.object({
   id: z.string().min(1),
   scope: z.enum(['global', 'project', 'user']),
-  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk']).optional(),
+  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
   content: z.string(),
   projectName: z.string().optional(),
   createdAt: z.number(),
@@ -45,7 +45,7 @@ const auditEntrySchema = z.object({
   op: z.enum(['add', 'update', 'remove']),
   entryId: z.string().min(1),
   scope: z.enum(['global', 'project', 'user']),
-  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk']).optional(),
+  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
   source: z.enum(['tool', 'review', 'flush', 'ui']),
   sessionId: z.string().optional(),
   ts: z.number(),
@@ -79,6 +79,38 @@ type AuditTable = KvTable<AuditId, AuditEntry>
 
 /** Maximum audit records retained; oldest are trimmed on overflow. */
 const DEFAULT_AUDIT_CAP = 200
+
+/**
+ * Tokenize a query string for lexical search. Splits on word boundaries for
+ * Latin script; CJK characters are matched per-character (each is a token).
+ * Tokens are case-folded; empty tokens are dropped.
+ */
+function tokenizeQuery(query: string): string[] {
+  const lowered = query.toLowerCase()
+  const tokens: string[] = []
+  // Match runs of word characters (Latin) OR single CJK characters.
+  // CJK ranges: Hiragana, Katakana, CJK Unified, CJK Extension A, Hangul.
+  const re = /[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(lowered)) !== null) {
+    tokens.push(match[0])
+  }
+  return tokens
+}
+
+/**
+ * Count how many query tokens appear in the entry content (case-insensitive).
+ * Returns 0 when no tokens match (the entry should be filtered out).
+ */
+function tokenHitCount(content: string, tokens: readonly string[]): number {
+  if (tokens.length === 0) return 0
+  const lowered = content.toLowerCase()
+  let hits = 0
+  for (const token of tokens) {
+    if (lowered.includes(token)) hits++
+  }
+  return hits
+}
 
 /** Cordis plugin name. */
 export const name = 'memory-store-domain'
@@ -186,18 +218,25 @@ export class DomainMemoryStore extends MemoryStore {
 
   override search(query: MemorySearchQuery): SearchMemoryResult {
     const limit = query.limit ?? 50
-    let all: MemoryEntry[] = []
+    const tokens = query.query !== undefined && query.query.length > 0
+      ? tokenizeQuery(query.query)
+      : []
+    const scored: { entry: MemoryEntry; hits: number }[] = []
     for (const [, entry] of this.entries.entries()) {
       if (query.scope !== undefined && entry.scope !== query.scope) continue
       if (query.category !== undefined && entry.category !== query.category) continue
       if (query.projectName !== undefined && entry.projectName !== query.projectName) continue
-      if (query.query !== undefined && query.query.length > 0) {
-        const needle = query.query.toLowerCase()
-        if (!entry.content.toLowerCase().includes(needle)) continue
+      if (tokens.length > 0) {
+        const hits = tokenHitCount(entry.content, tokens)
+        if (hits === 0) continue
+        scored.push({ entry, hits })
+      } else {
+        scored.push({ entry, hits: 0 })
       }
-      all.push(entry)
     }
-    all.sort((a, b) => b.updatedAt - a.updatedAt)
+    // Rank by token-hit count (desc), then by recency (updatedAt desc).
+    scored.sort((a, b) => b.hits - a.hits || b.entry.updatedAt - a.entry.updatedAt)
+    let all = scored.map(s => s.entry)
     const total = all.length
     all = limit > 0 ? all.slice(0, limit) : all
     return { entries: all, total }

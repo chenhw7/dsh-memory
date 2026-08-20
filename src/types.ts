@@ -23,6 +23,7 @@ export type MemoryCategory =
   | 'preference'
   | 'convention'
   | 'tool-quirk'
+  | 'procedure'
 
 /** Who triggered a write to the memory store (recorded in the audit trail). */
 export type AuditSource = 'tool' | 'review' | 'flush' | 'ui'

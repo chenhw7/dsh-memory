@@ -30,7 +30,7 @@ const SCOPES = ['global', 'project', 'user'] as const
 
 /** The valid memory categories, as a runtime tuple for schema enums. */
 const CATEGORIES = [
-  'failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk',
+  'failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure',
 ] as const
 
 /** Model-facing memory tool configuration. */
@@ -221,6 +221,14 @@ export function apply(ctx: Context, config: Config): void {
           value.entries ?? [],
         ),
       }],
+      presentationMeta: (_args, value) => ({
+        entries: (value.entries ?? []).map((e: EntryJson) => ({
+          id: e.id,
+          scope: e.scope,
+          content: e.content,
+        })),
+        total: value.total,
+      }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -243,6 +251,24 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'search',
       rawInput: { ...args.scope !== undefined ? { scope: args.scope } : {}, ...args.query !== undefined ? { query: args.query } : {} },
     }),
+    presentResult: (args, result) => {
+      const meta = result.meta as { entries?: { id: string; content: string }[]; total?: number } | undefined
+      const entries = meta?.entries ?? []
+      const total = meta?.total ?? 0
+      const limit = 10
+      const capped = entries.slice(0, limit)
+      return {
+        card: 'search',
+        shape: 'matches',
+        title: `Memory search: ${total} match(es)`,
+        files: capped.map(e => ({
+          path: e.id,
+          matches: [{ lineNumber: 1, line: e.content.slice(0, 120) }],
+        })),
+        truncated: entries.length > limit,
+        total,
+      }
+    },
   }))
 
   ctx.tools.register(defineTool({
@@ -281,6 +307,11 @@ export function apply(ctx: Context, config: Config): void {
           ? `Memory added (${value.entry.scope}): ${value.entry.content}`
           : 'Memory add failed.',
       }],
+      presentationMeta: (_args, value) => value.entry !== undefined ? {
+        id: value.entry.id,
+        scope: value.entry.scope,
+        content: value.entry.content.slice(0, 80),
+      } : null,
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -307,8 +338,16 @@ export function apply(ctx: Context, config: Config): void {
       card: 'generic',
       title: 'Add memory',
       kind: 'edit',
-      rawInput: { scope: args.scope, ...args.category !== undefined ? { category: args.category } : {} },
+      rawInput: { scope: args.scope, ...args.category !== undefined ? { category: args.category } : {}, content: (args.content as string ?? '').slice(0, 80) },
     }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { id?: string; scope?: string; content?: string } | null
+      if (meta === null || meta === undefined || meta.id === undefined) return undefined
+      return {
+        card: 'generic',
+        title: `Memory added (${meta.scope ?? '?'}): ${meta.content ?? ''}`,
+      }
+    },
   }))
 
   ctx.tools.register(defineTool({
@@ -347,6 +386,11 @@ export function apply(ctx: Context, config: Config): void {
           ? `Memory updated: ${value.entry.content}`
           : 'Memory entry not found.',
       }],
+      presentationMeta: (_args, value) => value.found && value.entry !== undefined ? {
+        id: value.entry.id,
+        scope: value.entry.scope,
+        content: value.entry.content.slice(0, 80),
+      } : { found: false },
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -376,6 +420,14 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'edit',
       rawInput: args.id,
     }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { id?: string; scope?: string; content?: string; found?: boolean } | undefined
+      if (meta?.found === false || meta?.id === undefined) return undefined
+      return {
+        card: 'generic',
+        title: `Memory updated (${meta.scope ?? '?'}): ${meta.content ?? ''}`,
+      }
+    },
   }))
 
   ctx.tools.register(defineTool({
@@ -397,6 +449,7 @@ export function apply(ctx: Context, config: Config): void {
         type: 'text',
         text: value.removed ? 'Memory entry removed.' : 'Memory entry not found.',
       }],
+      presentationMeta: (_args, value) => ({ removed: value.removed }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -409,6 +462,13 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'delete',
       rawInput: args.id,
     }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { removed?: boolean } | undefined
+      return {
+        card: 'generic',
+        title: meta?.removed ? 'Memory entry removed.' : 'Memory entry not found.',
+      }
+    },
   }))
 
   ctx.tools.register(defineTool({
@@ -452,6 +512,9 @@ export function apply(ctx: Context, config: Config): void {
           value.entries ?? [],
         ),
       }],
+      presentationMeta: (_args, value) => ({
+        total: value.total,
+      }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -473,6 +536,13 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'search',
       rawInput: { ...args.scope !== undefined ? { scope: args.scope } : {} },
     }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { total?: number } | undefined
+      return {
+        card: 'generic',
+        title: `Memory list: ${meta?.total ?? 0} entries.`,
+      }
+    },
   }))
 
   ctx.tools.register(defineTool({
@@ -509,6 +579,11 @@ export function apply(ctx: Context, config: Config): void {
           ? formatEntryLine(value.entry)
           : 'Memory entry not found.',
       }],
+      presentationMeta: (_args, value) => value.found && value.entry !== undefined ? {
+        id: value.entry.id,
+        scope: value.entry.scope,
+        content: value.entry.content,
+      } : { found: false },
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -524,5 +599,13 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'search',
       rawInput: args.id,
     }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { id?: string; scope?: string; content?: string; found?: boolean } | undefined
+      if (meta?.found === false || meta?.id === undefined) return undefined
+      return {
+        card: 'generic',
+        title: `[${meta.id}] (${meta.scope ?? '?'}) ${meta.content ?? ''}`,
+      }
+    },
   }))
 }
