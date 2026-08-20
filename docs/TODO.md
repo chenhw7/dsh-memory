@@ -47,7 +47,7 @@ non-blocking for the agent loop.
 
 ## 3. Roadmap Items
 
-### 3.1 Test Infrastructure Completion — P0
+### 3.1 Test Infrastructure Completion — P0 — ✅ Implemented (`5fb7a37`)
 
 - **Why:** the spec suite (8 files, ~120 cases) exists, but vitest is not yet wired into
   `package.json` (`test` is a placeholder), and host-level integration coverage is missing.
@@ -62,7 +62,7 @@ non-blocking for the agent loop.
   log → reload the session → assert a clean resume; guard for the no-host-change policy, §6)
   passes against the pinned dsh release line.
 
-### 3.2 Plugin-Owned Audit Store — P0
+### 3.2 Plugin-Owned Audit Store — P0 — ✅ Implemented (`5fb7a37`)
 
 - **Why:** audit trails and the UI need to answer "what was learned, from where, and why" — but
   writing that into the *session log* is off the table under the no-host-change policy (§5,
@@ -91,7 +91,7 @@ non-blocking for the agent loop.
   the audit table never exceeds its cap; the §3.1 log-hygiene case passes (sessions resume
   cleanly after heavy memory activity).
 
-### 3.3 Lexical Retrieval Upgrade — P1
+### 3.3 Lexical Retrieval Upgrade — P1 — ✅ Implemented (`f5bfecc`)
 
 - **Why:** matching the raw query string as one substring fails whenever the query and the entry
   share words but not a verbatim phrase; multi-word queries collapse if any single token is out
@@ -104,23 +104,28 @@ non-blocking for the agent loop.
 - **Done when:** golden-query recall beats the substring baseline on the fixed eval set from
   §3.1; latency is unchanged at the entry counts we target (tens–hundreds).
 
-### 3.4 Dedup & Merge Pipeline — P1
+### 3.4 Dedup & Merge Pipeline — P1 — ✅ Implemented (`c4b7977`, judge `6474f08`)
 
 - **Why:** the review prompt *asks* the model to omit known memories, but the store is
   write-through, so near-duplicates can accumulate.
 - **How:** on the extraction path only, before `add`: (1) cheap prefilter against the current
-  snapshot (normalized-token Jaccard — no embeddings, see §5); (2) optional LLM judge with a
-  duplicate / update / new verdict (the judge prompt takes the compact index rendering from
-  §3.12 instead of full entry contents, keeping its cost bounded); (3) on duplicate →
-  `update` the existing entry (merge content, bump `updatedAt`) instead of `add`.
+  snapshot (normalized-token Jaccard with English + CJK stop-word filtering — no embeddings, see
+  §5); (2) LLM judge with a duplicate / update / new verdict (one short call per prefilter hit,
+  not per candidate; the judge prompt presents existing + new content side by side; best-effort
+  with safe merge fallback on any failure); (3) on duplicate → `update` (merge content, bump
+  `updatedAt`); on update → `update` (replace content with the new version); on new → `add`
+  (separate entry — the prefilter was a false positive).
   Model-initiated `memory_add` stays explicit
-  (intent wins); optionally return a "similar entry exists" hint with the existing id in the tool
-  result.
+  (intent wins). The `judgeEnabled` setting (default `true`) controls whether the LLM judge runs;
+  when disabled, prefilter hits merge directly (the pre-Judge behavior).
 - **Done when:** on a synthetic-duplicate dataset (≥ 50 seed facts each rewritten 3× with
   near-duplicate phrasing, plus ≥ 50 genuinely distinct facts as controls — checked into
-  `tests/fixtures/dedup/`), the post-pipeline duplicate rate is **≤ 5%** while distinct-fact
-  retention (precision/recall report against the seed set) is **≥ 95%**. The dataset and the
-  threshold are the gate; both are defined here so the §3.1 harness can exercise it on landing.
+  `tests/fixtures/dedup-dataset.ts`), the post-pipeline duplicate rate is **≤ 5%** while distinct-fact
+  retention (precision/recall report against the seed set) is **≥ 95%**. The LLM judge correctly
+  distinguishes same-template different-topic pairs (e.g. "项目使用pnpm" vs "项目使用vitest") that
+  the prefilter alone would false-merge; CJK stop-word filtering prevents unrelated Chinese
+  sentences from sharing too many tokens. The dataset, the threshold, and the CJK-specific tests
+  are the gate.
 
 ### 3.5 Memory Lifecycle — P2
 
@@ -133,7 +138,7 @@ non-blocking for the agent loop.
 - **Done when:** decay never touches pinned or `global` entries; janitor behavior is logged and
   reviewable from the audit store.
 
-### 3.6 Extraction Upgrades — P1
+### 3.6 Extraction Upgrades — P1 — ✅ Implemented (`e2312c6`)
 
 - **Admission rules:** what may persist *at all* (exclusion list, execution-verified procedures,
   new `procedure` category) is defined in §3.13; the prompts tuned here are where it is enforced.
@@ -226,7 +231,7 @@ non-blocking for the agent loop.
   snapshot ("memory conflicts with current evidence") instead of silently overwriting.
 - **Done when:** conflicts are surfaced to the user and resolution (keep / replace) is explicit.
 
-### 3.12 Bounded Existence Index (L1-lite) — P1
+### 3.12 Bounded Existence Index (L1-lite) — P1 — ✅ Implemented (`f5bfecc`)
 
 - **Why:** the default `policy-only` mode tells the model the tools exist but not *what is
   stored*; the model must guess keywords for `memory_search`, and a missed keyword means a
@@ -246,7 +251,7 @@ non-blocking for the agent loop.
   frozen-snapshot invariant and prefix stability hold; a scripted session in which the model
   finds a stored fact *by reading the index and calling `memory_get`* passes.
 
-### 3.13 Admission Discipline: "No Execution, No Memory" — P1
+### 3.13 Admission Discipline: "No Execution, No Memory" — P1 — ✅ Implemented (`f5bfecc`)
 
 - **Why:** keyword signals + threshold extraction admit whatever the LLM finds "interesting";
   garbage in is caught only post-hoc by §3.4. The quality gate belongs at write time.
@@ -261,7 +266,7 @@ non-blocking for the agent loop.
   procedure extracts only the procedure, with correct scope/category; the golden sets reject
   unverified-hypothesis lines; pre-existing entries remain valid under the extended enum.
 
-### 3.14 Memory Activity in the Trajectory — P1
+### 3.14 Memory Activity in the Trajectory — P1 — ✅ Implemented (`f5bfecc`)
 
 - **Why:** users should see the memory read/write process on demand in the session trajectory —
   which memories a search matched, what was written — without expanding raw tool JSON.
