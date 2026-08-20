@@ -13,6 +13,12 @@
 # Row order carries no load semantics; the grouping is for readers.
 
 - insert:
+    # Root entry: lets the host client-module scanner discover dsh.client.
+    # No host-side code runs; this is a no-op plugin that exists solely so
+    # the scanner can resolve this package's package.json from a root spec.
+    - id: memory-root
+      name: '@chenhw7/dsh-memory'
+
     # Memory store provider — opens the 'memory' domain, registers ctx.memory.
     # Requires the storage-domain facility (provided by dsh-web-app; headless
     # users must add storage-domain themselves — see README).
