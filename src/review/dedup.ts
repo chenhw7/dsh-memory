@@ -27,10 +27,36 @@ const STOP_WORDS = new Set([
 ])
 
 /**
+ * Common CJK (Chinese) stop characters excluded from dedup tokenization.
+ * These are high-frequency grammatical particles and structural words that
+ * inflate Jaccard similarity between unrelated Chinese sentences (e.g.
+ * "这个项目使用pnpm" vs "这个项目使用vitest" share 这/个/项/目/使/用 = 0.75,
+ * but are about different tools). Removing them sharpens comparison toward
+ * content-bearing characters.
+ */
+const CJK_STOP_CHARS = new Set([
+  // 结构词：这个、那、些
+  '这', '个', '那', '些',
+  // 助词
+  '的', '了', '着', '过', '地', '得',
+  // 判断/系词
+  '是', '在', '为',
+  // 介词/连词
+  '和', '与', '或', '但', '而', '由', '于', '对', '向', '从', '把', '被', '将',
+  // 否定/副词
+  '不', '没', '也', '都', '就', '还', '只', '才', '已', '再',
+  // 动词虚化高频
+  '用', '有', '会', '能', '要', '可', '以',
+  // 量词/代词高频
+  '一', '上', '下', '中',
+])
+
+/**
  * Tokenize content for dedup comparison. Normalizes to lowercase, splits on
- * word boundaries for Latin, and matches CJK per-character. Stop words are
- * removed from Latin tokens; CJK characters are always kept (they carry
- * semantic weight per character). Returns a Set of unique tokens.
+ * word boundaries for Latin, and matches CJK per-character. English stop words
+ * are removed from Latin tokens; CJK stop characters (high-frequency
+ * grammatical particles) are removed from CJK tokens so unrelated Chinese
+ * sentences don't share too many tokens. Returns a Set of unique tokens.
  */
 export function tokenize(content: string): Set<string> {
   const lowered = content.toLowerCase()
@@ -39,9 +65,11 @@ export function tokenize(content: string): Set<string> {
   let match: RegExpExecArray | null
   while ((match = re.exec(lowered)) !== null) {
     const token = match[0]
-    // Only filter Latin tokens; CJK characters are always content-bearing.
+    // Filter English stop words from Latin tokens.
     if (token.length > 1 && STOP_WORDS.has(token)) continue
     if (token.length === 1 && /[a-z0-9]/.test(token)) continue
+    // Filter CJK stop characters (high-frequency grammatical particles).
+    if (CJK_STOP_CHARS.has(token)) continue
     tokens.add(token)
   }
   return tokens
