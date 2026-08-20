@@ -1,143 +1,77 @@
-# Handoff: dsh-memory Plugin — Remaining Client UI Integration Work
+# Handoff: dsh-memory Plugin — Remaining Client UI Refinement
 
-## Context
+## Status Summary
 
-This is a handoff for the `@chenhw7/dsh-memory` plugin (`/home/chenhw7/dsh-memory`), a long-term memory subsystem for the DeepSeek Harness (`~/deepseek-harness`). All 14 TODO items (P0+P1+P2) have been implemented and committed. 258 tests pass. The plugin's core functionality (storage, retrieval, extraction, context injection, tools, audit, dedup+LLM judge, lifecycle, observability, scanner hardening, conflict detection) is fully working and verified end-to-end in a real dsh environment.
+All 14 TODO items (P0+P1+P2) implemented. 258 tests pass. Core plugin functionality fully verified in real dsh. Client UI integration partially verified — the "Memory" nav button appears in Settings, the section slot registers, and the client bundle is in the boot graph.
 
-The **remaining work** is purely client-side UI refinement for §3.8 (Memory Management UI). The host-side `@Remote` service works (health/list/add verified via curl), the client bundle is discovered in the boot graph, and the `settings.section` slot registers successfully. What's left is making the UI render correctly.
+## What's Fixed (commit `9a454d7`)
 
-## Current State of Client UI Integration
+1. **i18n labels** — `src/client/locales.ts` with en/zh dictionaries registered via `ctx.locale.register('settings.memory', ...)`. Settings dialog now shows "Memory" instead of raw key "nav". ✅ Verified in browser.
 
-### What works
-- **Boot graph discovery**: `@chenhw7/dsh-memory` appears as entry #43 in `window.__DSH_BOOT__` with URL `/plugins/@chenhw7/dsh-memory/client.js` (HTTP 200)
-- **Client bundle loads**: The esbuild-built `lib/client/index.js` in `window.__ModuleLoader__.load({id, factory})` format executes successfully in the browser
-- **settings.section slot registers**: A "nav" button appears in the Settings dialog navigation (alongside General, Models, Plugins, Agent presets)
-- **@Remote host service**: `memoryRemote/health`, `memoryRemote/list`, `memoryRemote/add` all return correct data via the Typert Gateway
+2. **Typert module augmentation** — `src/typert.remote-client.d.ts` now declares `TypertRemoteNamespaceMap['memoryRemote']` with all 9 method signatures. The client type system recognizes `ctx.remote.memoryRemote`.
 
-### What needs fixing (3 items)
+3. **Inject array** — Removed `'remote.memoryRemote'` from `inject` (caused boot failure: "pending waiting for service: remote.memoryRemote"). The namespace service is created by `$mount` at runtime, not available at fiber activation time. Kept `'remote'` only.
 
-#### 1. i18n labels show as "nav" instead of "Memory"
+4. **Namespace name** — Fixed `ctx.remote.memory` → `ctx.remote.memoryRemote` in `MemorySection.tsx` and `index.ts` (matching `super(ctx, 'memoryRemote')` on the host side).
 
-**Problem**: The `settings.section` registration uses `label: () => ctx.locale.bind(NS)('nav')` where `NS = 'settings.memory'`, but no locale dictionary is registered for the `settings.memory` namespace. The label falls back to the raw key "nav".
+## What Still Needs Work
 
-**Fix**: Register locale dictionaries in `src/client/index.ts` `apply()`:
-```ts
-ctx.effect(() => ctx.locale.register('settings.memory', {
-  en: { nav: 'Memory', title: 'Memory Management', /* ... */ },
-  zh: { nav: '记忆', title: '记忆管理', /* ... */ },
-}), 'dsh-memory: locale dictionaries')
-```
-Follow the pattern in `ui-agent-preset/src/client/locales.ts` (import `en`/`zh` objects, register in `apply`).
+### A. Memory section renders blank when clicked
 
-**File**: `/home/chenhw7/dsh-memory/src/client/index.ts`
-**Also update**: `/home/chenhw7/dsh-memory/src/client/MemorySection.tsx` and `MemoryPluginCard.tsx` (their `t()` calls will resolve once the dictionary is registered)
+**Symptom**: Clicking "Memory" in Settings nav shows an empty panel (no content, no error).
 
-#### 2. `ctx.remote.memory` is undefined in the client component
+**Cause**: `ctx.remote.memoryRemote` is `undefined` at runtime when `MemorySection`'s `apply()` runs. The `remote.memoryRemote` namespace is created by `ctx.remote.$mount(memoryRemote)` in `dsh-api-remotes`'s `apply()`, but our plugin's `apply()` may execute before the mount completes. The `sectionInjected` factory captures `ctx.remote.memoryRemote` at registration time, not at render time.
 
-**Problem**: The `MemorySection` component calls `ctx.remote.memory.list(...)` but `ctx.remote.memory` is undefined at runtime. The hand-written `TYPERT_REMOTE` in `src/typert.remote-client.js` provides the descriptors, but the client-side type augmentation (`TypertRemoteNamespaceMap['memory']`) is not merged because the `.d.ts` file doesn't declare the module augmentation.
+**Possible fixes**:
+- **Lazy access**: In `MemorySection.tsx`, access `ctx.remote.memoryRemote` lazily inside the component's render/useEffect, not in the `sectionInjected` factory. Pass `ctx` or a getter instead of the resolved namespace.
+- **Wait for mount**: Use `ctx.remote.$mount()` callback or a subscription to know when `memoryRemote` is available.
+- Check how `ui-cordis` handles this — it accesses `ctx.remote.dynamicCordisRunner` directly in handlers (called after mount), not in the factory.
 
-**Fix**: Add the module augmentation to `src/typert.remote-client.d.ts`:
-```ts
-import type { TypertRemoteContribution, RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+**Key file**: `src/client/MemorySection.tsx` — the `sectionInjected` factory should return a getter or the component should access the remote lazily.
 
-declare module '@deepseek-ai/dsh-typert-protocol' {
-  interface TypertRemoteNamespaceMap {
-    memory: {
-      list: (request: { scope?: string; limit?: number }) => Promise<RemoteResult<{ entries: unknown[]; total: number }>>
-      // ... all 9 methods
-    }
-  }
-}
+### B. Memory plugin card doesn't appear in Plugins → Plugin configuration
 
-declare const TYPERT_REMOTE: TypertRemoteContribution
-export default TYPERT_REMOTE
-```
+**Symptom**: Plugins tab shows Shell, Agent loop, Web search — no Memory card.
 
-Also verify the `inject` array in `src/client/index.ts` includes `'remote'` and `'remote.memory'` (or just `'remote'` — check how `ui-cordis` does it: it lists `'remote'` and `'remote.dynamicCordisRunner'`).
+**Cause**: The `settings.plugin.item` keyed slot with `key: 'memory'` is registered, but the `ConfigurablePluginsTabController` (in `ui-settings-plugins`) only shows cards for namespaces that appear in the settings describe mirror. The `memory` settings namespace must be visible in `ctx.settingsScope.describe()` for the card to appear.
 
-**Files**:
-- `/home/chenhw7/dsh-memory/src/typert.remote-client.d.ts` (add module augmentation)
-- `/home/chenhw7/dsh-memory/src/client/index.ts` (verify inject includes the remote namespace)
-
-#### 3. `settings.plugin.item` card doesn't appear in Plugins tab
-
-**Problem**: The `MemoryPluginCard` registered under `settings.plugin.item` with `key: 'memory'` doesn't appear in Settings → Plugins → Plugin configuration. The Plugins tab uses `ConfigurablePluginsTabController` which reads from `ctx.settingsScope.describe()` to list available namespaces. The `memory` namespace must be **described** (visible in the settings describe mirror) for the card to appear.
-
-**Fix**: Verify that the `memory` settings namespace is correctly registered by `memory-context` (the `installSettingsSection` call in `src/context/index.ts`). The namespace should appear in the settings describe response. If it doesn't, the Plugins tab won't show a card for it. Check via:
+**Diagnostic**: Check if the `memory` namespace appears in the settings describe response:
 ```bash
 curl -s -X POST http://127.0.0.1:10026/api/settings/describe \
   -H "Content-Type: application/json" \
-  -d '{"type":"client-request","rpcId":"test","method":"settings/describe","payload":{"args":{}}}' | python3 -m json.tool | grep memory
+  -d '{"type":"client-request","rpcId":"test","method":"settings/describe","payload":{"args":{}}}' | python3 -m json.tool | grep -i memory
 ```
 
-If the namespace is described but the card still doesn't show, the `key` in the `settings.plugin.item` registration may need to match exactly. Check `packages/client/ui-settings-plugins/src/client/slot-contract.ts` for the keyed slot contract.
+If it doesn't appear, the `memory-context` plugin's `installSettingsSection` may not be registering the namespace in a way the client describe mirror can see. Check `src/context/index.ts` `installSettingsSection` call.
 
-**Files**:
-- `/home/chenhw7/dsh-memory/src/client/index.ts` (verify `key: 'memory'` matches the settings namespace name)
-- `/home/chenhw7/dsh-memory/src/client/MemoryPluginCard.tsx` (verify the card component renders correctly)
+If it does appear but the card still doesn't show, the `key` in `settings.plugin.item` registration must match the namespace name exactly. The existing cards use `key: 'shell'`, `key: 'agent-loop'`, `key: 'web-search-deepseek'` — check `packages/client/ui-settings-plugins/src/client/index.ts` for the exact key format.
+
+**Key files**: `src/client/index.ts` (the `settings.plugin.item` registration), `src/client/MemoryPluginCard.tsx`
 
 ## Build & Test Commands
 
 ```bash
-# Build (tsc + fix-imports + esbuild client bundle)
-cd /home/chenhw7/dsh-memory && npm run build
-
-# Run tests
-npm test
-
-# Real API judge tests (optional)
-JUDGE_API_BASE=https://REDACTED/v1 \
-JUDGE_API_KEY=<key> \
-JUDGE_API_MODEL=fuyao-coding-exp \
-npm test
+cd /home/chenhw7/dsh-memory
+npm run build    # tsc + fix-imports + esbuild client bundle
+npm test         # 258 tests
 
 # Start dsh for browser testing
 cd ~/deepseek-harness
-pkill -f "apps/cli/src/bin.ts" 2>/dev/null; sleep 3
+pkill -f "apps/cli/src/bin.ts" 2>/dev/null; sleep 5
 node --import tsx/esm apps/cli/src/bin.ts --profile web --no-open --port 10026 &
-sleep 15
-# Check boot graph for @chenhw7/dsh-memory
-curl -s http://127.0.0.1:10026/ | python3 -c "import sys,re,json; html=sys.stdin.read(); m=re.search(r'__DSH_BOOT__\s*=\s*({.*?})\s*</script>',html,re.DOTALL); d=json.loads(m.group(1)); print([e['id'] for e in d['entries'] if 'memory' in e['id']])"
-
-# Test @Remote endpoints
-curl -s -X POST http://127.0.0.1:10026/api/memoryRemote/health \
-  -H "Content-Type: application/json" \
-  -d '{"type":"client-request","rpcId":"t1","method":"memoryRemote/health","payload":{"args":{}}}'
+sleep 20
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:10026/
 ```
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
-| `src/client/index.ts` | Client plugin entry: registers `settings.section` + `settings.plugin.item` slots |
+| `src/client/index.ts` | Client plugin entry: locale registration + slot registrations |
 | `src/client/MemorySection.tsx` | Full memory management page (CRUD + activity panel) |
 | `src/client/MemoryPluginCard.tsx` | Compact card for Plugins tab (memory settings) |
-| `src/typert.remote-client.js` | Hand-written `TYPERT_REMOTE` contribution (9 method descriptors) |
-| `src/typert.remote-client.d.ts` | Type declaration for the contribution (needs module augmentation fix) |
-| `src/remote/index.ts` | `MemoryRemoteService` — host-side `@Remote` service with `apply()` |
-| `scripts/build-client.cjs` | esbuild-based client bundle builder → `lib/client/index.js` |
-| `scripts/fix-imports.cjs` | Post-build: rewrites `.ts` imports to `.js` + copies typert artifacts |
-| `cordis.patch.yml` | 6 rows: memory-root (no-op for scanner) + store/tool/review/context/remote-service |
-| `tsconfig.json` | Excludes `src/client` from tsc (esbuild builds it separately) |
-
-## Host Repo Changes (already committed in ~/deepseek-harness)
-
-| File | Change |
-|---|---|
-| `pnpm-workspace.yaml` | Added `../dsh-memory` as workspace member |
-| `packages/api/remotes/src/client/index.ts` | Import + mount `memoryRemote` contribution |
-| `packages/api/remotes/package.json` | Added `@chenhw7/dsh-memory` to peerDeps + devDeps |
-| `packages/client/connection/src/index.ts` | Pinned `memoryRemote.add/update/remove/pin` to PRIVILEGED_METHODS |
-
-## Precedent Patterns to Follow
-
-- **ui-agent-preset**: `packages/client/ui-agent-preset/src/client/index.ts` — settings.section registration + locale dictionary registration pattern
-- **dsh-message-feedback**: `packages/feedback/message-feedback/src/index.ts` — `@Remote` service class pattern (closest CRUD analog)
-- **dsh-goal**: `packages/goal/goal/src/index.ts` — `GoalService extends TypertRemoteService`
-- **ui-cordis**: `packages/extensions/ui-cordis/src/client/index.ts` — `ctx.remote.*` calling pattern from client side
-
-## Suggested Skills
-
-- `control-browser` — for browser-based UI verification after fixes
-- `implement` — for implementing the remaining fixes
-- `code-review` — for reviewing the final client UI integration
+| `src/client/locales.ts` | en/zh i18n dictionaries for settings.memory namespace |
+| `src/typert.remote-client.js` | Hand-written TYPERT_REMOTE contribution (9 descriptors) |
+| `src/typert.remote-client.d.ts` | Module augmentation for TypertRemoteNamespaceMap |
+| `scripts/build-client.cjs` | esbuild client bundle builder → lib/client/index.js |
+| `cordis.patch.yml` | 6 rows: memory-root + store/tool/review/context/remote-service |
