@@ -21,8 +21,10 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { scanContent } from '../scanner.ts'
 import type { AddMemoryInput, AuditSource, MemoryCategory, MemoryEntry, MemoryScope } from '../types.ts'
+import type { MemoryId } from '../brand.ts'
 import type { MemoryStore } from '../index.ts'
 import type { MemoryCandidate } from './accumulator.ts'
+import { findDuplicate, mergeContent, toDedupCandidate } from './dedup.ts'
 
 /** Producer attribution for the synthetic extraction request message. */
 const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
@@ -243,6 +245,9 @@ export async function storeMemories(
 ): Promise<void> {
   const memory = ctx.get('memory')
   if (memory === undefined) return
+  // Snapshot the current entries once for the dedup prefilter. This is cheap:
+  // a synchronous in-memory list at the entry counts we target (tens–hundreds).
+  const existing = memory.list().map(toDedupCandidate)
   for (const entry of parsed) {
     // The extraction prompt prefixes verified procedures with "[procedure] ";
     // detect the tag, strip it, and assign the `procedure` category.
@@ -254,11 +259,33 @@ export async function storeMemories(
     }
     const scan = scanContent(content)
     if (!scan.allowed) continue
-    const input: AddMemoryInput = category === undefined
-      ? { scope: entry.scope, content, source: source ?? 'review', sessionId }
-      : { scope: entry.scope, content, category, source: source ?? 'review', sessionId }
+
+    // Dedup prefilter: if a near-duplicate already exists in the same scope,
+    // merge (update) instead of creating a new entry.
+    const dupId = findDuplicate(content, entry.scope, existing)
     try {
-      await memory.add(input)
+      if (dupId !== undefined) {
+        const existingEntry = memory.get(dupId as MemoryId)
+        if (existingEntry !== undefined) {
+          const merged = mergeContent(existingEntry.content, content)
+          await memory.update(dupId as MemoryId, {
+            content: merged,
+            ...category !== undefined ? { category } : {},
+            source: source ?? 'review',
+            sessionId,
+          })
+          // Update the snapshot so the merged content is visible to later
+          // candidates in the same batch.
+          const idx = existing.findIndex(e => e.id === dupId)
+          if (idx >= 0) existing[idx] = { id: dupId, scope: entry.scope, content: merged }
+          continue
+        }
+      }
+      const input: AddMemoryInput = category === undefined
+        ? { scope: entry.scope, content, source: source ?? 'review', sessionId }
+        : { scope: entry.scope, content, category, source: source ?? 'review', sessionId }
+      const result = await memory.add(input)
+      existing.push({ id: result.entry.id as string, scope: entry.scope, content })
     } catch (_storeError) {
       // Best-effort: a store failure for one entry does not abort the rest.
     }
