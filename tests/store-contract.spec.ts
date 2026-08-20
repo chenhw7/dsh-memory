@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { MemoryId, scanContent, validateProjectScope } from '../src/index.ts'
-import type { AddMemoryInput, MemoryEntry, MemorySearchQuery } from '../src/index.ts'
+import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 
 /**
@@ -10,6 +10,7 @@ import { MemoryStore } from '../src/index.ts'
  */
 class TestMemoryStore extends MemoryStore {
   private readonly map = new Map<string, MemoryEntry>()
+  private readonly auditLog: AuditEntry[] = []
 
   override async add(input: AddMemoryInput): Promise<{ entry: MemoryEntry }> {
     validateProjectScope(input)
@@ -86,73 +87,136 @@ class TestMemoryStore extends MemoryStore {
     all = limit > 0 ? all.slice(0, limit) : all
     return { entries: all, total }
   }
+
+  override async pin(id: string): Promise<MemoryEntry | undefined> {
+    const existing = this.map.get(id)
+    if (existing === undefined) return undefined
+    const updated = { ...existing, pinned: true }
+    this.map.set(id, updated)
+    return updated
+  }
+
+  override async unpin(id: string): Promise<MemoryEntry | undefined> {
+    const existing = this.map.get(id)
+    if (existing === undefined) return undefined
+    const updated = { ...existing, pinned: false }
+    this.map.set(id, updated)
+    return updated
+  }
+
+  override async janitor(_decayDays: number): Promise<number> {
+    return 0
+  }
+
+  override health(): MemoryHealth {
+    let global = 0, project = 0, user = 0, pinned = 0
+    for (const [, entry] of this.map) {
+      if (entry.scope === 'global') global++
+      else if (entry.scope === 'project') project++
+      else user++
+      if (entry.pinned === true) pinned++
+    }
+    return { totalEntries: this.map.size, byScope: { global, project, user }, pinned, auditRecords: this.auditLog.length }
+  }
+
+  override exportAuditLog(): readonly AuditEntry[] {
+    return [...this.auditLog]
+  }
 }
 
-describe('DomainMemoryStore contract (via TestMemoryStore)', () => {
-  it('adds and retrieves an entry', async () => {
-    const store = new TestMemoryStore()
-    const { entry } = await store.add({ scope: 'global', content: 'User prefers dark mode.' })
-    expect(store.get(entry.id)).toBeDefined()
-    expect(store.get(entry.id)!.content).toBe('User prefers dark mode.')
-  })
+/**
+ * The shared contract suite: any MemoryStore implementation MUST pass these
+ * tests. Used by §3.9 to validate that a new provider conforms to the same
+ * contract as the in-memory and storage-domain providers.
+ */
+export function runStoreContractSuite(name: string, makeStore: () => MemoryStore) {
+  describe(`${name} — MemoryStore contract`, () => {
+    it('adds and retrieves an entry', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'User prefers dark mode.' })
+      expect(store.get(entry.id)).toBeDefined()
+      expect(store.get(entry.id)!.content).toBe('User prefers dark mode.')
+    })
 
-  it('rejects secret content', async () => {
-    const store = new TestMemoryStore()
-    await expect(
-      store.add({ scope: 'global', content: 'sk-abcdef0123456789abcdef0123456789ab' }),
-    ).rejects.toThrow('rejected')
-  })
+    it('rejects secret content', async () => {
+      const store = makeStore()
+      await expect(
+        store.add({ scope: 'global', content: 'sk-abcdef0123456789abcdef0123456789ab' }),
+      ).rejects.toThrow('rejected')
+    })
 
-  it('rejects project scope without projectName', async () => {
-    const store = new TestMemoryStore()
-    await expect(
-      store.add({ scope: 'project', content: 'x' } as AddMemoryInput),
-    ).rejects.toThrow('project-scoped')
-  })
+    it('rejects project scope without projectName', async () => {
+      const store = makeStore()
+      await expect(
+        store.add({ scope: 'project', content: 'x' } as AddMemoryInput),
+      ).rejects.toThrow('project-scoped')
+    })
 
-  it('lists by scope', async () => {
-    const store = new TestMemoryStore()
-    await store.add({ scope: 'global', content: 'g1' })
-    await store.add({ scope: 'user', content: 'u1' })
-    await store.add({ scope: 'global', content: 'g2' })
-    expect(store.list('global').length).toBe(2)
-    expect(store.list('user').length).toBe(1)
-  })
+    it('lists by scope', async () => {
+      const store = makeStore()
+      await store.add({ scope: 'global', content: 'g1' })
+      await store.add({ scope: 'user', content: 'u1' })
+      await store.add({ scope: 'global', content: 'g2' })
+      expect(store.list('global').length).toBe(2)
+      expect(store.list('user').length).toBe(1)
+    })
 
-  it('searches by substring', async () => {
-    const store = new TestMemoryStore()
-    await store.add({ scope: 'global', content: 'User likes Python.' })
-    await store.add({ scope: 'global', content: 'User dislikes Java.' })
-    const result = store.search({ query: 'python' })
-    expect(result.total).toBe(1)
-    expect(result.entries[0]!.content).toBe('User likes Python.')
-  })
+    it('searches by substring', async () => {
+      const store = makeStore()
+      await store.add({ scope: 'global', content: 'User likes Python.' })
+      await store.add({ scope: 'global', content: 'User dislikes Java.' })
+      const result = store.search({ query: 'python' })
+      expect(result.total).toBe(1)
+      expect(result.entries[0]!.content).toBe('User likes Python.')
+    })
 
-  it('updates content and scanner still runs', async () => {
-    const store = new TestMemoryStore()
-    const { entry } = await store.add({ scope: 'global', content: 'original' })
-    await store.update(entry.id, { content: 'updated' })
-    expect(store.get(entry.id)!.content).toBe('updated')
-    await expect(
-      store.update(entry.id, { content: 'sk-abcdef0123456789abcdef0123456789ab' }),
-    ).rejects.toThrow('rejected')
-  })
+    it('updates content and scanner still runs', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'original' })
+      await store.update(entry.id, { content: 'updated' })
+      expect(store.get(entry.id)!.content).toBe('updated')
+      await expect(
+        store.update(entry.id, { content: 'sk-abcdef0123456789abcdef0123456789ab' }),
+      ).rejects.toThrow('rejected')
+    })
 
-  it('removes entries', async () => {
-    const store = new TestMemoryStore()
-    const { entry } = await store.add({ scope: 'global', content: 'temp' })
-    expect(await store.remove(entry.id)).toBe(true)
-    expect(store.get(entry.id)).toBeUndefined()
-    expect(await store.remove(entry.id)).toBe(false)
-  })
+    it('removes entries', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'temp' })
+      expect(await store.remove(entry.id)).toBe(true)
+      expect(store.get(entry.id)).toBeUndefined()
+      expect(await store.remove(entry.id)).toBe(false)
+    })
 
-  it('respects limit in search', async () => {
-    const store = new TestMemoryStore()
-    for (let i = 0; i < 5; i++) {
-      await store.add({ scope: 'global', content: `entry-${i}` })
-    }
-    const result = store.search({ limit: 2 })
-    expect(result.entries.length).toBe(2)
-    expect(result.total).toBe(5)
+    it('respects limit in search', async () => {
+      const store = makeStore()
+      for (let i = 0; i < 5; i++) {
+        await store.add({ scope: 'global', content: `entry-${i}` })
+      }
+      const result = store.search({ limit: 2 })
+      expect(result.entries.length).toBe(2)
+      expect(result.total).toBe(5)
+    })
+
+    it('pin and unpin toggle the pinned flag', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'project', content: 'pinned fact', projectName: 'demo' })
+      const pinned = await store.pin(entry.id)
+      expect(pinned!.pinned).toBe(true)
+      const unpinned = await store.unpin(entry.id)
+      expect(unpinned!.pinned).toBe(false)
+    })
+
+    it('health() returns entry counts', async () => {
+      const store = makeStore()
+      await store.add({ scope: 'global', content: 'g' })
+      await store.add({ scope: 'user', content: 'u' })
+      const h = store.health()
+      expect(h.totalEntries).toBe(2)
+      expect(h.byScope).toEqual({ global: 1, project: 0, user: 1 })
+    })
   })
-})
+}
+
+// Run the shared contract suite against the in-memory TestMemoryStore.
+runStoreContractSuite('TestMemoryStore', () => new TestMemoryStore())
