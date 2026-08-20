@@ -20,10 +20,12 @@
 
 ## 功能特性
 
-- **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中。
+- **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
-- **六个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`。
+- **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
 - **自动学习** — 投影累加器观察对话，并通过轻量规则提取候选记忆；当候选足够多时，运行 LLM 提取。
+- **去重管线** — 两阶段去重（分词 Jaccard 预过滤 + LLM 判定），防止近似重复条目累积。
+- **记忆生命周期** — 固定重要记忆、自动衰减过期的 project 作用域条目、审计每次写入。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
 - **安全扫描** — 阻止 API Key、Token、提示注入模式和泄露尝试被写入记忆。
 - **前端可配置** — 所有设置都通过 dsh 设置界面暴露，实时生效。
@@ -78,7 +80,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定版本而不跟 `latest` 时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.1
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.2
 ```
 
 ### 从 GitHub 安装（尝鲜最新 commit）
@@ -92,7 +94,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.1"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.2"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -143,8 +145,8 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.1.1.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.1.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.1.2.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.2.tgz
 ```
 
 ## 卸载
@@ -155,7 +157,7 @@ dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.1.tgz
 dsh plugin remove --profile web @chenhw7/dsh-memory
 ```
 
-（源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，四个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
+（源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，六个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
 
 卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下的一个文件里：
 
@@ -171,7 +173,7 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 ## 验证
 
-安装后，确认组合后的 profile 树中包含四个 memory 行：
+安装后，确认组合后的 profile 树中包含六个 memory 行：
 
 ```sh
 # Windows
@@ -180,9 +182,11 @@ dsh --profile web --dump-config | findstr memory
 dsh --profile web --dump-config | grep memory
 ```
 
-你应该看到四个指向 `@chenhw7/dsh-memory/*` 的行：
+你应该看到六个指向 `@chenhw7/dsh-memory/*` 的行：
 
 ```
+- id: memory-root
+  name: '@chenhw7/dsh-memory'
 - id: memory-store
   name: '@chenhw7/dsh-memory/store'
 - id: tool-memory
@@ -191,6 +195,8 @@ dsh --profile web --dump-config | grep memory
   name: '@chenhw7/dsh-memory/review'
 - id: memory-context
   name: '@chenhw7/dsh-memory/context'
+- id: memory-remote
+  name: '@chenhw7/dsh-memory/remote-service'
 ```
 
 然后启动 dsh，检查设置界面是否显示 `memory` 命名空间：
@@ -223,6 +229,23 @@ dsh web
 | `extractionModelModel` | `""`（会话路由） | 覆盖提取/裁决调用的模型名。留空 = 使用会话的对话模型。两者都设置可将提取路由到更廉价/更快的模型。 |
 | `extractionBudget` | `20` | 每会话最大提取 + 裁决调用次数。`0` = 无限。 |
 | `judgeEnabled` | `true` | 对预过滤命中运行 LLM 去重裁决。设为 `false` 时预过滤命中直接合并（更廉价，但可能误合并"同模板不同主题"对）。 |
+| `decayDays` | `30` | 自动衰减 N 天内未召回的 project 作用域条目。`0` = 禁用。固定的、`global` 和 `user` 条目永不衰减。 |
+
+### 工具设置
+
+以下设置控制模型可用工具，位于 `tool-memory` 插件配置中（通过组合层设置，不在 `memory` 设置命名空间里）：
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
+| `maxSearchResults` | `50` | `memory_search` 返回的最大条目数。`0` = 无限制。 |
+
+组合配置示例：
+
+```yaml
+tool-memory:
+  config:
+    maxSearchResults: 100
+```
 
 默认情况下，提取和去重裁决使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，在 review 插件的组合配置中设置 `extractionModelProvider` 和 `extractionModelModel`。
 
@@ -276,14 +299,16 @@ memory:
 
 ## 架构
 
-该 bundle 在 `dsh-base` 之上插入四行，每行指向本包自己的导出子路径：
+该 bundle 在 `dsh-base` 之上插入六行，每行指向本包自己的导出子路径：
 
 | 行 | 导出 | 作用 |
 |---|---|---|
+| `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
 | `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域，注册 `ctx.memory` |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | 六个模型可用工具 |
-| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + flush） |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具 |
+| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + flush + 去重 + janitor） |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入 + 设置命名空间 |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务 |
 
 **存储**：本 bundle **不**插入 `storage-json` / `storage-domain` 行。`dsh-web-app` bundle 已经提供它们（并在 `$DSH_HOME/storages` 下使用正确的根路径）。如果在这里重复插入，会覆盖已有配置（patch 会替换整行，后写覆盖先写）。memory store provider 将 `storageDomain` 服务作为 peer dependency 使用。
 
@@ -310,7 +335,7 @@ memory:
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.1" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.2" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 说明 pnpm 还没有被允许执行该包的 `prepare` 构建脚本。
@@ -331,7 +356,7 @@ The git-hosted package "@chenhw7/dsh-memory@0.1.1" needs to execute build script
 
 ## 已知限制
 
-- **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的子串匹配，不是 embeddings。
+- **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的分词词法匹配（CJK 逐字 + Latin 逐词），不是 embeddings。
 - **提取质量跟随会话模型** — review/flush 复用会话当前路由的 provider/model。
 - **git 安装需要构建允许** — pnpm 会阻止 git 依赖的 `prepare` 脚本，直到你在 profile 的 `pnpm-workspace.yaml` 中允许它（见上文两步流程）。npm 安装路径则完全不需要。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
