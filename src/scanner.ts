@@ -21,6 +21,36 @@ interface ScanHit {
   readonly pattern: string
 }
 
+/**
+ * Patterns the user has explicitly allowlisted (§3.10). When a hit's pattern
+ * name matches an allowlisted entry AND the matched substring is in the
+ * allowlist's expected-values set, the hit is suppressed. This lets users
+ * store content like `Example: sk-xxxx (redacted)` without triggering the
+ * scanner, while real keys of the same shape are still caught.
+ */
+export interface ScanAllowlist {
+  /** Pattern names whose specific matched values are expected. */
+  readonly [patternName: string]: readonly string[]
+}
+
+/** The active allowlist (mutable so callers can configure it at runtime). */
+let activeAllowlist: ScanAllowlist = {}
+
+/**
+ * Set the active allowlist. Pass an empty object to clear.
+ * @param allowlist - pattern names mapped to their expected (safe) values.
+ */
+export function setAllowlist(allowlist: ScanAllowlist): void {
+  activeAllowlist = allowlist
+}
+
+/** Check whether a hit is allowlisted: pattern name matches and the matched substring is expected. */
+function isAllowlisted(content: string, hit: ScanHit): boolean {
+  const allowed = activeAllowlist[hit.pattern]
+  if (allowed === undefined) return false
+  return allowed.some(value => content.includes(value))
+}
+
 /** API key and token patterns (high-confidence secrets). */
 const SECRET_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[] = [
   { name: 'DeepSeek API key', re: /sk-[a-f0-9]{32,}/i },
@@ -34,6 +64,11 @@ const SECRET_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[]
   { name: 'SSH private key header', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/ },
   { name: 'Slack token', re: /xox[baprs]-[A-Za-z0-9-]{10,}/ },
   { name: 'Google API key', re: /AIza[0-9A-Za-z_-]{35}/ },
+  { name: 'Stripe key', re: /(?:sk|pk)_(?:test|live)_[A-Za-z0-9]{24,}/ },
+  { name: 'HuggingFace token', re: /hf_[A-Za-z0-9]{34,}/ },
+  { name: 'Twilio API key', re: /SK[A-Za-z0-9]{32}/ },
+  { name: 'URL-embedded token', re: /https?:\/\/[^\s]+(?:api_key|apikey|access_token|token|secret)=[A-Za-z0-9_-]{20,}/i },
+  { name: 'Git credentials URL', re: /https?:\/\/[A-Za-z0-9_-]+:[A-Za-z0-9_-]{8,}@[^\s]+/ },
 ]
 
 /** Prompt-injection patterns: instruction-like text that could hijack later reads. */
@@ -80,10 +115,13 @@ export function scanContent(content: string): ScanResult {
     if (re.test(content)) hits.push({ kind: 'exfiltration', pattern: name })
   }
 
-  if (hits.length === 0) {
+  // Filter out allowlisted hits (§3.10).
+  const filtered = hits.filter(hit => !isAllowlisted(content, hit))
+
+  if (filtered.length === 0) {
     return { allowed: true, reasons: [] }
   }
 
-  const reasons = hits.map(hit => `${hit.kind}: ${hit.pattern}`)
+  const reasons = filtered.map(hit => `${hit.kind}: ${hit.pattern}`)
   return { allowed: false, reasons }
 }
