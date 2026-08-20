@@ -59,7 +59,7 @@ dsh 的插件体系——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G6 — 前端可配置、实时生效。** 全部设置经 dsh 设置界面（`memory` 命名空间）暴露，无需重启。
 - **G7 — 一条命令安装/卸载。** `dsh plugin add` / `dsh plugin remove`；卸载不删用户数据。
 
-客户端 UI 开发经验教训——包括 esbuild CJS var 提升导致 CSS 注入失败的 bug、宿主不导出 UI 组件的约束等——记录在 [UI_CONSISTENCY_ROOT_CAUSE.md](./UI_CONSISTENCY_ROOT_CAUSE.md) 中。
+客户端 UI 开发经验教训——包括 esbuild CJS var 提升导致 CSS 注入失败的 bug、宿主不导出 UI 组件的约束等——记录在 [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）中。
 
 ---
 
@@ -688,4 +688,4 @@ src/ ├── index.ts              # 包根：再导出、MemoryStore 抽象�
 
 ---
 
-*配套文档：[README.md](../README.md)（用户指南）、[README.zh-CN.md](../README.zh-CN.md)、 [English Technical Design](./TECH_DESIGN.md)、[客户端 UI 经验教训](./UI_CONSISTENCY_ROOT_CAUSE.md)。*
+*配套文档：[README.md](../README.md)（用户指南）、[README.zh-CN.md](../README.zh-CN.md)、 [English Technical Design](./TECH_DESIGN.md)、[客户端 UI 经验教训](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）。*
