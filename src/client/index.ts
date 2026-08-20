@@ -22,24 +22,46 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // merge (the 'settings.section' entry) into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: the plugins settings tab's SlotMap merge (settings.plugin.item).
+import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { MemorySection } from './MemorySection.tsx'
 import type { MemorySectionInjected } from './MemorySection.tsx'
+import { MemoryPluginCard } from './MemoryPluginCard.tsx'
+import type { MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
 
 export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
+export type { MemoryPluginCardInjected, MemoryPluginCardProps } from './MemoryPluginCard.tsx'
 
 /** Required services (cordis fiber inject). */
-export const inject = ['slots', 'locale', 'connection', 'remote']
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope']
 
 /** The locale namespace for i18n strings. */
 const NS = 'settings.memory'
 
 /**
- * Mount the memory management settings section.
+ * Mount the memory management UI: a full settings section (the memory
+ * management page with CRUD + activity panel) and a plugin configuration
+ * card (memory mode + review settings inside the Plugins tab).
  * @param ctx - the browser plugin context.
  */
 export function apply(ctx: ClientContext): void {
-  /** The injected face: hooks + handlers the MemorySection component receives. */
+  // ── Plugin configuration card (inside Plugins → Plugin configuration) ──
+  const pluginCardInjected = (): MemoryPluginCardInjected => ({
+    hooks: {
+      settingsScope: ctx.settingsScope.bind({ namespace: 'memory' }),
+    },
+  })
+
+  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    name: 'settings.plugin.item',
+    key: 'memory',
+    label: () => ctx.locale.bind(NS)('pluginConfigTitle'),
+    locale: NS,
+    inject: pluginCardInjected,
+  }, MemoryPluginCard))
+
+  // ── Full settings section (Memory management page) ──
   const sectionInjected = (): MemorySectionInjected => ({
     hooks: {
       // The remote namespace is available as ctx.remote.memory after the
