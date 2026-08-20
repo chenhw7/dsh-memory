@@ -237,7 +237,7 @@ All settings are editable from the dsh frontend settings page (the `memory` name
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. |
+| `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
 | `reviewEnabled` | `true` | Enable automatic periodic review extraction. |
 | `reviewCandidateThreshold` | `10` | Number of candidate messages before an LLM extraction runs. |
@@ -245,7 +245,31 @@ All settings are editable from the dsh frontend settings page (the `memory` name
 | `flushOnDispose` | `true` | Extract remaining context when a session is disposed. |
 | `memoryCharLimit` | `5000` | Per-scope character limit for injected memory content. |
 
-Example `$DSH_HOME/settings.yaml`:
+### Extraction & Dedup Settings
+
+These settings control the automatic extraction pipeline and the dedup judge. They live in the `memory-review` plugin config (set via the composition layer, not the `memory` settings namespace):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `extractionModelProvider` | `""` (session route) | Override the LLM provider for extraction/judge calls. Empty = use the session's conversational model (the default — extraction reuses the same model the user is chatting with, no extra keys or billing channel). |
+| `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
+| `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
+| `judgeEnabled` | `true` | Run the LLM dedup judge on prefilter hits. When `false`, prefilter hits merge directly (cheaper, but may false-merge same-template different-topic pairs). |
+
+By default, extraction and the dedup judge use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` in the review plugin's composition config.
+
+Example composition config for a dedicated extraction model:
+
+```yaml
+memory-review:
+  config:
+    extractionModelProvider: deepseek
+    extractionModelModel: deepseek-chat
+    extractionBudget: 20
+    judgeEnabled: true
+```
+
+Example `$DSH_HOME/settings.yaml` (memory namespace):
 
 ```yaml
 memory:

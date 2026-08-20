@@ -205,13 +205,37 @@ dsh web
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
-| `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入。 |
+| `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
 | `memoryPolicyCustomText` | — | 当 `memoryMode` 为 `custom` 时使用的自定义策略文本。 |
 | `reviewEnabled` | `true` | 启用自动周期性 review 提取。 |
 | `reviewCandidateThreshold` | `10` | 触发 LLM 提取前的候选消息数。 |
 | `flushOnCompaction` | `true` | 压缩后从被遮蔽的事件中提取记忆。 |
 | `flushOnDispose` | `true` | 会话销毁时提取剩余上下文。 |
 | `memoryCharLimit` | `5000` | 每个作用域注入记忆内容的字符上限。 |
+
+### 提取与去重设置
+
+以下设置控制自动提取管线和去重裁决，位于 `memory-review` 插件配置中（通过组合层设置，不在 `memory` 设置命名空间里）：
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
+| `extractionModelProvider` | `""`（会话路由） | 覆盖提取/裁决调用的 LLM provider。留空 = 使用会话的对话模型（默认行为——提取复用用户正在聊天的模型，无需额外 key 或计费通道）。 |
+| `extractionModelModel` | `""`（会话路由） | 覆盖提取/裁决调用的模型名。留空 = 使用会话的对话模型。两者都设置可将提取路由到更廉价/更快的模型。 |
+| `extractionBudget` | `20` | 每会话最大提取 + 裁决调用次数。`0` = 无限。 |
+| `judgeEnabled` | `true` | 对预过滤命中运行 LLM 去重裁决。设为 `false` 时预过滤命中直接合并（更廉价，但可能误合并"同模板不同主题"对）。 |
+
+默认情况下，提取和去重裁决使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，在 review 插件的组合配置中设置 `extractionModelProvider` 和 `extractionModelModel`。
+
+专用提取模型的组合配置示例：
+
+```yaml
+memory-review:
+  config:
+    extractionModelProvider: deepseek
+    extractionModelModel: deepseek-chat
+    extractionBudget: 20
+    judgeEnabled: true
+```
 
 `$DSH_HOME/settings.yaml` 配置示例：
 
