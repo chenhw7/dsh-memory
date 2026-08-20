@@ -5,6 +5,9 @@ import {
   findDuplicate,
   mergeContent,
   toDedupCandidate,
+  JUDGE_SYSTEM_PROMPT,
+  buildJudgePrompt,
+  parseJudgeVerdict,
 } from '../src/review/dedup.ts'
 import type { MemoryEntry } from '../src/types.ts'
 
@@ -136,6 +139,45 @@ describe('CJK dedup (Chinese context)', () => {
     // Either it matches (FP from shared '项/目') or doesn't — both are
     // acceptable prefilter outcomes; the key assertion is no crash.
     expect(typeof dup === 'string' || dup === undefined).toBe(true)
+  })
+})
+
+describe('LLM judge prompt and verdict parser (§3.4)', () => {
+  it('JUDGE_SYSTEM_PROMPT contains the three verdict words', () => {
+    expect(JUDGE_SYSTEM_PROMPT).toContain('duplicate')
+    expect(JUDGE_SYSTEM_PROMPT).toContain('update')
+    expect(JUDGE_SYSTEM_PROMPT).toContain('new')
+  })
+
+  it('buildJudgePrompt presents existing and new content', () => {
+    const prompt = buildJudgePrompt('use pnpm here', 'use pnpm for this repo')
+    expect(prompt).toContain('use pnpm here')
+    expect(prompt).toContain('use pnpm for this repo')
+    expect(prompt).toContain('Existing memory:')
+    expect(prompt).toContain('New candidate:')
+  })
+
+  it('parseJudgeVerdict recognizes "duplicate"', () => {
+    expect(parseJudgeVerdict('duplicate')).toBe('duplicate')
+    expect(parseJudgeVerdict('  Duplicate  ')).toBe('duplicate')
+    expect(parseJudgeVerdict('DUPLICATE')).toBe('duplicate')
+  })
+
+  it('parseJudgeVerdict recognizes "update"', () => {
+    expect(parseJudgeVerdict('update')).toBe('update')
+    expect(parseJudgeVerdict('  Update  ')).toBe('update')
+  })
+
+  it('parseJudgeVerdict recognizes "new"', () => {
+    expect(parseJudgeVerdict('new')).toBe('new')
+    expect(parseJudgeVerdict('  New  ')).toBe('new')
+  })
+
+  it('parseJudgeVerdict defaults to "duplicate" on unrecognized input', () => {
+    expect(parseJudgeVerdict('')).toBe('duplicate')
+    expect(parseJudgeVerdict('maybe')).toBe('duplicate')
+    expect(parseJudgeVerdict('they are the same')).toBe('duplicate')
+    expect(parseJudgeVerdict('I think this is a duplicate')).toBe('duplicate')
   })
 })
 

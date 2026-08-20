@@ -151,3 +151,42 @@ export function mergeContent(oldContent: string, newContent: string): string {
 export function toDedupCandidate(entry: MemoryEntry): DedupCandidate {
   return { id: entry.id as string, scope: entry.scope, content: entry.content }
 }
+
+// ─── LLM Judge (§3.4 enhancement) ──────────────────────────────────────────
+
+/** The LLM judge's verdict for a prefilter-flagged pair. */
+export type JudgeVerdict = 'duplicate' | 'update' | 'new'
+
+/** System prompt for the dedup judge — minimal, one-word output protocol. */
+export const JUDGE_SYSTEM_PROMPT =
+  'You are a memory dedup judge. Given an existing memory entry and a new candidate, decide:'
+  + '\n- "duplicate": the new candidate restates the same fact as the existing entry (different wording, same meaning). The existing entry should be kept.'
+  + '\n- "update": the new candidate is a correction or more precise version of the existing entry. The new content should replace the old.'
+  + '\n- "new": the new candidate is a genuinely different fact that happens to share words with the existing entry. Both should be kept as separate entries.'
+  + '\n\nOutput exactly one word: duplicate, update, or new. Output nothing else.'
+
+/**
+ * Build the user message for the dedup judge: present the existing entry
+ * content and the new candidate content side by side.
+ * @param existingContent - the current stored entry's content.
+ * @param newContent - the new candidate content flagged by the prefilter.
+ * @returns the model-facing user message text.
+ */
+export function buildJudgePrompt(existingContent: string, newContent: string): string {
+  return `Existing memory:\n${existingContent}\n\nNew candidate:\n${newContent}`
+}
+
+/**
+ * Parse the judge's one-line output into a verdict. Strict: lowercases, trims,
+ * and matches against the three valid words. Defaults to `duplicate` on
+ * anything unrecognized (the safe fallback — merge rather than create a
+ * spurious duplicate).
+ * @param text - the raw model output.
+ * @returns the verdict.
+ */
+export function parseJudgeVerdict(text: string): JudgeVerdict {
+  const word = text.trim().toLowerCase()
+  if (word === 'update') return 'update'
+  if (word === 'new') return 'new'
+  return 'duplicate'
+}

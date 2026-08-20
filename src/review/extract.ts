@@ -24,7 +24,7 @@ import type { AddMemoryInput, AuditSource, MemoryCategory, MemoryEntry, MemorySc
 import type { MemoryId } from '../brand.ts'
 import type { MemoryStore } from '../index.ts'
 import type { MemoryCandidate } from './accumulator.ts'
-import { findDuplicate, mergeContent, toDedupCandidate } from './dedup.ts'
+import { findDuplicate, mergeContent, toDedupCandidate, type JudgeVerdict, JUDGE_SYSTEM_PROMPT, buildJudgePrompt, parseJudgeVerdict } from './dedup.ts'
 
 /** Producer attribution for the synthetic extraction request message. */
 const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
@@ -243,9 +243,53 @@ export async function extractMemories(
 }
 
 /**
+ * Run one LLM judge call for a prefilter-flagged pair. Best-effort: returns
+ * `duplicate` (safe merge fallback) on any failure — no provider/model route,
+ * stream error, or unparseable output.
+ * @param ctx - context carrying the LLM seam.
+ * @param session - the session whose request header routes the call.
+ * @param existingContent - the current stored entry's content.
+ * @param newContent - the new candidate content flagged by the prefilter.
+ * @param modelOverride - optional provider/model override (§3.6).
+ * @returns the judge verdict.
+ */
+async function judgeDuplicate(
+  ctx: Context,
+  session: Session,
+  existingContent: string,
+  newContent: string,
+  modelOverride?: ExtractionModelOverride,
+): Promise<JudgeVerdict> {
+  const target = resolveTarget(session, modelOverride)
+  if (target === undefined) return 'duplicate'
+  const prompt = buildJudgePrompt(existingContent, newContent)
+  const messages = [createUserMessage({ content: [{ type: 'text', text: prompt }], source: PLUGIN_SOURCE })]
+  const options: GenerateOptions = {
+    provider: target.provider,
+    model: target.model,
+    messages,
+    system: JUDGE_SYSTEM_PROMPT,
+    sessionId: session.id,
+  }
+  try {
+    const text = await collectStreamText(ctx, options)
+    return parseJudgeVerdict(text)
+  } catch {
+    return 'duplicate'
+  }
+}
+
+/**
  * Store parsed memory entries through the scanner and the memory store. Each
  * entry is independent: a scanner rejection or store failure skips that
  * entry without throwing. Does nothing when no memory store is mounted.
+ *
+ * Dedup flow: the cheap Jaccard prefilter runs first. When it flags a
+ * near-duplicate, an optional LLM judge (§3.4) determines the verdict:
+ * `duplicate` → merge content, `update` → replace with new content,
+ * `new` → create a separate entry. The judge is best-effort: on failure
+ * it falls back to `duplicate` (safe merge). When `judgeEnabled` is false,
+ * prefilter hits merge directly (the original §3.4 behavior).
  * @param ctx - context carrying an optional `memory` service.
  * @param parsed - the entries to store.
  * @param attachCategory - optional category to attach to every entry.
@@ -253,6 +297,9 @@ export async function extractMemories(
  * @param sessionId - the session id, recorded in each audit entry.
  * @param inferredProjectName - when the session cwd implies a project, project-scoped
  *   entries that lack a projectName get this value (§3.6 project auto-detection).
+ * @param session - the live session, for routing the LLM judge call.
+ * @param modelOverride - optional provider/model override for the judge (§3.6).
+ * @param judgeEnabled - whether to run the LLM judge on prefilter hits (default true).
  */
 export async function storeMemories(
   ctx: Context,
@@ -261,6 +308,9 @@ export async function storeMemories(
   source?: AuditSource,
   sessionId?: string,
   inferredProjectName?: string,
+  session?: Session,
+  modelOverride?: ExtractionModelOverride,
+  judgeEnabled?: boolean,
 ): Promise<void> {
   const memory = ctx.get('memory')
   if (memory === undefined) return
@@ -280,23 +330,44 @@ export async function storeMemories(
     if (!scan.allowed) continue
 
     // Dedup prefilter: if a near-duplicate already exists in the same scope,
-    // merge (update) instead of creating a new entry.
+    // run the LLM judge (when enabled) or merge directly.
     const dupId = findDuplicate(content, entry.scope, existing)
     try {
       if (dupId !== undefined) {
         const existingEntry = memory.get(dupId as MemoryId)
         if (existingEntry !== undefined) {
-          const merged = mergeContent(existingEntry.content, content)
+          // Determine the verdict: judge when enabled, else default to duplicate.
+          const verdict: JudgeVerdict = judgeEnabled !== false && session !== undefined
+            ? await judgeDuplicate(ctx, session, existingEntry.content, content, modelOverride)
+            : 'duplicate'
+
+          if (verdict === 'new') {
+            // The prefilter was a false positive — create a separate entry.
+            const input: AddMemoryInput = {
+              scope: entry.scope,
+              content,
+              source: source ?? 'review',
+              sessionId,
+              ...category !== undefined ? { category } : {},
+              ...entry.scope === 'project' && inferredProjectName !== undefined ? { projectName: inferredProjectName } : {},
+            }
+            const result = await memory.add(input)
+            existing.push({ id: result.entry.id as string, scope: entry.scope, content })
+            continue
+          }
+
+          // duplicate → merge content; update → replace with new content.
+          const finalContent = verdict === 'update' ? content : mergeContent(existingEntry.content, content)
           await memory.update(dupId as MemoryId, {
-            content: merged,
+            content: finalContent,
             ...category !== undefined ? { category } : {},
             source: source ?? 'review',
             sessionId,
           })
-          // Update the snapshot so the merged content is visible to later
-          // candidates in the same batch.
+          // Update the snapshot so the merged/replaced content is visible to
+          // later candidates in the same batch.
           const idx = existing.findIndex(e => e.id === dupId)
-          if (idx >= 0) existing[idx] = { id: dupId, scope: entry.scope, content: merged }
+          if (idx >= 0) existing[idx] = { id: dupId, scope: entry.scope, content: finalContent }
           continue
         }
       }
@@ -331,6 +402,7 @@ export async function runReviewExtraction(
   agent: Agent,
   candidates: readonly MemoryCandidate[],
   modelOverride?: ExtractionModelOverride,
+  judgeEnabled?: boolean,
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
@@ -339,7 +411,7 @@ export async function runReviewExtraction(
   // A correction signal maps naturally to the `correction` category.
   const correctionOnly = candidates.length > 0 && candidates.every(c => c.signal === 'correction')
   const projectName = inferProjectName(agent.session)
-  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName)
+  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
   return parsed.length
 }
 
@@ -368,10 +440,11 @@ export async function runFlushExtraction(
   fragments: readonly string[],
   signal?: AbortSignal,
   modelOverride?: ExtractionModelOverride,
+  judgeEnabled?: boolean,
 ): Promise<number> {
   const messages = buildFlushMessages(fragments)
   const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal, modelOverride)
   const projectName = inferProjectName(session)
-  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName)
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled)
   return parsed.length
 }
