@@ -13,3 +13,14 @@ export type MemoryId = Branded<'MemoryId'>
 export function MemoryId(id: string = randomUUID()): MemoryId {
   return id as MemoryId
 }
+
+/** Identifies one audit-record entry in the audit table. */
+export type AuditId = Branded<'AuditId'>
+
+/**
+ * Mint a new unique audit id.
+ * @returns a fresh branded id.
+ */
+export function AuditId(id: string = randomUUID()): AuditId {
+  return id as AuditId
+}

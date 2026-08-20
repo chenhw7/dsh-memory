@@ -20,7 +20,7 @@ import type { FinishReason } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { scanContent } from '../scanner.ts'
-import type { AddMemoryInput, MemoryCategory, MemoryEntry, MemoryScope } from '../types.ts'
+import type { AddMemoryInput, AuditSource, MemoryCategory, MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryStore } from '../index.ts'
 import type { MemoryCandidate } from './accumulator.ts'
 
@@ -217,12 +217,16 @@ export async function extractMemories(
  * entry without throwing. Does nothing when no memory store is mounted.
  * @param ctx - context carrying an optional `memory` service.
  * @param parsed - the entries to store.
- * @param category - optional category to attach to every entry.
+ * @param attachCategory - optional category to attach to every entry.
+ * @param source - provenance tag for the audit trail (`'review'` or `'flush'`).
+ * @param sessionId - the session id, recorded in each audit entry.
  */
 export async function storeMemories(
   ctx: Context,
   parsed: readonly ParsedMemory[],
   attachCategory?: MemoryCategory,
+  source?: AuditSource,
+  sessionId?: string,
 ): Promise<void> {
   const memory = ctx.get('memory')
   if (memory === undefined) return
@@ -231,8 +235,8 @@ export async function storeMemories(
     if (!scan.allowed) continue
     const category = entry.category ?? attachCategory
     const input: AddMemoryInput = category === undefined
-      ? { scope: entry.scope, content: entry.content }
-      : { scope: entry.scope, content: entry.content, category }
+      ? { scope: entry.scope, content: entry.content, source: source ?? 'review', sessionId }
+      : { scope: entry.scope, content: entry.content, category, source: source ?? 'review', sessionId }
     try {
       await memory.add(input)
     } catch (_storeError) {
@@ -260,7 +264,7 @@ export async function runReviewExtraction(
   const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages)
   // A correction signal maps naturally to the `correction` category.
   const correctionOnly = candidates.length > 0 && candidates.every(c => c.signal === 'correction')
-  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined)
+  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id)
   return parsed.length
 }
 
@@ -282,6 +286,6 @@ export async function runFlushExtraction(
 ): Promise<number> {
   const messages = buildFlushMessages(fragments)
   const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal)
-  await storeMemories(ctx, parsed)
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id)
   return parsed.length
 }

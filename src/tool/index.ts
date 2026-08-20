@@ -289,6 +289,7 @@ export function apply(ctx: Context, config: Config): void {
         ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
         content: args.content,
         ...args.projectName !== undefined ? { projectName: args.projectName } : {},
+        source: 'tool' as const,
       }
       // Project scope needs a projectName; the store would reject it too, but
       // failing here gives a precise error before any scan or write.
@@ -362,6 +363,7 @@ export function apply(ctx: Context, config: Config): void {
       const updated = await store.update(args.id as MemoryId, {
         ...args.content !== undefined ? { content: args.content } : {},
         ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
+        source: 'tool' as const,
       })
       if (updated === undefined) {
         return { found: false }

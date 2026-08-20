@@ -7,10 +7,10 @@
  * @module @chenhw7/dsh-memory/types
  */
 
-/** MemoryId is imported from ./brand.ts for use in type positions below. */
-import type { MemoryId } from './brand.ts'
+/** MemoryId and AuditId are imported from ./brand.ts for use in type positions below. */
+import type { MemoryId, AuditId } from './brand.ts'
 /** Re-exported so the tool and review modules can import the full vocabulary from this module. */
-export type { MemoryId }
+export type { MemoryId, AuditId }
 
 /** The scope a memory entry belongs to. */
 export type MemoryScope = 'global' | 'project' | 'user'
@@ -23,6 +23,12 @@ export type MemoryCategory =
   | 'preference'
   | 'convention'
   | 'tool-quirk'
+
+/** Who triggered a write to the memory store (recorded in the audit trail). */
+export type AuditSource = 'tool' | 'review' | 'flush' | 'ui'
+
+/** The operation kind recorded in one audit entry. */
+export type AuditOp = 'add' | 'update' | 'remove'
 
 /** One durable memory entry. */
 export interface MemoryEntry {
@@ -52,6 +58,10 @@ export interface AddMemoryInput {
   readonly content: string
   /** Project name; required when scope is `project`. */
   readonly projectName?: string | undefined
+  /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
+  readonly source?: AuditSource | undefined
+  /** Session id for the audit trail; omitted by tool writes that lack a session handle. */
+  readonly sessionId?: string | undefined
 }
 
 /** Input for updating an existing memory entry. */
@@ -60,6 +70,10 @@ export interface UpdateMemoryInput {
   readonly content?: string
   /** New category; optional. */
   readonly category?: MemoryCategory | undefined
+  /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
+  readonly source?: AuditSource | undefined
+  /** Session id for the audit trail; omitted by tool writes that lack a session handle. */
+  readonly sessionId?: string | undefined
 }
 
 /** Filter parameters for searching memory entries. */
@@ -96,6 +110,28 @@ export interface SearchMemoryResult {
   readonly entries: readonly MemoryEntry[]
   /** Total count of matches before the limit was applied. */
   readonly total: number
+}
+
+/** One record in the plugin-owned audit table, appended after every successful mutation. */
+export interface AuditEntry {
+  /** Stable identity of this audit record. */
+  readonly id: AuditId
+  /** Which mutation produced this record. */
+  readonly op: AuditOp
+  /** The memory entry id that was mutated. */
+  readonly entryId: MemoryId
+  /** The scope of the mutated entry. */
+  readonly scope: MemoryScope
+  /** Category of the mutated entry, when one was assigned. */
+  readonly category?: MemoryCategory | undefined
+  /** Who triggered the write. */
+  readonly source: AuditSource
+  /** Session id when the write came from an extraction path, absent for tool writes. */
+  readonly sessionId?: string | undefined
+  /** Unix epoch milliseconds when the audit record was appended. */
+  readonly ts: number
+  /** First ~100 chars of the mutated content, scanner-clean. */
+  readonly contentPreview: string
 }
 
 declare module '@deepseek-ai/dsh-session/types' {

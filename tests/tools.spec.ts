@@ -3,9 +3,9 @@ import { Context } from '@deepseek-ai/cordis'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { scanContent, validateProjectScope } from '../src/tool/index.ts'
+import { scanContent, validateProjectScope } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery } from '../src/tool/index.ts'
-import { MemoryStore } from '../src/tool/index.ts'
+import { MemoryStore } from '../src/index.ts'
 
 import * as tool from '../src/tool/index.ts'
 

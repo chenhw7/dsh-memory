@@ -11,11 +11,14 @@
  * @module @chenhw7/dsh-memory
  */
 
-import { MemoryId } from './brand.ts'
+import { MemoryId, AuditId } from './brand.ts'
 import { scanContent } from './scanner.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
+  AuditEntry,
+  AuditOp,
+  AuditSource,
   MemoryEntry,
   MemorySearchQuery,
   SearchMemoryResult,
@@ -25,6 +28,9 @@ import type {
 export type {
   AddMemoryInput,
   AddMemoryResult,
+  AuditEntry,
+  AuditOp,
+  AuditSource,
   MemoryCategory,
   MemoryEntry,
   MemoryScope,
@@ -33,7 +39,7 @@ export type {
   SearchMemoryResult,
   UpdateMemoryInput,
 } from './types.ts'
-export { MemoryId, scanContent }
+export { MemoryId, AuditId, scanContent }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -47,6 +53,16 @@ declare module '@deepseek-ai/cordis' {
  * Does not extend Cordis `Service` — the provider plugin owns the registration.
  */
 export abstract class MemoryStore {
+  /**
+   * Runtime guard: direct construction of the abstract base throws. A subclass
+   * calling `super()` is the only legitimate path, detected via `new.target`.
+   */
+  constructor() {
+    if (new.target === MemoryStore) {
+      throw new TypeError('MemoryStore is abstract and cannot be instantiated directly')
+    }
+  }
+
   /**
    * Add one memory entry. Implementations MUST run the content through
    * {@link scanContent} before persisting and reject content that fails.
