@@ -23,10 +23,12 @@ This is a **self-contained single package** (not a multi-package workspace). It 
 
 Your dsh agent normally forgets everything when you close a session. This bundle fixes that:
 
-- **Persistent memory** — facts, preferences, and conventions stored in a durable KV backend.
+- **Persistent memory** — facts, preferences, and conventions stored in a durable KV backend with audit logging.
 - **Three-layer scoping** — `global` (cross-project), `project` (per-repo, auto-detected), and `user` (cross-project profile).
-- **Six model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`.
+- **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
 - **Automatic learning** — a projection accumulator watches the conversation and extracts candidate memories via lightweight rules, then runs an LLM extraction when enough candidates accumulate.
+- **Dedup pipeline** — two-stage deduplication (token Jaccard prefilter + LLM judge) prevents near-duplicate accumulation.
+- **Memory lifecycle** — pin important memories, auto-decay stale project-scoped entries, and audit every write.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved.
 - **Frontend-configurable** — all settings exposed through the dsh settings UI, apply live.
@@ -80,7 +82,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a version instead of `latest`:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.1
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.2
 ```
 
 ### From GitHub (bleeding edge)
@@ -94,7 +96,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.1"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.2"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -147,8 +149,8 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.1.1.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.1.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.1.2.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.2.tgz
 ```
 
 ## Uninstall
@@ -159,7 +161,7 @@ Remove the plugin from a profile:
 dsh plugin remove --profile web @chenhw7/dsh-memory
 ```
 
-(with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the four `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
+(with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the six `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
 
 Uninstall does **not** delete your saved memories. They live in one file under dsh's storage area:
 
@@ -175,7 +177,7 @@ Stop dsh, then delete that file to wipe all saved memories. Other files in the s
 
 ## Verify
 
-After install, confirm the four memory rows are in the composed profile tree:
+After install, confirm the six memory rows are in the composed profile tree:
 
 ```sh
 # Windows
@@ -184,9 +186,11 @@ dsh --profile web --dump-config | findstr memory
 dsh --profile web --dump-config | grep memory
 ```
 
-You should see four rows pointing at `@chenhw7/dsh-memory/*`:
+You should see six rows pointing at `@chenhw7/dsh-memory/*`:
 
 ```
+- id: memory-root
+  name: '@chenhw7/dsh-memory'
 - id: memory-store
   name: '@chenhw7/dsh-memory/store'
 - id: tool-memory
@@ -195,6 +199,8 @@ You should see four rows pointing at `@chenhw7/dsh-memory/*`:
   name: '@chenhw7/dsh-memory/review'
 - id: memory-context
   name: '@chenhw7/dsh-memory/context'
+- id: memory-remote
+  name: '@chenhw7/dsh-memory/remote-service'
 ```
 
 Then start dsh and check the settings UI shows the `memory` namespace:
@@ -211,7 +217,7 @@ If a **git-hosted** install (`dsh plugin add ... https://github.com/...`) fails 
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.1" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.2" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 It means pnpm has not been told to allow this package's `prepare` build script.
@@ -255,6 +261,23 @@ These settings control the automatic extraction pipeline and the dedup judge. Th
 | `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
 | `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
 | `judgeEnabled` | `true` | Run the LLM dedup judge on prefilter hits. When `false`, prefilter hits merge directly (cheaper, but may false-merge same-template different-topic pairs). |
+| `decayDays` | `30` | Auto-decay project-scoped entries not recalled within N days. `0` = disabled. Pinned, `global`, and `user` entries are never decayed. |
+
+### Tool Settings
+
+These settings control the model-facing tools. They live in the `tool-memory` plugin config (set via the composition layer, not the `memory` settings namespace):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `maxSearchResults` | `50` | Maximum number of entries returned by `memory_search`. `0` = no limit. |
+
+Example composition config:
+
+```yaml
+tool-memory:
+  config:
+    maxSearchResults: 100
+```
 
 By default, extraction and the dedup judge use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` in the review plugin's composition config.
 
@@ -308,14 +331,16 @@ memory:
 
 ## Architecture
 
-The bundle inserts four rows over `dsh-base`, each pointing at this package's own export sub-path:
+The bundle inserts six rows over `dsh-base`, each pointing at this package's own export sub-path:
 
 | Row | Export | Role |
 |---|---|---|
+| `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
 | `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain, registers `ctx.memory` |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | Six model-facing tools |
-| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + flush) |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools |
+| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + flush + dedup + janitor) |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection + settings namespace |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service for memory management UI |
 
 **Storage**: this bundle does **not** insert `storage-json` / `storage-domain` rows. The `dsh-web-app` bundle already provides them (with the correct root path under `$DSH_HOME/storages`). Inserting them here would clobber that config (patches replace whole rows, last-write-wins). The memory store provider consumes the `storageDomain` service as a peer dependency.
 
@@ -336,7 +361,7 @@ The bundle inserts four rows over `dsh-base`, each pointing at this package's ow
 
 ## Known Limitations
 
-- **No semantic/vector retrieval** — `memory_search` is substring matching over structured KV entries, not embeddings.
+- **No semantic/vector retrieval** — `memory_search` is token-based lexical matching (CJK per-character + Latin word tokens) over structured KV entries, not embeddings.
 - **Extraction quality tracks the session model** — review/flush reuse the session's routed provider/model.
 - **git install needs a build allowance** — pnpm blocks the git dependency's `prepare` script until you allow it in the profile's `pnpm-workspace.yaml` (two-step procedure above). The npm install path avoids this entirely.
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
