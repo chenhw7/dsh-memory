@@ -194,6 +194,68 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
     })
   })
 
+  describe('observability (§3.7)', () => {
+    it('health() reports entry counts by scope and pinned count', async () => {
+      await store.add({ scope: 'global', content: 'global fact' })
+      await store.add({ scope: 'user', content: 'user fact' })
+      const { entry } = await store.add({ scope: 'project', content: 'project fact', projectName: 'demo' })
+      await store.pin(entry.id)
+
+      const h = store.health()
+      expect(h.totalEntries).toBe(3)
+      expect(h.byScope).toEqual({ global: 1, project: 1, user: 1 })
+      expect(h.pinned).toBe(1)
+      expect(h.auditRecords).toBe(3) // one add audit per entry
+    })
+
+    it('health() reports lastActivityTs from the most recent audit record', async () => {
+      await store.add({ scope: 'global', content: 'fact A' })
+      const ts1 = store.health().lastActivityTs
+      expect(ts1).toBeTypeOf('number')
+
+      await new Promise(resolve => setTimeout(resolve, 10))
+      await store.add({ scope: 'global', content: 'fact B' })
+      const ts2 = store.health().lastActivityTs
+      expect(ts2!).toBeGreaterThan(ts1!)
+    })
+
+    it('health() reports lastExtractionTs from extraction-sourced audit records', async () => {
+      // Tool write — no extraction ts.
+      await store.add({ scope: 'global', content: 'tool fact', source: 'tool' })
+      expect(store.health().lastExtractionTs).toBeUndefined()
+
+      // Extraction write — should set lastExtractionTs.
+      await store.add({ scope: 'global', content: 'extracted fact', source: 'flush', sessionId: 's1' })
+      expect(store.health().lastExtractionTs).toBeTypeOf('number')
+    })
+
+    it('health() on an empty store returns zeros and undefined timestamps', () => {
+      const h = store.health()
+      expect(h.totalEntries).toBe(0)
+      expect(h.byScope).toEqual({ global: 0, project: 0, user: 0 })
+      expect(h.pinned).toBe(0)
+      expect(h.auditRecords).toBe(0)
+      expect(h.lastActivityTs).toBeUndefined()
+      expect(h.lastExtractionTs).toBeUndefined()
+    })
+
+    it('exportAuditLog() returns all entries oldest-first', async () => {
+      await store.add({ scope: 'global', content: 'first' })
+      await new Promise(resolve => setTimeout(resolve, 10))
+      await store.add({ scope: 'global', content: 'second' })
+      await new Promise(resolve => setTimeout(resolve, 10))
+      await store.add({ scope: 'global', content: 'third' })
+
+      const log = store.exportAuditLog()
+      expect(log).toHaveLength(3)
+      expect(log[0]!.contentPreview).toBe('first')
+      expect(log[2]!.contentPreview).toBe('third')
+      // Verify chronological ordering.
+      expect(log[0]!.ts).toBeLessThanOrEqual(log[1]!.ts)
+      expect(log[1]!.ts).toBeLessThanOrEqual(log[2]!.ts)
+    })
+  })
+
   describe('memory lifecycle (§3.5)', () => {
     it('pin and unpin toggle the pinned flag', async () => {
       const { entry } = await store.add({ scope: 'project', content: 'important convention', projectName: 'demo' })

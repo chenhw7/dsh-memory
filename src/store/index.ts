@@ -23,6 +23,7 @@ import type {
   AuditOp,
   AuditSource,
   MemoryEntry,
+  MemoryHealth,
   MemorySearchQuery,
   SearchMemoryResult,
   UpdateMemoryInput,
@@ -307,6 +308,35 @@ export class DomainMemoryStore extends MemoryStore {
     const all: AuditEntry[] = []
     for (const [, record] of this.audit.entries()) all.push(record)
     all.sort((a, b) => b.ts - a.ts || (a.id > b.id ? -1 : 1))
+    return all
+  }
+
+  override health(): MemoryHealth {
+    let global = 0, project = 0, user = 0, pinned = 0
+    for (const [, entry] of this.entries.entries()) {
+      if (entry.scope === 'global') global++
+      else if (entry.scope === 'project') project++
+      else user++
+      if (entry.pinned === true) pinned++
+    }
+    const audit = this.listAudit()
+    const lastActivityTs = audit.length > 0 ? audit[0]!.ts : undefined
+    const lastExtractionRecord = audit.find(r => r.source === 'review' || r.source === 'flush')
+    const lastExtractionTs = lastExtractionRecord?.ts
+    return {
+      totalEntries: global + project + user,
+      byScope: { global, project, user },
+      pinned,
+      auditRecords: audit.length,
+      ...lastActivityTs !== undefined ? { lastActivityTs } : {},
+      ...lastExtractionTs !== undefined ? { lastExtractionTs } : {},
+    }
+  }
+
+  override exportAuditLog(): readonly AuditEntry[] {
+    const all: AuditEntry[] = []
+    for (const [, record] of this.audit.entries()) all.push(record)
+    all.sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
     return all
   }
 
