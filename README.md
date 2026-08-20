@@ -82,7 +82,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a version instead of `latest`:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.2
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
 ```
 
 ### From GitHub (bleeding edge)
@@ -96,7 +96,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.2"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.3"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -149,8 +149,8 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.1.2.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.2.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.1.3.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
 ```
 
 ## Uninstall
@@ -217,7 +217,7 @@ If a **git-hosted** install (`dsh plugin add ... https://github.com/...`) fails 
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.2" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.3" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 It means pnpm has not been told to allow this package's `prepare` build script.
