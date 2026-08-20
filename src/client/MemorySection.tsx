@@ -67,7 +67,7 @@ export interface MemoryRemote {
 /** Registration-side business face for the memory section. */
 export interface MemorySectionInjected {
   hooks: {
-    /** The remote namespace, available after dsh-api-remotes mount. */
+    /** The remote namespace (ctx.remote.memoryRemote), available after dsh-api-remotes mount. */
     remote: MemoryRemote
   }
 }

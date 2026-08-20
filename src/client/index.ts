@@ -29,6 +29,7 @@ import { MemorySection } from './MemorySection.tsx'
 import type { MemorySectionInjected } from './MemorySection.tsx'
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
+import { en, zh } from './locales.ts'
 
 export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
 export type { MemoryPluginCardInjected, MemoryPluginCardProps } from './MemoryPluginCard.tsx'
@@ -46,6 +47,9 @@ const NS = 'settings.memory'
  * @param ctx - the browser plugin context.
  */
 export function apply(ctx: ClientContext): void {
+  // Register locale dictionaries for i18n.
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-memory: locale dictionaries')
+
   // ── Plugin configuration card (inside Plugins → Plugin configuration) ──
   const pluginCardInjected = (): MemoryPluginCardInjected => ({
     hooks: {
@@ -64,9 +68,9 @@ export function apply(ctx: ClientContext): void {
   // ── Full settings section (Memory management page) ──
   const sectionInjected = (): MemorySectionInjected => ({
     hooks: {
-      // The remote namespace is available as ctx.remote.memory after the
-      // contribution is mounted in dsh-api-remotes.
-      remote: ctx.remote.memory,
+      // The remote namespace (ctx.remote.memoryRemote) is available after
+      // the contribution is mounted in dsh-api-remotes.
+      remote: ctx.remote.memoryRemote,
     },
   })
 
