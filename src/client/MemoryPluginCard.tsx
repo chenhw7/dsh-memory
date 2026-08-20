@@ -27,7 +27,9 @@ export interface MemoryPluginCardProps
 const MODES = ['policy-only', 'full', 'index', 'custom', 'off'] as const
 
 export function MemoryPluginCard(props: MemoryPluginCardProps) {
-  const { settingsScope } = props.useMemoryPluginCard().hooks
+  // The `settingsScope` hooks source binds as the `useSettingsScope` hook
+  // (the hooks key is the hook name the slot renderer generates).
+  const settingsScope = props.useSettingsScope()
   const t = props.t
 
   const [values, setValues] = useState<Record<string, unknown>>({})

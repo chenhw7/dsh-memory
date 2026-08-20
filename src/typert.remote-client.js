@@ -31,7 +31,7 @@ const _remove_param = z.object({}).passthrough()
 const _remove_result = z.object({}).passthrough()
 const _pin_param = z.object({}).passthrough()
 const _pin_result = z.object({}).passthrough()
-const _health_param = z.object({}).passthrough()
+// health() takes no request parameter — no _health_param schema needed.
 const _health_result = z.object({}).passthrough()
 const _auditLog_param = z.object({}).passthrough()
 const _auditLog_result = z.object({}).passthrough()
@@ -69,7 +69,10 @@ const descriptors = [
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryPinResult`, schema: _pin_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
   { id: `${pkg}#${ns}/health`, service: ns, namespace: ns, method: 'health', invocation: { kind: 'direct' },
-    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryHealthRequest`, schema: _health_param } }],
+    // health() declares no request parameter — empty parameters array matches
+    // the host method signature so the gateway's assertExactArguments accepts
+    // an empty args object.
+    parameters: [],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryHealthResult`, schema: _health_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
   { id: `${pkg}#${ns}/auditLog`, service: ns, namespace: ns, method: 'auditLog', invocation: { kind: 'direct' },

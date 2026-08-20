@@ -1,56 +1,126 @@
-# Handoff: dsh-memory Plugin — Remaining Client UI Rendering
+# Handoff: dsh-memory Plugin — Typed Proxy + Settings Page (blank-page fix)
 
 ## Status
 
-All 14 TODO items implemented. 258 tests pass. Core plugin fully verified in real dsh. Client UI integration: "Memory" nav button appears (i18n working), section slot registers, bundle in boot graph. The Memory section page renders blank — `ctx.remote.memoryRemote` returns undefined at component render time.
+Settings → Memory renders and is functional via the **typed** `ctx.remote.memoryRemote`.
+The plugin is self-contained: it works against the **currently-running dsh with
+no host rebuild**, and remains correct after the host rebuild lands.
 
-## Verified Working
+> The previous handoff marked this "RESOLVED" — that was wrong. The page was
+> never verified in a browser; only the `/api` RPC was curl'd. The real blank-page
+> cause (below) was present in every prior version.
 
-- **Boot graph**: `@chenhw7/dsh-memory` is entry #43, served at `/plugins/@chenhw7/dsh-memory/client.js` (HTTP 200)
-- **i18n**: Settings dialog shows "Memory" in navigation (en/zh locale dictionaries registered)
-- **settings.section slot**: Registered and navigable
-- **@Remote host service**: `memoryRemote/health`, `memoryRemote/list`, `memoryRemote/add` all work via curl
+## Two root causes of the blank page (both in all prior versions)
 
-## Remaining Issue: Memory Section Renders Blank
+1. **Slot hook naming (the actual crash).** The slot renderer binds each
+   `inject.hooks` source as `use<Capitalize(key)>`
+   (`packages/client/ui-renderer/src/client/scoped-slots.tsx`:
+   `hooks[\`use${name[0].toUpperCase()}${name.slice(1)}\`] = factory(...)`).
+   The plugin registered `hooks: { rpc }` (and `getRemote`, and the card's
+   `settingsScope`) but the components called `props.useMemorySection()` /
+   `props.useMemoryPluginCard()` — keys that were never generated → `undefined`
+   → `TypeError` on render → **blank section** (and a blank Plugins-tab card).
+   Fix: name the hook key `memorySection` (→ `useMemorySection`); the card uses
+   the generated `useSettingsScope`.
+2. **`ctx.remote.memoryRemote` was undefined.** The host's
+   `packages/api/remotes/lib/client.js` was a **stale build** (from before the
+   memory contribution was wired into `src/client/index.ts`), so the api-remotes
+   client assembly never `$mount`ed the namespace. See "Mount path" below.
 
-**Symptom**: Clicking "Memory" in Settings → nav shows an empty panel.
+## Mount path: the typed proxy is live two ways
 
-**Root cause**: `ctx.remote.memoryRemote` is `undefined` when the `MemorySection` component renders. The `remote.memoryRemote` namespace is created at runtime by `ctx.remote.$mount(memoryRemoteContribution)` inside `dsh-api-remotes`'s `apply()`. However, the client-side `ctx.remote` object may not expose the `memoryRemote` property until the mount completes, and the component's `useEffect` fires before that.
+The canonical owner is the **host build**: dsh-memory is an api-remotes project
+reference, so the host client build inlines this package's `./remote`
+TYPERT_REMOTE contribution into the `@deepseek-ai/dsh-api-remotes` client bundle,
+whose assembly `$mount`s it at boot (`packages/api/remotes/src/client/index.ts`,
+committed in 81ef0fdae3).
 
-**What's been tried**:
-1. ✅ Fixed: Removed `'remote.memoryRemote'` from `inject` array (was causing boot crash)
-2. ✅ Fixed: Changed `remote` to `getRemote()` lazy getter (no longer captured at registration time)
-3. ❌ Still blank: `getRemote()` returns `undefined` — the `memoryRemote` property on `ctx.remote` doesn't exist yet
+Until that host build ships (the running api-remotes bundle is stale), the
+section **lazily self-mounts** the same contribution on first use — one-shot,
+deferred to user interaction — so it can never race the host's boot-time
+`$mount` (a duplicate `$mount` of an installed method throws and would fail
+boot). In a current host build the namespace is always present by the time the
+UI runs, so the self-mount path is never taken (a pure read).
 
-**Next steps to try**:
-1. **Check if $mount ran**: Add a `console.log` in the esbuild bundle to verify `ctx.remote` has `memoryRemote` at render time. If the Typert `TYPERT_REMOTE` contribution isn't being mounted (wrong format?), the namespace will never appear.
-2. **Verify the TYPERT_REMOTE format**: The hand-written `src/typert.remote-client.js` exports a `TypertRemoteContribution` object. Compare its exact shape with a generated one (e.g. `packages/feedback/message-feedback/lib/typert.remote-client.js`). The `descriptors` array format may not match what `$mount` expects — the `parameters[0].codec.schema` should be a real zod schema, not `.passthrough()`.
-3. **Use a polling/retry pattern**: If `memoryRemote` appears after a delay, add a retry loop in `loadEntries` that waits for `getRemote()` to return non-undefined.
-4. **Alternative: skip @Remote entirely** — Use the settings namespace directly for read-only config display (the `MemoryPluginCard` already does this via `settingsScope`), and defer the full CRUD UI to when the host Typert generator can properly generate the artifacts.
+Net: the page works with the **current** dsh (no host rebuild) **and** after
+the host rebuild (where it becomes a no-op). `ctx.remote.memoryRemote` is the
+real typed proxy in both cases — the gateway client (`packages/api/gateway/
+src/client/index.ts`) provides `$mount` + the namespace proxy and builds the
+wire `connection.rpc.call('/api', endpoint, { args })` from the descriptor.
 
-## Build & Test
+## Wire format (unchanged; now owned by the gateway client's typed proxy)
+
+`ClientRemoteService.invoke` builds `args` from the descriptor's parameters and
+calls `connection.rpc.call('/api', 'memoryRemote/<method>', { args })`. For a
+0-parameter method (`health`) `args` is `{}`. Host `invokeRpc` +
+`assertExactArguments` require exactly the method's parameter wire names.
+Result envelope: `{ ok: true, value: T } | { ok: false, error: {…} }`.
+
+## Changes in this package (dsh-memory)
+
+| File | Change |
+|---|---|
+| `src/client/index.ts` | `inject` uses `remote` (not `connection`); re-added the `@deepseek-ai/dsh-api-remotes/client` type import; `apply` is sync and defines `ensureMemoryRemote` (reads the namespace; self-mounts the TYPERT_REMOTE contribution lazily/once when absent); the section hook key is `memorySection` returning `{ ensure }`. |
+| `src/client/MemorySection.tsx` | Uses `props.useMemorySection().ensure`; all 9 methods via the typed `MemoryRemote` proxy (`RemoteResult` envelope); keeps business-error surfacing for `add`/`update`. Removed the unused `SnapshotStore` import. |
+| `src/client/MemoryPluginCard.tsx` | Uses the generated `useSettingsScope` hook (was `props.useMemoryPluginCard().hooks` — never generated). |
+| `tsconfig.json` | `composite: true` (project-reference target for the host `tsc -b`). |
+| `scripts/build-client.cjs` | Externals line restored to `@deepseek-ai/dsh-api-remotes/client`. |
+| `src/typert.remote-client.js` | `health` descriptor `parameters: []` (kept; now actually mounted). |
+
+## Host-side changes (deepseek-harness)
+
+| File | Change | Status |
+|---|---|---|
+| `packages/api/remotes/tsconfig.client.json` | `+ { "path": "../../../../dsh-memory" }` (project reference; dsh-memory is a repo **sibling**) | applied to disk, **uncommitted** |
+| `packages/api/remotes/src/client/index.ts` | imports + `$mount`s the contribution | committed (81ef0fdae3) |
+| `packages/api/remotes/package.json` | `@chenhw7/dsh-memory` in peer/dev deps | committed |
+| `pnpm-workspace.yaml` | `../dsh-memory` member | committed |
+| `packages/client/connection/src/index.ts` | `memoryRemote.add/update/remove/pin` pinned to PRIVILEGED (loopback) | committed (stale bundle; rebuilt with the host build) |
+
+> The project reference is **optional for a working page** (the plugin
+> self-mounts). It only takes effect after a host client build, where it makes
+> the canonical placement live and turns the plugin self-mount into a no-op.
+
+## Verification
+
+- Plugin build: `npm run build` ✅; bundle contains `ensureMemoryRemote` +
+  `useMemorySection` + `useSettingsScope` + the lazy one-shot `$mount`.
+- Plugin tests: `npm test` — 256–258 pass; **2 audit-store tests are a
+  pre-existing flake** (`tests/integration/composition.spec.ts`: "caps audit
+  records at 200" / "appends an audit record on update") — same-millisecond
+  `ts` + random-uuid tiebreak in the trim sort; host-side domain code this task
+  never touched. Reproducibly flaky across runs (pass/fail varies), not a
+  regression.
+- Live dsh on :10026 (no restart): the served `/plugins/@chenhw7/dsh-memory/
+  client.js` is the **new** bundle (serveBundle reads from disk per request);
+  `/api/memoryRemote/health` → `{ ok:true, value:{ totalEntries:17, … } }`;
+  `/api/memoryRemote/list` → entries. Host side unchanged and intact.
+
+## Remaining steps (user terminal — the sandbox here mounts the harness RO)
+
+The plugin side is done and self-contained. To realize the canonical host
+placement (optional) and to cache-bust the browser:
 
 ```bash
-cd /home/chenhw7/dsh-memory
-npm run build    # tsc + fix-imports + esbuild client bundle
-npm test         # 258 tests
-
 cd ~/deepseek-harness
-pkill -f "apps/cli/src/bin.ts"; sleep 5
-node --import tsx/esm apps/cli/src/bin.ts --profile web --no-open --port 10026 &
-sleep 20
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:10026/
+npm run build:lib:client        # tsc -b (builds the new dsh-memory reference) + tsdown client face
+# sanity: grep -c memoryRemote packages/api/remotes/lib/client.js   # > 0
+#         grep -c memoryRemote packages/client/connection/lib/client.js
+# restart dsh so the boot manifest recomputes revs (cache-bust):
+#   (Ctrl-C the running `pnpm dsh web --port 10026`, then)
+pnpm dsh web --port 10026
 ```
 
-## Key Files
+If you skip the host build entirely, the page still works (plugin self-mounts);
+just restart dsh (or hard-refresh the browser) so the new plugin bundle/rev
+loads.
+
+## Key files
 
 | File | Purpose |
 |---|---|
-| `src/client/index.ts` | Client entry: locale registration + settings.section + settings.plugin.item |
-| `src/client/MemorySection.tsx` | Full memory management page (lazy getRemote pattern) |
-| `src/client/MemoryPluginCard.tsx` | Plugins tab card (uses settingsScope, not @Remote) |
-| `src/client/locales.ts` | en/zh i18n dictionaries |
-| `src/typert.remote-client.js` | Hand-written TYPERT_REMOTE (may need format verification) |
-| `src/typert.remote-client.d.ts` | Module augmentation for TypertRemoteNamespaceMap |
-| `scripts/build-client.cjs` | esbuild → window.__ModuleLoader__.load format |
-| `cordis.patch.yml` | 6 rows including memory-root for scanner discovery |
+| `src/client/index.ts` | Client entry: locale + `settings.section` + `settings.plugin.item`; `ensureMemoryRemote` lazy self-mount; `memorySection` hook |
+| `src/client/MemorySection.tsx` | Memory management page (typed proxy, business-error aware) |
+| `src/client/MemoryPluginCard.tsx` | Plugins-tab config card (`useSettingsScope`) |
+| `src/typert.remote-client.js` | Hand-written TYPERT_REMOTE (now mounted: host build or plugin self-mount) |
+| `cordis.patch.yml` | `memory-root` (scanner) + `memory-remote` (host @Remote service) |

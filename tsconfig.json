@@ -5,6 +5,9 @@
     "moduleResolution": "bundler",
     "lib": ["es2023"],
     "strict": true,
+    // Project-reference target for the host's api-remotes client program
+    // (tsc -b builds this package before inlining its ./remote artifact).
+    "composite": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
