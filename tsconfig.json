@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2024",
+    "target": "es2023",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["es2024"],
+    "lib": ["es2023"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -19,7 +19,6 @@
     "rootDir": "src",
     "outDir": "lib",
     "types": ["node"],
-    "baseUrl": ".",
     // Resolve `@deepseek-ai/cordis` to the module that declares `Context` so this
     // package's own `declare module '@deepseek-ai/cordis' { interface Context }`
     // augmentation merges with the declared interface instead of shadowing the

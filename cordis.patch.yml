@@ -30,3 +30,7 @@
     # System-prompt section injection + frontend settings namespace.
     - id: memory-context
       name: '@chenhw7/dsh-memory/context'
+
+    # @Remote service for the memory management UI (§3.8).
+    - id: memory-remote
+      name: '@chenhw7/dsh-memory/remote-service'

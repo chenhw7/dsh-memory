@@ -38,6 +38,16 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/**
+ * Cordis function-plugin apply: instantiate the MemoryRemoteService. The
+ * TypertRemoteService constructor calls super(ctx, 'memoryRemote') which
+ * registers the service on ctx.memoryRemote via Cordis Service.provide.
+ * Called by the cordis.patch.yml fifth row.
+ */
+export function apply(ctx: Context): void {
+  new MemoryRemoteService(ctx)
+}
+
 // ─── Wire request/result types ─────────────────────────────────────────────
 
 /** Wire-safe entry projection (branded id as plain string). */
