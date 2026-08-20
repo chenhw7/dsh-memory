@@ -80,7 +80,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定版本而不跟 `latest` 时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.2
+dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
 ```
 
 ### 从 GitHub 安装（尝鲜最新 commit）
@@ -94,7 +94,7 @@ dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
 ```
 
 ```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.2"
+[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.3"
 needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ...
 allowBuilds:
@@ -145,8 +145,8 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.1.2.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.2.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.1.3.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
 ```
 
 ## 卸载
@@ -335,7 +335,7 @@ memory:
 
 ```text
 [ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.2" needs to execute build scripts but is not in the "allowBuilds" allowlist.
+The git-hosted package "@chenhw7/dsh-memory@0.1.3" needs to execute build scripts but is not in the "allowBuilds" allowlist.
 ```
 
 说明 pnpm 还没有被允许执行该包的 `prepare` 构建脚本。

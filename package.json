@@ -67,9 +67,9 @@
     }
   },
   "scripts": {
-    "build": "node_modules/.bin/tsc -p tsconfig.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
+    "build": "tsc -p tsconfig.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
     "prepare": "echo skip",
-    "test": "node_modules/.bin/vitest run"
+    "test": "vitest run"
   },
   "dependencies": {
     "@deepseek-ai/dsh-storage-domain": "^0.1.0-rc.5",
