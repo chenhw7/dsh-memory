@@ -21,6 +21,15 @@ import z from '@deepseek-ai/schemastery'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryStore } from '../index.ts'
+import type { ProjectNotesService, ProjectNotesSnapshot } from '../notes/index.ts'
+import { isRenderedEntry } from '../notes/scope.ts'
+import {
+  DEFAULT_NOTES_AGENTS_POINTER,
+  DEFAULT_NOTES_CHAR_LIMIT,
+  DEFAULT_NOTES_DIR,
+  DEFAULT_NOTES_ENABLED,
+  DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
+} from '../notes/settings.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 // Type-only: resolves the `systemPrompt` service and the `AssembleContext`
 // slot the section text provider receives.
@@ -29,9 +38,10 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 // text provider can recover the session whose frozen snapshot it reads.
 import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import { buildMemorySectionText, renderMemoryIndex, type MemoryMode, type IndexEntry } from './policy.ts'
+import { buildMemorySectionText, buildNotesSectionText, renderMemoryIndex, type MemoryMode, type IndexEntry } from './policy.ts'
 
 export { buildMemorySectionText, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE } from './policy.ts'
+export { buildNotesSectionText, PROJECT_NOTES_NOTE } from './policy.ts'
 export type { MemoryMode, IndexEntry } from './policy.ts'
 
 /** Cordis plugin name. */
@@ -49,17 +59,27 @@ const DEFAULT_REVIEW_CANDIDATE_THRESHOLD = 10
 const DEFAULT_FLUSH_ON_COMPACTION = true
 const DEFAULT_FLUSH_ON_DISPOSE = true
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
+/** Upper bound on any single generated notes file (defense-in-depth on top of the entry cap). */
+const MAX_NOTES_FILE_CHARS = 32_000
 
-/** Per-session frozen memory state: the full-content snapshot and the index snapshot. */
+/** Per-session frozen memory state: the content/index snapshots plus the project-notes snapshot. */
 interface FrozenSnapshot {
   readonly content: string
   readonly index: string
+  readonly notes: ProjectNotesSnapshot
 }
+
+/** The empty project-notes snapshot (notes disabled, service absent, or no cwd). */
+const EMPTY_NOTES: ProjectNotesSnapshot = { conventions: '', pitfalls: '' }
 
 /** The `memory` system-prompt section name. */
 const SECTION_NAME = 'memory'
 /** Section order: before tool guidance (100–199). */
 const SECTION_ORDER = 90
+/** The `project-notes` system-prompt section name. */
+const NOTES_SECTION_NAME = 'project-notes'
+/** Notes section order: right after the memory section. */
+const NOTES_SECTION_ORDER = 91
 /** Scopes read into the frozen per-session memory snapshot, in render order. */
 const SNAPSHOT_SCOPES: readonly MemoryScope[] = ['global', 'project', 'user']
 
@@ -84,6 +104,16 @@ export interface MemoryConfig {
   flushOnDispose: boolean
   /** Character budget for the frozen memory content snapshot; defaults to `5000`. */
   memoryCharLimit: number
+  /** Enable project-notes export + injection; defaults to `true`. */
+  notesEnabled: boolean
+  /** Repo-relative directory holding the generated notes files; defaults to `docs/agent-memory`. */
+  notesDir: string
+  /** Character budget for the injected project-notes section; defaults to `4000`. */
+  notesCharLimit: number
+  /** Maintain the AGENTS.md pointer block; defaults to `true`. */
+  notesAgentsPointer: boolean
+  /** Max entries per generated notes file; defaults to `100`. */
+  notesMaxEntriesPerFile: number
 }
 
 /** Runtime schema for the `memory` settings namespace and plugin config. */
@@ -95,6 +125,11 @@ export const Config: z<MemoryConfig> = z.object({
   flushOnCompaction: z.boolean().default(DEFAULT_FLUSH_ON_COMPACTION),
   flushOnDispose: z.boolean().default(DEFAULT_FLUSH_ON_DISPOSE),
   memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
+  notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
+  notesDir: z.string().default(DEFAULT_NOTES_DIR),
+  notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
+  notesAgentsPointer: z.boolean().default(DEFAULT_NOTES_AGENTS_POINTER),
+  notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
 })
 
 /** Render one scope's entries as a bulleted list under a `## <scope>` heading. */
@@ -109,13 +144,16 @@ function renderScope(scope: MemoryScope, entries: readonly MemoryEntry[]): strin
  * project, and user scopes, joined and truncated to the character budget.
  * @param memory - the live memory store.
  * @param charLimit - character budget; `0` yields no content.
+ * @param exclude - optional predicate: entries it accepts are omitted (used to
+ *   keep notes-rendered entries out of the memory section — no double injection).
  * @returns the rendered snapshot text, possibly truncated.
  */
-export function readMemorySnapshot(memory: MemoryStore, charLimit: number): string {
+export function readMemorySnapshot(memory: MemoryStore, charLimit: number, exclude?: (entry: MemoryEntry) => boolean): string {
   if (charLimit <= 0) return ''
   const parts: string[] = []
   for (const scope of SNAPSHOT_SCOPES) {
-    const rendered = renderScope(scope, memory.list(scope))
+    const entries = exclude === undefined ? memory.list(scope) : memory.list(scope).filter(entry => !exclude(entry))
+    const rendered = renderScope(scope, entries)
     if (rendered.length > 0) parts.push(rendered)
   }
   let text = parts.join('\n\n')
@@ -131,11 +169,13 @@ export function readMemorySnapshot(memory: MemoryStore, charLimit: number): stri
  * exhausted. The index size grows with the number of categories, not entries.
  * @param memory - the live memory store.
  * @param charLimit - character budget; `0` yields no index.
+ * @param exclude - optional predicate: entries it accepts are omitted (see
+ *   {@link readMemorySnapshot}).
  * @returns the rendered index text, possibly truncated with roll-up lines.
  */
-export function readMemoryIndex(memory: MemoryStore, charLimit: number): string {
+export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?: (entry: MemoryEntry) => boolean): string {
   if (charLimit <= 0) return ''
-  const all = memory.list()
+  const all = exclude === undefined ? memory.list() : memory.list().filter(entry => !exclude(entry))
   const entries: IndexEntry[] = all.map(entry => ({
     id: entry.id as string,
     scope: entry.scope,
@@ -174,16 +214,37 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     onChange: () => {},
   })
 
+  /** Infer the current project name from a session's cwd (basename). */
+  const projectNameOf = (session: Session): string | undefined => {
+    const cwd = session.header?.cwd
+    if (cwd === undefined || cwd.length === 0) return undefined
+    const base = cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop()
+    return base !== undefined && base.length > 0 ? base : undefined
+  }
+
   ctx.on('session/created', (session: Session) => {
+    const settings = current()
     const memory = ctx.get('memory')
+    // The project-notes snapshot: rendering is synchronous AND reconciles
+    // (fires the async file persistence), so the frozen prompt content always
+    // matches what lands on disk — no file-read lag, no ordering race.
+    const notes: ProjectNotesSnapshot = settings.notesEnabled
+      ? ctx.get('projectNotes')?.snapshotFor(session.header?.cwd) ?? EMPTY_NOTES
+      : EMPTY_NOTES
     if (memory === undefined) {
-      sessionMemory.set(session, { content: '', index: '' })
+      sessionMemory.set(session, { content: '', index: '', notes })
       return
     }
-    const charLimit = current().memoryCharLimit
+    const charLimit = settings.memoryCharLimit
+    // No double injection: entries rendered into the notes files are excluded
+    // from the memory section's snapshot/index while notes are enabled.
+    const exclude = settings.notesEnabled
+      ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
+      : undefined
     sessionMemory.set(session, {
-      content: readMemorySnapshot(memory, charLimit),
-      index: readMemoryIndex(memory, charLimit),
+      content: readMemorySnapshot(memory, charLimit, exclude),
+      index: readMemoryIndex(memory, charLimit, exclude),
+      notes,
     })
   }, { global: true })
 
@@ -199,4 +260,16 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       return buildMemorySectionText(settings.memoryMode, settings.memoryPolicyCustomText, memoryContent, indexContent)
     },
   }), 'memory-context.section()')
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: NOTES_SECTION_NAME,
+    order: NOTES_SECTION_ORDER,
+    text: (context: AssembleContext): string => {
+      const settings = current()
+      if (!settings.notesEnabled) return ''
+      const session = context.agent?.session
+      const snapshot = session === undefined ? undefined : sessionMemory.get(session)
+      return buildNotesSectionText(snapshot?.notes.conventions ?? '', snapshot?.notes.pitfalls ?? '', settings.notesCharLimit)
+    },
+  }), 'memory-context.notes-section()')
 }

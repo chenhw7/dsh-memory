@@ -23,7 +23,7 @@ import { scanContent } from '../scanner.ts'
 import type { AddMemoryInput, AuditSource, MemoryCategory, MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryId } from '../brand.ts'
 import type { MemoryStore } from '../index.ts'
-import type { MemoryCandidate } from './accumulator.ts'
+import { PITFALL_RESOLVED_SIGNAL, type MemoryCandidate } from './accumulator.ts'
 import { findDuplicate, mergeContent, toDedupCandidate, type JudgeVerdict, JUDGE_SYSTEM_PROMPT, buildJudgePrompt, parseJudgeVerdict } from './dedup.ts'
 
 /** Producer attribution for the synthetic extraction request message. */
@@ -34,11 +34,27 @@ export const REVIEW_SYSTEM_PROMPT =
   'You are a memory extraction assistant. Read the conversation fragments below and extract durable, reusable memories the assistant should remember across sessions. Output one memory per line in the exact format "scope: content" where scope is one of "global", "project", or "user".'
   + ' Prioritize user preferences, corrections, and recurring patterns over task-specific or one-off details.'
   + ' Omit anything already present in the current memory snapshot.'
+  + '\n\nScope routing — which scope to pick:'
+  + '\n- Coding habits and style preferences go to "user" by default: they follow the person across projects.'
+  + '\n- Cross-project engineering practices, environment facts, and tool behavior that are NOT personal style go to "global".'
+  + '\n- Only what holds in the current repository goes to "project".'
   + '\n\nAdmission rules — what to NEVER persist:'
   + '\n- Transient states, one-time events, and unverified hypotheses are never persisted.'
   + '\n- Procedural memories (how to do X, including failure workarounds and tool quirks) are admitted only when the action was verified by tool execution within the session. If the procedure was merely discussed but not executed, omit it.'
-  + '\n- For verified procedures, prefix the content with "[procedure] " so they can be tagged with the procedure category.'
+  + '\n- Preference/convention memories are admitted only when the user explicitly demands them ("remember", "from now on", 记住, 以后都) or the same preference theme appears at least twice across the fragments and the current snapshot. One-off situational preferences are never persisted.'
+  + '\n\nCategory tags — prefix the content with one of these when it applies:'
+  + '\n- "[procedure] " for verified procedures (see the rule above).'
+  + '\n- "[convention] " for project/team coding conventions.'
+  + '\n- "[preference] " for the user\'s personal coding habits and style preferences.'
   + '\n\nOutput only the memory lines, nothing else.'
+
+/** System prompt for the pitfall-streak extraction (failure → resolved sequences). */
+export const PITFALL_SYSTEM_PROMPT =
+  'You are a pitfall-extraction assistant. Each fragment below describes a tool operation that failed repeatedly and then succeeded. Distill each one into a structured pitfall entry worth remembering for this project.'
+  + ' Output one entry per line in the exact format "project: [pitfall] 症状：<症状>。根因：<根因>。修复：<修复方法>。" (use the same language as the fragment). Keep each entry within three short clauses: the symptom (the error), the root cause, and the verified fix.'
+  + ' Use only the failure count, the last error text, and the resolution evidence given in the fragment; never invent causes or fixes that the fragment does not support.'
+  + ' Omit anything already present in the current memory snapshot.'
+  + '\n\nOutput only the entry lines, nothing else.'
 
 /** System prompt for the compaction/dispose flush (方案 C). */
 export const FLUSH_SYSTEM_PROMPT =
@@ -52,6 +68,28 @@ export const FLUSH_SYSTEM_PROMPT =
 
 /** The valid scope tags a parsed line may declare. */
 const SCOPE_TAGS: readonly MemoryScope[] = ['global', 'project', 'user']
+
+/** Output tags the extraction prompts may prefix content with, mapped to their category. */
+const CONTENT_TAGS: readonly { readonly tag: string; readonly category: MemoryCategory }[] = [
+  { tag: '[procedure] ', category: 'procedure' },
+  { tag: '[convention] ', category: 'convention' },
+  { tag: '[preference] ', category: 'preference' },
+  { tag: '[pitfall] ', category: 'failure' },
+]
+
+/**
+ * Strip a leading content tag (e.g. `"[procedure] "`) from extracted content.
+ * @param content - the raw extracted content.
+ * @returns the tag-stripped content and the implied category (`undefined` when untagged).
+ */
+export function stripContentTag(content: string): { content: string; category: MemoryCategory | undefined } {
+  for (const { tag, category } of CONTENT_TAGS) {
+    if (content.startsWith(tag)) {
+      return { content: content.slice(tag.length), category }
+    }
+  }
+  return { content, category: undefined }
+}
 
 /** One parsed memory entry awaiting scanner + store validation. */
 export interface ParsedMemory {
@@ -122,6 +160,23 @@ export function buildReviewMessages(memorySnapshot: string, candidates: readonly
   const parts = [
     memorySnapshot.length === 0 ? '' : `${memorySnapshot}\n\n`,
     'Conversation fragments to extract memories from:\n',
+    fragments,
+  ]
+  const text = parts.join('')
+  return [createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })]
+}
+
+/**
+ * Build the messages for the pitfall-streak extraction prompt.
+ * @param memorySnapshot - rendered current memory text (possibly empty).
+ * @param candidates - the `pitfall-resolved` candidate fragments.
+ * @returns the model-facing user message list.
+ */
+export function buildPitfallMessages(memorySnapshot: string, candidates: readonly MemoryCandidate[]): Message[] {
+  const fragments = candidates.map((c, i) => `[${i + 1}] ${c.text}`).join('\n')
+  const parts = [
+    memorySnapshot.length === 0 ? '' : `${memorySnapshot}\n\n`,
+    'Failure-streak fragments to distill into pitfall entries:\n',
     fragments,
   ]
   const text = parts.join('')
@@ -318,14 +373,13 @@ export async function storeMemories(
   // a synchronous in-memory list at the entry counts we target (tens–hundreds).
   const existing = memory.list().map(toDedupCandidate)
   for (const entry of parsed) {
-    // The extraction prompt prefixes verified procedures with "[procedure] ";
-    // detect the tag, strip it, and assign the `procedure` category.
-    let content = entry.content
+    // The extraction prompts may prefix content with a category tag
+    // ("[procedure] ", "[convention] ", "[preference] ", "[pitfall] ");
+    // an explicit tag wins over the batch-wide attachCategory default.
     let category = entry.category ?? attachCategory
-    if (content.startsWith('[procedure] ')) {
-      content = content.slice('[procedure] '.length)
-      category = 'procedure'
-    }
+    const stripped = stripContentTag(entry.content)
+    const content = stripped.content
+    if (stripped.category !== undefined) category = stripped.category
     const scan = scanContent(content)
     if (!scan.allowed) continue
 
@@ -406,13 +460,32 @@ export async function runReviewExtraction(
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
-  const messages = buildReviewMessages(snapshot, candidates)
-  const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages, undefined, modelOverride)
-  // A correction signal maps naturally to the `correction` category.
-  const correctionOnly = candidates.length > 0 && candidates.every(c => c.signal === 'correction')
   const projectName = inferProjectName(agent.session)
-  await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
-  return parsed.length
+  let stored = 0
+
+  // Partition by signal: pitfall-resolved candidates go through the dedicated
+  // structured prompt; everything else goes through the generic review prompt.
+  // Each call is best-effort and independent. (The extraction budget is charged
+  // once per drain by the caller, regardless of how many calls run inside.)
+  const pitfallCandidates = candidates.filter(c => c.signal === PITFALL_RESOLVED_SIGNAL)
+  if (pitfallCandidates.length > 0) {
+    const messages = buildPitfallMessages(snapshot, pitfallCandidates)
+    const parsed = await extractMemories(ctx, agent.session, PITFALL_SYSTEM_PROMPT, messages, undefined, modelOverride)
+    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
+    stored += parsed.length
+  }
+
+  const rest = candidates.filter(c => c.signal !== PITFALL_RESOLVED_SIGNAL)
+  if (rest.length > 0) {
+    const messages = buildReviewMessages(snapshot, rest)
+    const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages, undefined, modelOverride)
+    // A correction-only batch maps naturally to the `correction` category;
+    // explicitly tagged entries override this default inside storeMemories.
+    const correctionOnly = rest.every(c => c.signal === 'correction')
+    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
+    stored += parsed.length
+  }
+  return stored
 }
 
 /** Infer a project name from the session's working directory basename (§3.6). */

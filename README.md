@@ -27,6 +27,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Three-layer scoping** — `global` (cross-project), `project` (per-repo, auto-detected), and `user` (cross-project profile).
 - **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
 - **Automatic learning** — a projection accumulator watches the conversation and extracts candidate memories via lightweight rules, then runs an LLM extraction when enough candidates accumulate.
+- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer; failure streaks that get resolved auto-sediment into the pitfall log.
 - **Dedup pipeline** — two-stage deduplication (token Jaccard prefilter + LLM judge) prevents near-duplicate accumulation.
 - **Memory lifecycle** — pin important memories, auto-decay stale project-scoped entries, and audit every write.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
@@ -82,7 +83,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a specific version:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
+dsh plugin add --profile web @chenhw7/dsh-memory@0.2.0
 ```
 
 ### From a local checkout
@@ -105,13 +106,13 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.1.3.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.2.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.2.0.tgz
 ```
 
 ## Update
 
-`dsh plugin add` always installs the latest version from npm on a **fresh** profile. But once a version is installed, running `dsh plugin add` again will **not** update it — pnpm sees the existing version range (e.g. `^0.1.1`) is already satisfied by the latest (e.g. `0.1.3`) and skips the update.
+`dsh plugin add` always installs the latest version from npm on a **fresh** profile. But once a version is installed, running `dsh plugin add` again will **not** update it — pnpm sees the existing version range (e.g. `^0.2.0`) is already satisfied by the latest (e.g. `0.2.1`) and skips the update.
 
 To update to the latest published version:
 
@@ -133,7 +134,7 @@ Remove the plugin from a profile:
 dsh plugin remove --profile web @chenhw7/dsh-memory
 ```
 
-(with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the six `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
+(with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the seven `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
 
 Uninstall does **not** delete your saved memories. They live in one file under dsh's storage area:
 
@@ -149,7 +150,7 @@ Stop dsh, then delete that file to wipe all saved memories. Other files in the s
 
 ## Verify
 
-After install, confirm the six memory rows are in the composed profile tree:
+After install, confirm the seven memory rows are in the composed profile tree:
 
 ```sh
 # Windows
@@ -158,7 +159,7 @@ dsh --profile web --dump-config | findstr memory
 dsh --profile web --dump-config | grep memory
 ```
 
-You should see six rows pointing at `@chenhw7/dsh-memory/*`:
+You should see seven rows pointing at `@chenhw7/dsh-memory/*`:
 
 ```
 - id: memory-root
@@ -169,6 +170,8 @@ You should see six rows pointing at `@chenhw7/dsh-memory/*`:
   name: '@chenhw7/dsh-memory/tool'
 - id: memory-review
   name: '@chenhw7/dsh-memory/review'
+- id: memory-notes
+  name: '@chenhw7/dsh-memory/notes'
 - id: memory-context
   name: '@chenhw7/dsh-memory/context'
 - id: memory-remote
@@ -194,6 +197,11 @@ All settings are editable from the dsh frontend settings page (the `memory` name
 | `flushOnCompaction` | `true` | Extract memories from shadowed events after compaction. |
 | `flushOnDispose` | `true` | Extract remaining context when a session is disposed. |
 | `memoryCharLimit` | `5000` | Per-scope character limit for injected memory content. |
+| `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. |
+| `notesDir` | `docs/agent-memory` | Repo-relative directory holding the generated notes files. |
+| `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
+| `notesAgentsPointer` | `true` | Maintain the managed pointer block in the repo's `AGENTS.md`. |
+| `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (oldest truncated). |
 
 ### Extraction & Dedup Settings
 
@@ -206,6 +214,7 @@ These settings control the automatic extraction pipeline and the dedup judge. Th
 | `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
 | `judgeEnabled` | `true` | Run the LLM dedup judge on prefilter hits. When `false`, prefilter hits merge directly (cheaper, but may false-merge same-template different-topic pairs). |
 | `decayDays` | `30` | Auto-decay project-scoped entries not recalled within N days. `0` = disabled. Pinned, `global`, and `user` entries are never decayed. |
+| `pitfallStreakThreshold` | `2` | Consecutive same-signature tool failures that must occur (and then be resolved) before a pitfall entry is extracted into the notes files. |
 
 ### Tool Settings
 
@@ -247,6 +256,11 @@ memory:
   flushOnCompaction: true
   flushOnDispose: true
   memoryCharLimit: 5000
+  notesEnabled: true
+  notesDir: docs/agent-memory
+  notesCharLimit: 4000
+  notesAgentsPointer: true
+  notesMaxEntriesPerFile: 100
 ```
 
 `memoryPolicyCustomText` is optional and only used when `memoryMode` is `custom`.
@@ -275,7 +289,7 @@ memory:
 
 ## Architecture
 
-The bundle inserts six rows over `dsh-base`, each pointing at this package's own export sub-path:
+The bundle inserts seven rows over `dsh-base`, each pointing at this package's own export sub-path:
 
 | Row | Export | Role |
 |---|---|---|
@@ -283,6 +297,7 @@ The bundle inserts six rows over `dsh-base`, each pointing at this package's own
 | `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain, registers `ctx.memory` |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + flush + dedup + janitor) |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write + AGENTS.md pointer) |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection + settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service for memory management UI |
 

@@ -1,6 +1,6 @@
 {
   "name": "@chenhw7/dsh-memory",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Long-term memory for the DeepSeek Harness: persistent cross-session memory (store, tools, auto-extraction, context injection) as one installable profile bundle",
   "type": "module",
   "main": "lib/index.js",
@@ -25,6 +25,10 @@
     "./context": {
       "types": "./lib/context/index.d.ts",
       "default": "./lib/context/index.js"
+    },
+    "./notes": {
+      "types": "./lib/notes/index.d.ts",
+      "default": "./lib/notes/index.js"
     },
     "./invariant": {
       "types": "./lib/invariant.d.ts",

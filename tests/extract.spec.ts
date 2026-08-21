@@ -7,12 +7,15 @@ import type { AddMemoryInput, MemoryEntry, MemoryStore } from '../src/types.ts'
 import {
   REVIEW_SYSTEM_PROMPT,
   FLUSH_SYSTEM_PROMPT,
+  PITFALL_SYSTEM_PROMPT,
   parseExtractedMemories,
   renderMemorySnapshot,
   buildReviewMessages,
+  buildPitfallMessages,
   buildFlushMessages,
   extractMemories,
   storeMemories,
+  stripContentTag,
   runReviewExtraction,
   runFlushExtraction,
 } from '../src/review/extract.ts'
@@ -139,6 +142,46 @@ describe('buildReviewMessages', () => {
   })
 })
 
+describe('stripContentTag', () => {
+  it('maps each known tag to its category', () => {
+    expect(stripContentTag('[procedure] how to run tests')).toEqual({ content: 'how to run tests', category: 'procedure' })
+    expect(stripContentTag('[convention] use pnpm workspaces')).toEqual({ content: 'use pnpm workspaces', category: 'convention' })
+    expect(stripContentTag('[preference] prefers terse output')).toEqual({ content: 'prefers terse output', category: 'preference' })
+    expect(stripContentTag('[pitfall] 症状：x。根因：y。修复：z。')).toEqual({ content: '症状：x。根因：y。修复：z。', category: 'failure' })
+  })
+  it('leaves untagged content untouched', () => {
+    expect(stripContentTag('plain fact')).toEqual({ content: 'plain fact', category: undefined })
+  })
+})
+
+describe('buildPitfallMessages', () => {
+  it('lists streak fragments with the snapshot', () => {
+    const messages = buildPitfallMessages('Current memory snapshot:\n- [project] x', [
+      { text: 'tool "bash" (signature: bash:vitest run) failed 2 time(s) before succeeding. Last error: boom.', signal: 'pitfall-resolved', seq: 9 },
+    ])
+    expect(messages).toHaveLength(1)
+    const text = (messages[0]!.content[0] as { text: string }).text
+    expect(text).toContain('Current memory snapshot')
+    expect(text).toContain('Failure-streak fragments')
+    expect(text).toContain('failed 2 time(s)')
+  })
+})
+
+describe('storeMemories — category tags', () => {
+  it('strips tags and assigns the tag category over the batch default', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      { scope: 'user', content: '[preference] prefers tabs' },
+      { scope: 'project', content: '[pitfall] npm test fails on cold cache' },
+    ], 'correction', 'review', 's1', 'proj')
+    expect(added[0]!.category).toBe('preference')
+    expect(added[0]!.content).toBe('prefers tabs')
+    expect(added[1]!.category).toBe('failure')
+    expect(added[1]!.content).toBe('npm test fails on cold cache')
+  })
+})
+
 describe('buildFlushMessages', () => {
   it('lists the fragments', () => {
     const messages = buildFlushMessages(['user: hi', 'assistant: hello'])
@@ -245,6 +288,48 @@ describe('runReviewExtraction', () => {
     const agent = { session: fakeSession() } as unknown as Agent
     await runReviewExtraction(ctx, agent, [{ text: '不对', signal: 'correction', seq: 1 }])
     expect(added[0]!.category).toBe('correction')
+  })
+
+  it('routes pitfall-resolved candidates to the pitfall prompt, others to review', async () => {
+    const { store, added } = recordingStore()
+    const systems: (string | undefined)[] = []
+    const ctx = fakeCtx((opts: unknown) => {
+      systems.push((opts as { system?: string }).system)
+      // Scripted per prompt: the pitfall call yields a structured entry; the
+      // review call yields a plain one.
+      const system = (opts as { system?: string }).system
+      return system === PITFALL_SYSTEM_PROMPT
+        ? makeTextStream('project: [pitfall] 症状：vitest 冷缓存失败。根因：缓存目录缺失。修复：先创建缓存目录。')
+        : makeTextStream('global: be concise')
+    }, store)
+    const agent = { session: fakeSession() } as unknown as Agent
+    const n = await runReviewExtraction(ctx, agent, [
+      { text: 'tool "bash" failed 2 time(s). Last error: x.', signal: 'pitfall-resolved', seq: 1 },
+      { text: 'remember that', signal: 'keyword', seq: 2 },
+    ])
+    expect(systems).toEqual([PITFALL_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT])
+    expect(n).toBe(2)
+    expect(added).toHaveLength(2)
+    const pitfall = added.find(a => a.category === 'failure')!
+    expect(pitfall.scope).toBe('project')
+    expect(pitfall.content).toContain('症状')
+    expect(added.find(a => a.scope === 'global')!.content).toBe('be concise')
+  })
+
+  it('runs only the pitfall call when all candidates are pitfall-resolved', async () => {
+    const { store, added } = recordingStore()
+    const systems: (string | undefined)[] = []
+    const ctx = fakeCtx((opts: unknown) => {
+      systems.push((opts as { system?: string }).system)
+      return makeTextStream('project: [pitfall] x')
+    }, store)
+    const agent = { session: fakeSession() } as unknown as Agent
+    const n = await runReviewExtraction(ctx, agent, [
+      { text: 'failed 2 time(s)', signal: 'pitfall-resolved', seq: 1 },
+    ])
+    expect(systems).toEqual([PITFALL_SYSTEM_PROMPT])
+    expect(n).toBe(1)
+    expect(added[0]!.category).toBe('failure')
   })
 })
 

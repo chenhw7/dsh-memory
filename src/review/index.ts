@@ -65,6 +65,8 @@ export interface Config {
   judgeEnabled?: boolean
   /** Days without recall before a project-scoped entry is decayed by the janitor. 0 = disabled. Defaults to 30. */
   decayDays?: number
+  /** Consecutive same-signature tool failures required before a success emits a pitfall candidate. Defaults to 2. */
+  pitfallStreakThreshold?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -77,6 +79,7 @@ export const Config: z<Config> = z.object({
   extractionBudget: z.number().step(1).min(0).default(20),
   judgeEnabled: z.boolean().default(true),
   decayDays: z.number().step(1).min(0).default(30),
+  pitfallStreakThreshold: z.number().step(1).min(1).default(2),
 })
 
 /** Resolved config with every default materialized. */
@@ -89,6 +92,7 @@ interface ResolvedConfig {
   readonly extractionBudget: number
   readonly judgeEnabled: boolean
   readonly decayDays: number
+  readonly pitfallStreakThreshold: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -109,6 +113,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     extractionBudget: config.extractionBudget ?? 20,
     judgeEnabled: config.judgeEnabled ?? true,
     decayDays: config.decayDays ?? 30,
+    pitfallStreakThreshold: config.pitfallStreakThreshold ?? 2,
   }
 }
 
@@ -200,9 +205,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       key: MEMORY_REVIEW_PROJECTION_KEY,
       schema: accumulatorSchema,
       init: () => emptyAccumulator,
-      apply: applyAccumulator,
+      apply: (state, event) => applyAccumulator(state, event, resolved.pitfallStreakThreshold),
       view: (state: AccumulatorState): AccumulatorView => state,
-      stateVersion: 1,
+      stateVersion: 2,
     })
   })
 

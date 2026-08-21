@@ -24,6 +24,7 @@
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
 - **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
 - **自动学习** — 投影累加器观察对话，并通过轻量规则提取候选记忆；当候选足够多时，运行 LLM 提取。
+- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现；连续失败最终解决的序列自动沉淀为踩坑记录。
 - **去重管线** — 两阶段去重（分词 Jaccard 预过滤 + LLM 判定），防止近似重复条目累积。
 - **记忆生命周期** — 固定重要记忆、自动衰减过期的 project 作用域条目、审计每次写入。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
@@ -80,7 +81,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定特定版本时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
+dsh plugin add --profile web @chenhw7/dsh-memory@0.2.0
 ```
 
 ### 从本地 checkout 安装
@@ -103,13 +104,13 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.1.3.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.2.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.2.0.tgz
 ```
 
 ## 更新
 
-`dsh plugin add` 在**全新** profile 上始终从 npm 安装最新版。但一旦已安装某个版本，再次运行 `dsh plugin add` **不会**更新——pnpm 发现已有的版本范围（如 `^0.1.1`）已被最新版（如 `0.1.3`）满足，就跳过更新了。
+`dsh plugin add` 在**全新** profile 上始终从 npm 安装最新版。但一旦已安装某个版本，再次运行 `dsh plugin add` **不会**更新——pnpm 发现已有的版本范围（如 `^0.2.0`）已被最新版（如 `0.2.1`）满足，就跳过更新了。
 
 要更新到最新发布版本：
 
@@ -131,7 +132,7 @@ pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 dsh plugin remove --profile web @chenhw7/dsh-memory
 ```
 
-（源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，六个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
+（源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，七个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
 
 卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下的一个文件里：
 
@@ -147,7 +148,7 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 ## 验证
 
-安装后，确认组合后的 profile 树中包含六个 memory 行：
+安装后，确认组合后的 profile 树中包含七个 memory 行：
 
 ```sh
 # Windows
@@ -156,7 +157,7 @@ dsh --profile web --dump-config | findstr memory
 dsh --profile web --dump-config | grep memory
 ```
 
-你应该看到六个指向 `@chenhw7/dsh-memory/*` 的行：
+你应该看到七个指向 `@chenhw7/dsh-memory/*` 的行：
 
 ```
 - id: memory-root
@@ -167,6 +168,8 @@ dsh --profile web --dump-config | grep memory
   name: '@chenhw7/dsh-memory/tool'
 - id: memory-review
   name: '@chenhw7/dsh-memory/review'
+- id: memory-notes
+  name: '@chenhw7/dsh-memory/notes'
 - id: memory-context
   name: '@chenhw7/dsh-memory/context'
 - id: memory-remote
@@ -192,6 +195,11 @@ dsh web
 | `flushOnCompaction` | `true` | 压缩后从被遮蔽的事件中提取记忆。 |
 | `flushOnDispose` | `true` | 会话销毁时提取剩余上下文。 |
 | `memoryCharLimit` | `5000` | 每个作用域注入记忆内容的字符上限。 |
+| `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。 |
+| `notesDir` | `docs/agent-memory` | 仓库内生成 `CONVENTIONS.md` / `PITFALLS.md` 的目录。 |
+| `notesCharLimit` | `4000` | 注入的 `project-notes` 段落字符上限。 |
+| `notesAgentsPointer` | `true` | 维护仓库 `AGENTS.md` 中的托管指针块。 |
+| `notesMaxEntriesPerFile` | `100` | 每个生成笔记文件的最大条目数（超出截断最旧）。 |
 
 ### 提取与去重设置
 
@@ -204,6 +212,7 @@ dsh web
 | `extractionBudget` | `20` | 每会话最大提取 + 裁决调用次数。`0` = 无限。 |
 | `judgeEnabled` | `true` | 对预过滤命中运行 LLM 去重裁决。设为 `false` 时预过滤命中直接合并（更廉价，但可能误合并"同模板不同主题"对）。 |
 | `decayDays` | `30` | 自动衰减 N 天内未召回的 project 作用域条目。`0` = 禁用。固定的、`global` 和 `user` 条目永不衰减。 |
+| `pitfallStreakThreshold` | `2` | 判定踩坑所需的同签名连续失败次数（最终解决后提取进笔记文件）。 |
 
 ### 工具设置
 
@@ -245,6 +254,11 @@ memory:
   flushOnCompaction: true
   flushOnDispose: true
   memoryCharLimit: 5000
+  notesEnabled: true
+  notesDir: docs/agent-memory
+  notesCharLimit: 4000
+  notesAgentsPointer: true
+  notesMaxEntriesPerFile: 100
 ```
 
 `memoryPolicyCustomText` 是可选的，仅在 `memoryMode` 为 `custom` 时使用。
@@ -273,7 +287,7 @@ memory:
 
 ## 架构
 
-该 bundle 在 `dsh-base` 之上插入六行，每行指向本包自己的导出子路径：
+该 bundle 在 `dsh-base` 之上插入七行，每行指向本包自己的导出子路径：
 
 | 行 | 导出 | 作用 |
 |---|---|---|
@@ -281,6 +295,7 @@ memory:
 | `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域，注册 `ctx.memory` |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + flush + 去重 + janitor） |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 原子写 + AGENTS.md 指针） |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入 + 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务 |
 

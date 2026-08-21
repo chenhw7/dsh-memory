@@ -6,7 +6,40 @@ import {
   detectSignal,
   emptyAccumulator,
   messageText,
+  toolSignature,
+  PITFALL_RESOLVED_SIGNAL,
 } from '../src/review/accumulator.ts'
+
+/** Build a minimal `tool/call` session event. */
+function toolCallEvent(seq: number, callId: string, name: string, args: unknown): SessionEvent<'tool/call'> {
+  return {
+    type: 'tool/call',
+    seq,
+    time: 0,
+    data: { turn: 1, step: 1, callId, name, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+  } as unknown as SessionEvent<'tool/call'>
+}
+
+/** Build a minimal `tool/result` session event, optionally carrying an error. */
+function toolResultEvent(seq: number, callId: string, error?: { name: string; code: string }, texts: string[] = []): SessionEvent<'tool/result'> {
+  return {
+    type: 'tool/result',
+    seq,
+    time: 0,
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        id: 'r' as never,
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: callId, content: texts.map(text => ({ type: 'text', text })) }],
+        source: { kind: 'tool' },
+      },
+      ...error !== undefined ? { error } : {},
+    },
+    surfaceOp: 'append',
+  } as unknown as SessionEvent<'tool/result'>
+}
 
 /** Build a minimal `user/message` session event. */
 function userEvent(seq: number, text: string): SessionEvent<'user/message'> {
@@ -166,17 +199,133 @@ describe('messageText', () => {
   })
 })
 
+describe('failure-streak detection', () => {
+  it('emits one pitfall-resolved candidate after fail×2 + success', () => {
+    let state = emptyAccumulator
+    state = applyAccumulator(state, toolCallEvent(1, 'c1', 'bash', { command: 'vitest run' }))
+    state = applyAccumulator(state, toolResultEvent(2, 'c1', { name: 'Error', code: 'FAIL' }, ['exit code 1']))
+    state = applyAccumulator(state, toolCallEvent(3, 'c2', 'bash', { command: 'vitest run' }))
+    state = applyAccumulator(state, toolResultEvent(4, 'c2', { name: 'Error', code: 'FAIL' }, ['exit code 1']))
+    state = applyAccumulator(state, toolCallEvent(5, 'c3', 'bash', { command: 'vitest run' }))
+    state = applyAccumulator(state, toolResultEvent(6, 'c3'))
+    expect(state.count).toBe(1)
+    const candidate = state.candidates[0]!
+    expect(candidate.signal).toBe(PITFALL_RESOLVED_SIGNAL)
+    expect(candidate.seq).toBe(6)
+    expect(candidate.text).toContain('tool "bash"')
+    expect(candidate.text).toContain('signature: bash:vitest run')
+    expect(candidate.text).toContain('failed 2 time(s)')
+    expect(candidate.text).toContain('exit code 1')
+    // The streak and all calls are cleared.
+    expect(Object.keys(state.openStreaks)).toHaveLength(0)
+    expect(Object.keys(state.openCalls)).toHaveLength(0)
+    // A later success with no open streak is a pure no-op for candidates.
+    state = applyAccumulator(state, toolCallEvent(7, 'c4', 'bash', { command: 'vitest run' }))
+    state = applyAccumulator(state, toolResultEvent(8, 'c4'))
+    expect(state.count).toBe(1)
+  })
+
+  it('emits nothing for fail×1 + success, and the streak resets', () => {
+    let state = emptyAccumulator
+    for (const i of [0, 1]) {
+      state = applyAccumulator(state, toolCallEvent(i * 2 + 1, `c${i * 2 + 1}`, 'bash', { command: 'tsc --noEmit' }))
+      state = applyAccumulator(state, toolResultEvent(i * 2 + 2, `c${i * 2 + 1}`, { name: 'Error', code: 'TS1' }))
+      state = applyAccumulator(state, toolCallEvent(i * 2 + 3, `c${i * 2 + 3}`, 'bash', { command: 'tsc --noEmit' }))
+      state = applyAccumulator(state, toolResultEvent(i * 2 + 4, `c${i * 2 + 3}`))
+    }
+    expect(state.count).toBe(0)
+    expect(Object.keys(state.openStreaks)).toHaveLength(0)
+  })
+
+  it('resets an interrupted streak rather than carrying it over', () => {
+    let state = emptyAccumulator
+    state = applyAccumulator(state, toolCallEvent(1, 'c1', 'bash', { command: 'npm test' }))
+    state = applyAccumulator(state, toolResultEvent(2, 'c1', { name: 'E', code: 'X' }))
+    // One success interrupts the streak...
+    state = applyAccumulator(state, toolCallEvent(3, 'c2', 'bash', { command: 'npm test' }))
+    state = applyAccumulator(state, toolResultEvent(4, 'c2'))
+    // ...so a following single failure must not pair with the old one.
+    state = applyAccumulator(state, toolCallEvent(5, 'c3', 'bash', { command: 'npm test' }))
+    state = applyAccumulator(state, toolResultEvent(6, 'c3', { name: 'E', code: 'X' }))
+    expect(state.count).toBe(0)
+    expect(Object.keys(state.openStreaks)).toEqual(['bash:npm test'])
+  })
+
+  it('never pairs different signatures', () => {
+    let state = emptyAccumulator
+    state = applyAccumulator(state, toolCallEvent(1, 'c1', 'bash', { command: 'npm test' }))
+    state = applyAccumulator(state, toolResultEvent(2, 'c1', { name: 'E', code: 'X' }))
+    state = applyAccumulator(state, toolCallEvent(3, 'c2', 'bash', { command: 'git status' }))
+    state = applyAccumulator(state, toolResultEvent(4, 'c2', { name: 'E', code: 'X' }))
+    // One failure per signature — resolving one must produce nothing.
+    state = applyAccumulator(state, toolCallEvent(5, 'c3', 'bash', { command: 'npm test' }))
+    state = applyAccumulator(state, toolResultEvent(6, 'c3'))
+    expect(state.count).toBe(0)
+    expect(Object.keys(state.openStreaks)).toEqual(['bash:git status'])
+  })
+
+  it('honors a custom pitfall threshold', () => {
+    let state = emptyAccumulator
+    for (const i of [0, 1, 2]) {
+      state = applyAccumulator(state, toolCallEvent(i * 2 + 1, `c${i * 2 + 1}`, 'bash', { command: 'make build' }))
+      state = applyAccumulator(state, toolResultEvent(i * 2 + 2, `c${i * 2 + 1}`, { name: 'E', code: 'X' }))
+    }
+    state = applyAccumulator(state, toolCallEvent(7, 'c7', 'bash', { command: 'make build' }))
+    // threshold 4: three failures are not enough.
+    let next = applyAccumulator(state, toolResultEvent(8, 'c7'), 4)
+    expect(next.count).toBe(0)
+    // threshold 2: the same three failures pair and report the full count.
+    next = applyAccumulator(state, toolResultEvent(8, 'c7'), 2)
+    expect(next.count).toBe(1)
+    expect(next.candidates[0]!.text).toContain('failed 3 time(s)')
+  })
+
+  it('ignores a result whose call was never seen', () => {
+    const next = applyAccumulator(emptyAccumulator, toolResultEvent(1, 'unknown', { name: 'E', code: 'X' }))
+    expect(next).toBe(emptyAccumulator)
+  })
+
+  it('evicts open calls and streaks beyond their caps', () => {
+    let state = emptyAccumulator
+    for (let i = 0; i < 70; i++) {
+      state = applyAccumulator(state, toolCallEvent(i + 1, `c${i}`, 'bash', { command: `cmd${i}` }))
+    }
+    expect(Object.keys(state.openCalls).length).toBeLessThanOrEqual(64)
+    // 1 failure each across 12 distinct signatures → capped at 8 streaks.
+    for (let i = 0; i < 12; i++) {
+      state = applyAccumulator(state, toolCallEvent(100 + i * 2, `x${i}`, 'bash', { command: `sig${i}` }))
+      state = applyAccumulator(state, toolResultEvent(101 + i * 2, `x${i}`, { name: 'E', code: 'X' }))
+    }
+    expect(Object.keys(state.openStreaks).length).toBeLessThanOrEqual(8)
+  })
+})
+
+describe('toolSignature', () => {
+  it('collapses command arguments to the first two tokens', () => {
+    expect(toolSignature('bash', JSON.stringify({ command: 'vitest run --reporter=verbose' }))).toBe('bash:vitest run')
+  })
+  it('uses path-like arguments verbatim', () => {
+    expect(toolSignature('edit', JSON.stringify({ path: 'src/a.ts', old: 'x' }))).toBe('edit:src/a.ts')
+    expect(toolSignature('read', JSON.stringify({ file_path: 'src/b.ts' }))).toBe('read:src/b.ts')
+  })
+  it('falls back to the bare tool name', () => {
+    expect(toolSignature('bash', 'not json')).toBe('bash')
+    expect(toolSignature('bash', JSON.stringify({ verbose: true }))).toBe('bash')
+  })
+})
+
 describe('accumulatorSchema', () => {
   it('validates a well-formed state', () => {
-    const state = { candidates: [{ text: 't', signal: 'keyword', seq: 1 }], count: 1 }
+    const state = { candidates: [{ text: 't', signal: 'keyword', seq: 1 }], count: 1, openCalls: {}, openStreaks: {} }
     expect(() => accumulatorSchema.parse(state)).not.toThrow()
   })
   it('parses to the expected shape', () => {
-    const state = { candidates: [{ text: 't', signal: 'correction', seq: 5 }], count: 1 }
+    const state = { candidates: [{ text: 't', signal: 'correction', seq: 5 }], count: 1, openCalls: { c1: { name: 'bash', signature: 'bash:ls', seq: 2 } }, openStreaks: {} }
     const parsed = accumulatorSchema.parse(state)
     expect(parsed.candidates[0]!.seq).toBe(5)
+    expect(parsed.openCalls.c1!.signature).toBe('bash:ls')
   })
   it('rejects a state missing count', () => {
-    expect(() => accumulatorSchema.parse({ candidates: [] })).toThrow()
+    expect(() => accumulatorSchema.parse({ candidates: [], openCalls: {}, openStreaks: {} })).toThrow()
   })
 })
