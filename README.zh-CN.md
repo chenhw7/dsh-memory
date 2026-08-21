@@ -10,11 +10,11 @@
 
 - [功能特性](#功能特性)
 - [安装](#安装)
+- [更新](#更新)
 - [卸载](#卸载)
 - [验证](#验证)
 - [配置](#配置)
 - [架构](#架构)
-- [故障排查](#故障排查)
 - [已知限制](#已知限制)
 - [许可证](#许可证)
 
@@ -77,53 +77,11 @@ dsh plugin add --profile web @chenhw7/dsh-memory
 pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 ```
 
-需要锁定版本而不跟 `latest` 时：
+需要锁定特定版本时：
 
 ```sh
 dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
 ```
-
-### 从 GitHub 安装（尝鲜最新 commit）
-
-只有当你要测试比最新 npm 版本更新的 commit 时才用这种方式。pnpm 会阻止 git 依赖的 `prepare` 构建脚本，直到你显式允许，所以没有 `allowBuilds` 条目的 profile 需要**跑两次**：
-
-**第一步：先跑一次安装。** 它会停下并报错：
-
-```sh
-dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
-```
-
-```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.3"
-needs to execute build scripts but is not in the "allowBuilds" allowlist.
-...
-allowBuilds:
-  @chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<commit>: true
-```
-
-**第二步：把 pnpm 打印的精确 key 加入允许列表。** 编辑 profile 的 `pnpm-workspace.yaml`：
-
-- Windows：`%USERPROFILE%\.dsh\profiles\web\pnpm-workspace.yaml`
-- macOS/Linux：`~/.dsh/profiles/web/pnpm-workspace.yaml`
-- 如果设置了 `DSH_HOME`：`$DSH_HOME/profiles/web/pnpm-workspace.yaml`
-
-添加报错信息里的那条 key（与已有内容合并）：
-
-```yaml
-allowBuilds:
-  "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<pnpm 打印的 commit>": true
-```
-
-部分 pnpm 版本使用旧格式：
-
-```yaml
-onlyBuiltDependencies:
-  - "@chenhw7/dsh-memory"
-```
-
-如果你的 pnpm 提示的是这个字段，就用这个格式。然后重新执行 `dsh plugin add` 命令。
-
-> **key 要从 pnpm 的报错里复制，不要从旧版本文档里复制。** key 包含解析后的 commit，每换一个新 commit 安装都会变。这条允许项的含义是：允许该包的 `prepare` 脚本（`npm run build`）在安装时于你的机器上运行——只允许你信任源码的包。需要可复现的安装时，请固定 commit（`dsh plugin add --profile web https://github.com/chenhw7/dsh-memory/archive/<commit>.tar.gz`），并允许 pnpm 为该固定地址打印的 key。
 
 ### 从本地 checkout 安装
 
@@ -147,6 +105,22 @@ cd dsh-memory
 npm install && npm run build
 npm pack                    # 生成 chenhw7-dsh-memory-0.1.3.tgz
 dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
+```
+
+## 更新
+
+`dsh plugin add` 在**全新** profile 上始终从 npm 安装最新版。但一旦已安装某个版本，再次运行 `dsh plugin add` **不会**更新——pnpm 发现已有的版本范围（如 `^0.1.1`）已被最新版（如 `0.1.3`）满足，就跳过更新了。
+
+要更新到最新发布版本：
+
+```sh
+dsh plugin --profile web update @chenhw7/dsh-memory
+```
+
+源码构建的 dsh：
+
+```sh
+pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 ```
 
 ## 卸载
@@ -327,38 +301,10 @@ memory:
         backend: json
 ```
 
-## 故障排查
-
-### `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
-
-如果**git 安装**（`dsh plugin add ... https://github.com/...`）报错，例如：（npm 安装 `@chenhw7/dsh-memory` 不会触发此错误。）
-
-```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.3" needs to execute build scripts but is not in the "allowBuilds" allowlist.
-```
-
-说明 pnpm 还没有被允许执行该包的 `prepare` 构建脚本。
-
-**解决方法：**
-
-1. 打开 profile 的 `pnpm-workspace.yaml`（路径见上文）。
-2. 根据错误信息添加精确的 `allowBuilds` 条目，格式类似：
-
-   ```yaml
-   allowBuilds:
-     "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<commit>": true
-   ```
-
-3. 重新执行 `dsh plugin add`。
-
-> 如果你更新了 `dsh-memory` 到新 commit，错误中的 URL 可能会变化。请将 `allowBuilds` 更新为新 URL，或者继续固定使用已经允许的 commit。
-
 ## 已知限制
 
 - **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的分词词法匹配（CJK 逐字 + Latin 逐词），不是 embeddings。
 - **提取质量跟随会话模型** — review/flush 复用会话当前路由的 provider/model。
-- **git 安装需要构建允许** — pnpm 会阻止 git 依赖的 `prepare` 脚本，直到你在 profile 的 `pnpm-workspace.yaml` 中允许它（见上文两步流程）。npm 安装路径则完全不需要。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
 
 ## 许可证

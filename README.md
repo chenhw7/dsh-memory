@@ -10,9 +10,9 @@ This is a **self-contained single package** (not a multi-package workspace). It 
 
 - [Features](#features)
 - [Install](#install)
+- [Update](#update)
 - [Uninstall](#uninstall)
 - [Verify](#verify)
-- [Troubleshooting](#troubleshooting)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Known Limitations](#known-limitations)
@@ -79,55 +79,11 @@ With a source checkout, run it from the `deepseek-harness` directory instead:
 pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 ```
 
-To pin a version instead of `latest`:
+To pin a specific version:
 
 ```sh
 dsh plugin add --profile web @chenhw7/dsh-memory@0.1.3
 ```
-
-### From GitHub (bleeding edge)
-
-Use this only to test a commit that is newer than the latest npm release. pnpm blocks a git dependency's `prepare` (build) script until you explicitly allow it, so a profile without an `allowBuilds` entry needs **two runs**:
-
-**Step 1: run the install once.** It will stop with:
-
-```sh
-dsh plugin add --profile web https://github.com/chenhw7/dsh-memory
-```
-
-```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] ... The git-hosted package "@chenhw7/dsh-memory@0.1.3"
-needs to execute build scripts but is not in the "allowBuilds" allowlist.
-...
-allowBuilds:
-  @chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<commit>: true
-```
-
-**Step 2: allow the exact key pnpm printed.** Edit the profile's `pnpm-workspace.yaml`:
-
-```sh
-# Windows: %USERPROFILE%\.dsh\profiles\web\pnpm-workspace.yaml
-# macOS/Linux: ~/.dsh/profiles/web/pnpm-workspace.yaml
-# Or $DSH_HOME/profiles/web/pnpm-workspace.yaml if you set DSH_HOME
-```
-
-and add the key from the error message (merge with existing content):
-
-```yaml
-allowBuilds:
-  "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<the commit pnpm printed>": true
-```
-
-Some pnpm versions use the older list form instead:
-
-```yaml
-onlyBuiltDependencies:
-  - "@chenhw7/dsh-memory"
-```
-
-If your pnpm names that field, use that form. Then re-run the `dsh plugin add` command.
-
-> **Copy the key from pnpm's error, not from an old copy of this README.** The key includes the resolved commit, so it changes every time you install from a newer commit. This entry grants permission for the package's `prepare` script (`npm run build`) to run on your machine at install time — only allow packages whose source you trust. For a reproducible install, pin a commit (`dsh plugin add --profile web https://github.com/chenhw7/dsh-memory/archive/<commit>.tar.gz`) and allow the key pnpm prints for that pin.
 
 ### From a local checkout
 
@@ -151,6 +107,22 @@ cd dsh-memory
 npm install && npm run build
 npm pack                    # produces chenhw7-dsh-memory-0.1.3.tgz
 dsh plugin add --profile web ./chenhw7-dsh-memory-0.1.3.tgz
+```
+
+## Update
+
+`dsh plugin add` always installs the latest version from npm on a **fresh** profile. But once a version is installed, running `dsh plugin add` again will **not** update it — pnpm sees the existing version range (e.g. `^0.1.1`) is already satisfied by the latest (e.g. `0.1.3`) and skips the update.
+
+To update to the latest published version:
+
+```sh
+dsh plugin --profile web update @chenhw7/dsh-memory
+```
+
+With a source checkout:
+
+```sh
+pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 ```
 
 ## Uninstall
@@ -208,34 +180,6 @@ Then start dsh and check the settings UI shows the `memory` namespace:
 ```sh
 dsh web
 ```
-
-## Troubleshooting
-
-### `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
-
-If a **git-hosted** install (`dsh plugin add ... https://github.com/...`) fails with an error like: (npm installs of `@chenhw7/dsh-memory` never trigger this.)
-
-```text
-[ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED] Failed to prepare git-hosted package ...
-The git-hosted package "@chenhw7/dsh-memory@0.1.3" needs to execute build scripts but is not in the "allowBuilds" allowlist.
-```
-
-It means pnpm has not been told to allow this package's `prepare` build script.
-
-**Fix:**
-
-1. Open the profile's `pnpm-workspace.yaml` (see paths above).
-2. Add the exact `allowBuilds` entry from the error message. It will look like:
-
-   ```yaml
-   allowBuilds:
-     "@chenhw7/dsh-memory@https://codeload.github.com/chenhw7/dsh-memory/tar.gz/<commit>": true
-   ```
-
-3. Run the `dsh plugin add` command again.
-
-> If you update `dsh-memory` to a newer commit, the URL in the error may change. Update the `allowBuilds` key to the new URL, or keep the install pinned to the commit already allowed.
-
 
 ## Configuration
 
@@ -363,7 +307,6 @@ The bundle inserts six rows over `dsh-base`, each pointing at this package's own
 
 - **No semantic/vector retrieval** — `memory_search` is token-based lexical matching (CJK per-character + Latin word tokens) over structured KV entries, not embeddings.
 - **Extraction quality tracks the session model** — review/flush reuse the session's routed provider/model.
-- **git install needs a build allowance** — pnpm blocks the git dependency's `prepare` script until you allow it in the profile's `pnpm-workspace.yaml` (two-step procedure above). The npm install path avoids this entirely.
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
 
 ## License
