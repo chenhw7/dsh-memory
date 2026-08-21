@@ -54,11 +54,9 @@ export const inject = ['systemPrompt']
 const NS = settingsNamespace('memory')
 
 const DEFAULT_MEMORY_MODE: MemoryMode = 'policy-only'
-const DEFAULT_REVIEW_ENABLED = true
-const DEFAULT_REVIEW_CANDIDATE_THRESHOLD = 10
-const DEFAULT_FLUSH_ON_COMPACTION = true
-const DEFAULT_FLUSH_ON_DISPOSE = true
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
+const DEFAULT_MAX_SEARCH_RESULTS = 50
+const DEFAULT_DECAY_DAYS = 30
 /** Upper bound on any single generated notes file (defense-in-depth on top of the entry cap). */
 const MAX_NOTES_FILE_CHARS = 32_000
 
@@ -94,16 +92,12 @@ export interface MemoryConfig {
   memoryMode: MemoryMode
   /** User-supplied custom policy text, used only when `memoryMode` is `custom`. */
   memoryPolicyCustomText?: string
-  /** Whether the memory review function plugin is active; defaults to `true`. */
-  reviewEnabled: boolean
-  /** Candidate threshold for the memory review pass; defaults to `10`. */
-  reviewCandidateThreshold: number
-  /** Flush pending memory writes on compaction; defaults to `true`. */
-  flushOnCompaction: boolean
-  /** Flush pending memory writes on session dispose; defaults to `true`. */
-  flushOnDispose: boolean
   /** Character budget for the frozen memory content snapshot; defaults to `5000`. */
   memoryCharLimit: number
+  /** Max entries returned by `memory_search` / `memory_list` when the call omits `limit`; defaults to `50`. `0` = no limit. */
+  maxSearchResults: number
+  /** Days without recall before a project-scoped entry is decayed by the janitor. `0` = disabled. Defaults to `30`. */
+  decayDays: number
   /** Enable project-notes export + injection; defaults to `true`. */
   notesEnabled: boolean
   /** Repo-relative directory holding the generated notes files; defaults to `docs/agent-memory`. */
@@ -120,11 +114,9 @@ export interface MemoryConfig {
 export const Config: z<MemoryConfig> = z.object({
   memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index'] as const).default(DEFAULT_MEMORY_MODE),
   memoryPolicyCustomText: z.string(),
-  reviewEnabled: z.boolean().default(DEFAULT_REVIEW_ENABLED),
-  reviewCandidateThreshold: z.number().step(1).min(0).default(DEFAULT_REVIEW_CANDIDATE_THRESHOLD),
-  flushOnCompaction: z.boolean().default(DEFAULT_FLUSH_ON_COMPACTION),
-  flushOnDispose: z.boolean().default(DEFAULT_FLUSH_ON_DISPOSE),
   memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
+  maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
+  decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
   notesDir: z.string().default(DEFAULT_NOTES_DIR),
   notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),

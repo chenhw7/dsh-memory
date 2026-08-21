@@ -186,16 +186,14 @@ dsh web
 
 ## Configuration
 
-All settings are editable from the dsh frontend settings page (the `memory` namespace) and apply live. They persist in `$DSH_HOME/settings.yaml`.
+The bundle owns three settings namespaces, each visible as its own card in Settings → Plugins → Plugin configuration and **applied live** — a change takes effect on the next event or call, no restart. Every namespace resolves in layers: schema defaults → the composition `config:` entry (the `base`) → the user document in `$DSH_HOME/settings.yaml`. A field absent from the user layer inherits the composition value, so a deployment can pin a default and users override only what they need. With no settings service mounted (e.g. a headless profile), each plugin falls back to its composition entry exactly as composed.
+
+### `memory` — injection & project notes
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
-| `reviewEnabled` | `true` | Enable automatic periodic review extraction. |
-| `reviewCandidateThreshold` | `10` | Number of candidate messages before an LLM extraction runs. |
-| `flushOnCompaction` | `true` | Extract memories from shadowed events after compaction. |
-| `flushOnDispose` | `true` | Extract remaining context when a session is disposed. |
 | `memoryCharLimit` | `5000` | Per-scope character limit for injected memory content. |
 | `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. |
 | `notesDir` | `docs/agent-memory` | Repo-relative directory holding the generated notes files. |
@@ -203,12 +201,14 @@ All settings are editable from the dsh frontend settings page (the `memory` name
 | `notesAgentsPointer` | `true` | Maintain the managed pointer block in the repo's `AGENTS.md`. |
 | `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (oldest truncated). |
 
-### Extraction & Dedup Settings
-
-These settings control the automatic extraction pipeline and the dedup judge. They live in the `memory-review` plugin config (set via the composition layer, not the `memory` settings namespace):
+### `memory-review` — extraction, dedup & decay
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `reviewEnabled` | `true` | Enable automatic periodic review extraction. |
+| `reviewCandidateThreshold` | `10` | Number of candidate messages before an LLM extraction runs. |
+| `flushOnCompaction` | `true` | Extract memories from shadowed events after compaction. |
+| `flushOnDispose` | `true` | Extract remaining context when a session is disposed. |
 | `extractionModelProvider` | `""` (session route) | Override the LLM provider for extraction/judge calls. Empty = use the session's conversational model (the default — extraction reuses the same model the user is chatting with, no extra keys or billing channel). |
 | `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
 | `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
@@ -216,15 +216,15 @@ These settings control the automatic extraction pipeline and the dedup judge. Th
 | `decayDays` | `30` | Auto-decay project-scoped entries not recalled within N days. `0` = disabled. Pinned, `global`, and `user` entries are never decayed. |
 | `pitfallStreakThreshold` | `2` | Consecutive same-signature tool failures that must occur (and then be resolved) before a pitfall entry is extracted into the notes files. |
 
-### Tool Settings
-
-These settings control the model-facing tools. They live in the `tool-memory` plugin config (set via the composition layer, not the `memory` settings namespace):
+### `tool-memory` — model-facing tools
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `maxSearchResults` | `50` | Maximum number of entries returned by `memory_search`. `0` = no limit. |
+| `maxSearchResults` | `50` | Maximum number of entries returned by `memory_search` / `memory_list` when the call omits `limit`. `0` = no limit. |
 
-Example composition config:
+### Setting via composition vs. UI
+
+All three namespaces accept the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
 
 ```yaml
 tool-memory:
@@ -232,35 +232,40 @@ tool-memory:
     maxSearchResults: 100
 ```
 
-By default, extraction and the dedup judge use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` in the review plugin's composition config.
-
-Example composition config for a dedicated extraction model:
+By default, extraction and the dedup judge use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` (in the composition config or the UI):
 
 ```yaml
 memory-review:
   config:
     extractionModelProvider: deepseek
     extractionModelModel: deepseek-chat
-    extractionBudget: 20
-    judgeEnabled: true
 ```
 
-Example `$DSH_HOME/settings.yaml` (memory namespace):
+Example `$DSH_HOME/settings.yaml` (all three namespaces):
 
 ```yaml
 memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
-  reviewEnabled: true
-  reviewCandidateThreshold: 10
-  flushOnCompaction: true
-  flushOnDispose: true
   memoryCharLimit: 5000
   notesEnabled: true
   notesDir: docs/agent-memory
   notesCharLimit: 4000
   notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
+memory-review:
+  reviewEnabled: true
+  reviewCandidateThreshold: 10
+  flushOnCompaction: true
+  flushOnDispose: true
+  extractionModelProvider: ""
+  extractionModelModel: ""
+  extractionBudget: 20
+  judgeEnabled: true
+  decayDays: 30
+  pitfallStreakThreshold: 2
+tool-memory:
+  maxSearchResults: 50
 ```
 
 `memoryPolicyCustomText` is optional and only used when `memoryMode` is `custom`.

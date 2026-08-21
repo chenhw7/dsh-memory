@@ -11,6 +11,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {
@@ -24,6 +25,12 @@ import { scanContent, validateProjectScope } from '../index.ts'
 
 export const name = 'tool-memory'
 export const inject = ['tools']
+
+/** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
+const MEMORY_NS = settingsNamespace('memory')
+
+/** Default for the search-result cap when the namespace value is absent. */
+const DEFAULT_MAX_SEARCH_RESULTS = 50
 
 /** The valid memory scopes, as a runtime tuple for schema enums. */
 const SCOPES = ['global', 'project', 'user'] as const
@@ -174,10 +181,27 @@ function formatEntryList(header: string, entries: readonly RenderEntry[]): strin
 /**
  * Register the six memory tools on `ctx.tools`.
  * @param ctx - registrant context carrying the tool registry.
- * @param config - deployment's search-result cap.
+ * @param config - deployment's search-result cap; serves as the composition
+ *   `base` for the `memory` namespace (owned by memory-context). The cap is
+ *   read live per call so a settings change applies immediately.
  */
 export function apply(ctx: Context, config: Config): void {
-  const defaultLimit = config.maxSearchResults
+  // Live-read `maxSearchResults` from the `memory` namespace (owned by
+  // memory-context); fall back to the composition entry when no settings
+  // service is mounted. Same cross-namespace pattern as memory-notes.
+  const compositionCap = config.maxSearchResults
+  let fromSettings = (): number => compositionCap
+  ctx.inject(['settings'], (sctx) => {
+    fromSettings = (): number => {
+      try {
+        const ns = sctx.settings.get(MEMORY_NS) as { maxSearchResults?: number } | undefined
+        const v = ns?.maxSearchResults
+        if (typeof v === 'number' && v >= 0) return v
+      } catch { /* namespace not registered yet — fall through */ }
+      return compositionCap
+    }
+  })
+  const defaultLimit = (): number => fromSettings()
 
   ctx.tools.register(defineTool({
     name: 'memory_search',
@@ -237,7 +261,7 @@ export function apply(ctx: Context, config: Config): void {
         ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
         ...args.projectName !== undefined ? { projectName: args.projectName } : {},
         ...args.query !== undefined ? { query: args.query } : {},
-        ...args.limit !== undefined ? { limit: args.limit } : { limit: defaultLimit },
+        ...args.limit !== undefined ? { limit: args.limit } : { limit: defaultLimit() },
       }
       const result = store.search(query)
       return {
@@ -523,7 +547,7 @@ export function apply(ctx: Context, config: Config): void {
       const all = store.list(scope, projectName)
       const total = all.length
       const offset = args.offset ?? 0
-      const limit = args.limit ?? defaultLimit
+      const limit = args.limit ?? defaultLimit()
       const paged = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset)
       return {
         entries: paged.map(toEntryJson),

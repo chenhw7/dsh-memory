@@ -184,16 +184,14 @@ dsh web
 
 ## 配置
 
-所有设置都可以在 dsh 前端设置页（`memory` 命名空间）中编辑并实时生效，持久化在 `$DSH_HOME/settings.yaml`。
+本 bundle 拥有三个设置命名空间，各自在「设置 → 插件 → 插件配置」中显示为独立卡片，且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启。每个命名空间按分层 resolve：schema 默认 → 组合 `config:` 条目（base）→ `$DSH_HOME/settings.yaml` 中的用户文档。用户层缺失的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。当无 settings 服务挂载时（如 headless profile），各插件回退到组合条目，行为与组合配置完全一致。
+
+### `memory` — 注入与项目笔记
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
 | `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
 | `memoryPolicyCustomText` | — | 当 `memoryMode` 为 `custom` 时使用的自定义策略文本。 |
-| `reviewEnabled` | `true` | 启用自动周期性 review 提取。 |
-| `reviewCandidateThreshold` | `10` | 触发 LLM 提取前的候选消息数。 |
-| `flushOnCompaction` | `true` | 压缩后从被遮蔽的事件中提取记忆。 |
-| `flushOnDispose` | `true` | 会话销毁时提取剩余上下文。 |
 | `memoryCharLimit` | `5000` | 每个作用域注入记忆内容的字符上限。 |
 | `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。 |
 | `notesDir` | `docs/agent-memory` | 仓库内生成 `CONVENTIONS.md` / `PITFALLS.md` 的目录。 |
@@ -201,12 +199,14 @@ dsh web
 | `notesAgentsPointer` | `true` | 维护仓库 `AGENTS.md` 中的托管指针块。 |
 | `notesMaxEntriesPerFile` | `100` | 每个生成笔记文件的最大条目数（超出截断最旧）。 |
 
-### 提取与去重设置
-
-以下设置控制自动提取管线和去重裁决，位于 `memory-review` 插件配置中（通过组合层设置，不在 `memory` 设置命名空间里）：
+### `memory-review` — 提取、去重与衰减
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
+| `reviewEnabled` | `true` | 启用自动周期性 review 提取。 |
+| `reviewCandidateThreshold` | `10` | 触发 LLM 提取前的候选消息数。 |
+| `flushOnCompaction` | `true` | 压缩后从被遮蔽的事件中提取记忆。 |
+| `flushOnDispose` | `true` | 会话销毁时提取剩余上下文。 |
 | `extractionModelProvider` | `""`（会话路由） | 覆盖提取/裁决调用的 LLM provider。留空 = 使用会话的对话模型（默认行为——提取复用用户正在聊天的模型，无需额外 key 或计费通道）。 |
 | `extractionModelModel` | `""`（会话路由） | 覆盖提取/裁决调用的模型名。留空 = 使用会话的对话模型。两者都设置可将提取路由到更廉价/更快的模型。 |
 | `extractionBudget` | `20` | 每会话最大提取 + 裁决调用次数。`0` = 无限。 |
@@ -214,15 +214,15 @@ dsh web
 | `decayDays` | `30` | 自动衰减 N 天内未召回的 project 作用域条目。`0` = 禁用。固定的、`global` 和 `user` 条目永不衰减。 |
 | `pitfallStreakThreshold` | `2` | 判定踩坑所需的同签名连续失败次数（最终解决后提取进笔记文件）。 |
 
-### 工具设置
-
-以下设置控制模型可用工具，位于 `tool-memory` 插件配置中（通过组合层设置，不在 `memory` 设置命名空间里）：
+### `tool-memory` — 模型可用工具
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
-| `maxSearchResults` | `50` | `memory_search` 返回的最大条目数。`0` = 无限制。 |
+| `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限。`0` = 无限制。 |
 
-组合配置示例：
+### 组合配置与 UI 设置
+
+三个命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
 
 ```yaml
 tool-memory:
@@ -230,35 +230,40 @@ tool-memory:
     maxSearchResults: 100
 ```
 
-默认情况下，提取和去重裁决使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，在 review 插件的组合配置中设置 `extractionModelProvider` 和 `extractionModelModel`。
-
-专用提取模型的组合配置示例：
+默认情况下，提取和去重裁决使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可）：
 
 ```yaml
 memory-review:
   config:
     extractionModelProvider: deepseek
     extractionModelModel: deepseek-chat
-    extractionBudget: 20
-    judgeEnabled: true
 ```
 
-`$DSH_HOME/settings.yaml` 配置示例：
+`$DSH_HOME/settings.yaml` 示例（三个命名空间）：
 
 ```yaml
 memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
-  reviewEnabled: true
-  reviewCandidateThreshold: 10
-  flushOnCompaction: true
-  flushOnDispose: true
   memoryCharLimit: 5000
   notesEnabled: true
   notesDir: docs/agent-memory
   notesCharLimit: 4000
   notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
+memory-review:
+  reviewEnabled: true
+  reviewCandidateThreshold: 10
+  flushOnCompaction: true
+  flushOnDispose: true
+  extractionModelProvider: ""
+  extractionModelModel: ""
+  extractionBudget: 20
+  judgeEnabled: true
+  decayDays: 30
+  pitfallStreakThreshold: 2
+tool-memory:
+  maxSearchResults: 50
 ```
 
 `memoryPolicyCustomText` 是可选的，仅在 `memoryMode` 为 `custom` 时使用。

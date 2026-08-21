@@ -15,10 +15,16 @@
  *    recent derived messages are extracted. Both are fire-and-forget and never
  *    block their event.
  *
+ * All knobs are live configuration: the composition entry is the settings
+ * `base` layer under the `memory-review` namespace, and handlers re-read the
+ * resolved value per event — a frontend settings change applies on the next
+ * event, no restart.
+ *
  * @module @chenhw7/dsh-memory/review
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -45,6 +51,15 @@ export const name = 'memory-review'
  *  `sessionProjections` and `memory` are optional (read via `ctx.get`). */
 export const inject = ['llm']
 
+/** The settings namespace owned by this plugin (live, UI-visible). */
+const NS = settingsNamespace('memory-review')
+
+/** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
+const MEMORY_NS = settingsNamespace('memory')
+
+/** Default for decayDays when the namespace value is absent. */
+const DEFAULT_DECAY_DAYS = 30
+
 /** Plugin configuration. */
 export interface Config {
   /** Enable the periodic-review extraction. Defaults to `true`. */
@@ -63,8 +78,6 @@ export interface Config {
   extractionBudget?: number
   /** Enable the LLM dedup judge on prefilter hits; defaults to `true`. */
   judgeEnabled?: boolean
-  /** Days without recall before a project-scoped entry is decayed by the janitor. 0 = disabled. Defaults to 30. */
-  decayDays?: number
   /** Consecutive same-signature tool failures required before a success emits a pitfall candidate. Defaults to 2. */
   pitfallStreakThreshold?: number
 }
@@ -78,7 +91,6 @@ export const Config: z<Config> = z.object({
   extractionModelModel: z.string().default(''),
   extractionBudget: z.number().step(1).min(0).default(20),
   judgeEnabled: z.boolean().default(true),
-  decayDays: z.number().step(1).min(0).default(30),
   pitfallStreakThreshold: z.number().step(1).min(1).default(2),
 })
 
@@ -91,14 +103,13 @@ interface ResolvedConfig {
   readonly extractionModel: ExtractionModelOverride | undefined
   readonly extractionBudget: number
   readonly judgeEnabled: boolean
-  readonly decayDays: number
   readonly pitfallStreakThreshold: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
 const DISPOSE_FLUSH_TIMEOUT_MS = 5_000
 
-/** Resolve and validate the raw config into the runtime form. */
+/** Resolve the raw config into the runtime form (re-run per resolved read). */
 function resolveConfig(config: Config): ResolvedConfig {
   const hasOverride = (config.extractionModelProvider ?? '').length > 0 || (config.extractionModelModel ?? '').length > 0
   return {
@@ -112,7 +123,6 @@ function resolveConfig(config: Config): ResolvedConfig {
     } : undefined,
     extractionBudget: config.extractionBudget ?? 20,
     judgeEnabled: config.judgeEnabled ?? true,
-    decayDays: config.decayDays ?? 30,
     pitfallStreakThreshold: config.pitfallStreakThreshold ?? 2,
   }
 }
@@ -182,8 +192,28 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
  * @param config - plugin configuration (defaults applied by schemastery).
  */
 export function apply(ctx: Context, config: Config = {}): void {
-  const resolved = resolveConfig(config)
-  const modelOverride = resolved.extractionModel as ExtractionModelOverride | undefined
+  // Live-resolved config: the settings scope while one is attached, the
+  // composition entry otherwise (swapped by installSettingsSection on attach/detach).
+  let resolved = (): ResolvedConfig => resolveConfig(config)
+  installSettingsSection(ctx, NS, Config, config, {
+    setSource: (source) => { resolved = () => resolveConfig(source()) },
+    onChange: () => {},
+  })
+
+  // `decayDays` lives in the `memory` namespace (owned by memory-context).
+  // Read it cross-namespace via a settings-injected fiber; fall back to the
+  // default when no settings service is mounted.
+  let readDecayDays = (): number => DEFAULT_DECAY_DAYS
+  ctx.inject(['settings'], (sctx) => {
+    readDecayDays = (): number => {
+      try {
+        const ns = sctx.settings.get(MEMORY_NS) as { decayDays?: number } | undefined
+        if (typeof ns?.decayDays === 'number') return ns.decayDays
+      } catch { /* namespace not registered yet — fall through */ }
+      return DEFAULT_DECAY_DAYS
+    }
+  })
+
   /** Per-session high-water mark: the seq of the last candidate covered by an extraction. */
   const highWaterMarks = new WeakMap<Session, number>()
   /** Per-session extraction call count (§3.6 cost guardrail). */
@@ -191,9 +221,10 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   /** Check and increment the per-session extraction budget. Returns false when exhausted. */
   function checkBudget(session: Session): boolean {
-    if (resolved.extractionBudget <= 0) return true
+    const budget = resolved().extractionBudget
+    if (budget <= 0) return true
     const used = extractionCalls.get(session) ?? 0
-    if (used >= resolved.extractionBudget) return false
+    if (used >= budget) return false
     extractionCalls.set(session, used + 1)
     return true
   }
@@ -205,59 +236,62 @@ export function apply(ctx: Context, config: Config = {}): void {
       key: MEMORY_REVIEW_PROJECTION_KEY,
       schema: accumulatorSchema,
       init: () => emptyAccumulator,
-      apply: (state, event) => applyAccumulator(state, event, resolved.pitfallStreakThreshold),
+      apply: (state, event) => applyAccumulator(state, event, resolved().pitfallStreakThreshold),
       view: (state: AccumulatorState): AccumulatorView => state,
       stateVersion: 2,
     })
   })
 
-  // Periodic review: drain the accumulator on agent/pre-step.
-  if (resolved.reviewEnabled) {
-    ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
-      if (!signal.aborted) {
-        try {
-          await maybeRunReview(ctx, agent, resolved.reviewCandidateThreshold, highWaterMarks, modelOverride, checkBudget, resolved.judgeEnabled)
-        } catch (_reviewError) {
-          // Best-effort: a review failure must never block the step.
-        }
+  // Periodic review: drain the accumulator on agent/pre-step. Always
+  // registered — the enabled flag and knobs are read per event, so a settings
+  // change takes effect on the very next step without a restart.
+  ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+    const cfg = resolved()
+    if (!signal.aborted && cfg.reviewEnabled) {
+      try {
+        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled)
+      } catch (_reviewError) {
+        // Best-effort: a review failure must never block the step.
       }
-      return next()
-    })
-  }
+    }
+    return next()
+  })
 
   // Flush on compaction/end (fire-and-forget; never blocks compaction).
-  if (resolved.flushOnCompaction) {
-    ctx.on('session/event', (session, event) => {
-      if (event.type !== 'compaction/end') return
-      if (event.data.error !== undefined) return
-      if (!checkBudget(session)) return
-      void flushOnCompaction(ctx, session, event.data.compactionId, modelOverride, resolved.judgeEnabled).catch(() => {
-        // Best-effort: a flush failure is logged by the runtime, not thrown here.
-      })
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'compaction/end') return
+    if (event.data.error !== undefined) return
+    const cfg = resolved()
+    if (!cfg.flushOnCompaction) return
+    if (!checkBudget(session)) return
+    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled).catch(() => {
+      // Best-effort: a flush failure is logged by the runtime, not thrown here.
     })
-  }
+  })
 
   // Flush on session/disposed (fire-and-forget; never blocks dispose).
-  if (resolved.flushOnDispose) {
-    ctx.on('session/disposed', (session) => {
-      if (!checkBudget(session)) return
-      void flushOnDispose(ctx, session, modelOverride, resolved.judgeEnabled).catch(() => {
-        // Best-effort: dispose must not block on memory extraction.
-      })
+  ctx.on('session/disposed', (session) => {
+    const cfg = resolved()
+    if (!cfg.flushOnDispose) return
+    if (!checkBudget(session)) return
+    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled).catch(() => {
+      // Best-effort: dispose must not block on memory extraction.
     })
-  }
+  })
 
   // Janitor: decay stale project-scoped entries on session/created (§3.5).
-  // Runs once per new session; best-effort, never blocks session creation.
-  if (resolved.decayDays > 0) {
-    ctx.on('session/created', () => {
-      const memory = ctx.get('memory')
-      if (memory === undefined) return
-      void memory.janitor(resolved.decayDays).catch(() => {
-        // Best-effort: a janitor failure never blocks session creation.
-      })
-    }, { global: true })
-  }
+  // `decayDays` lives in the `memory` namespace (owned by memory-context) and is
+  // read live per event; `0` disables. Falls back to the default when no
+  // settings service is mounted.
+  ctx.on('session/created', () => {
+    const days = readDecayDays()
+    if (days <= 0) return
+    const memory = ctx.get('memory')
+    if (memory === undefined) return
+    void memory.janitor(days).catch(() => {
+      // Best-effort: a janitor failure never blocks session creation.
+    })
+  }, { global: true })
 }
 
 /** Read the projection snapshot and run one review extraction if the threshold is met. */
