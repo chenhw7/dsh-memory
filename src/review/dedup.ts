@@ -133,16 +133,33 @@ export function findDuplicate(
 }
 
 /**
- * Merge two memory contents into one. When the new content is a strict
- * superset (contains the old text as a substring), the new content wins
- * outright. Otherwise, append the new content as an addendum so no
- * information is lost.
+ * Upper bound on merged content produced by {@link mergeContent}. Past this
+ * cap the merge falls back to keeping the longer side instead of appending,
+ * so repeated near-duplicate merges can never grow an entry without bound.
+ * True re-summarization of oversized entries belongs to the curator pass.
  */
-export function mergeContent(oldContent: string, newContent: string): string {
+export const MERGE_CHAR_LIMIT = 600
+
+/**
+ * Merge two memory contents into one. When the new content is a strict
+ * superset (contains the old text as a substring), the longer content wins
+ * outright. Otherwise, append the new content as an addendum so no
+ * information is lost — unless the concatenation would exceed `maxChars`,
+ * in which case the longer side wins instead, bounding entry growth while
+ * staying deterministic and LLM-free.
+ *
+ * @param oldContent - the stored content.
+ * @param newContent - the incoming candidate content.
+ * @param maxChars - upper bound for the concatenated form (default {@link MERGE_CHAR_LIMIT}).
+ */
+export function mergeContent(oldContent: string, newContent: string, maxChars: number = MERGE_CHAR_LIMIT): string {
   if (oldContent.includes(newContent) || newContent.includes(oldContent)) {
     return newContent.length >= oldContent.length ? newContent : oldContent
   }
-  return `${oldContent} ${newContent}`
+  const merged = `${oldContent} ${newContent}`
+  if (merged.length <= maxChars) return merged
+  // Over the cap: prefer the more informative side rather than growing forever.
+  return newContent.length >= oldContent.length ? newContent : oldContent
 }
 
 /**

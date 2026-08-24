@@ -19,8 +19,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { redactBlocked } from '../scanner.ts'
 import type { MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryStore } from '../index.ts'
+import { annotateConflicts, type ConflictStatus } from './conflict.ts'
 import type { ProjectNotesService, ProjectNotesSnapshot } from '../notes/index.ts'
 import { isRenderedEntry } from '../notes/scope.ts'
 import {
@@ -31,6 +33,13 @@ import {
   DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
 } from '../notes/settings.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
+// Type-only: merges the `compaction/*` SessionEventMap declaration so the
+// refreeze listener can narrow `compaction/end` and read its error field.
+import type {} from '@deepseek-ai/dsh-compaction/types'
+// Type-only: registers `agent/pre-step` on the Cordis event map for the
+// auto-recall waterfall.
+import type {} from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 // Type-only: resolves the `systemPrompt` service and the `AssembleContext`
 // slot the section text provider receives.
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -38,7 +47,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 // text provider can recover the session whose frozen snapshot it reads.
 import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import { buildMemorySectionText, buildNotesSectionText, renderMemoryIndex, type MemoryMode, type IndexEntry } from './policy.ts'
+import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, type MemoryMode, type IndexEntry } from './policy.ts'
 
 export { buildMemorySectionText, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE } from './policy.ts'
 export { buildNotesSectionText, PROJECT_NOTES_NOTE } from './policy.ts'
@@ -108,6 +117,12 @@ export interface MemoryConfig {
   notesAgentsPointer: boolean
   /** Max entries per generated notes file; defaults to `100`. */
   notesMaxEntriesPerFile: number
+  /** Append a fenced auto-recall block to each step's messages (BM25 over the store). Defaults to `false`. */
+  autoRecallEnabled: boolean
+  /** Max entries in one auto-recall fence; defaults to `5`. */
+  autoRecallLimit: number
+  /** Skip recall when the step's user text is shorter than this many characters. Defaults to `12`. */
+  autoRecallMinChars: number
 }
 
 /** Runtime schema for the `memory` settings namespace and plugin config. */
@@ -122,18 +137,49 @@ export const Config: z<MemoryConfig> = z.object({
   notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
   notesAgentsPointer: z.boolean().default(DEFAULT_NOTES_AGENTS_POINTER),
   notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
+  autoRecallEnabled: z.boolean().default(false),
+  autoRecallLimit: z.number().step(1).min(1).default(5),
+  autoRecallMinChars: z.number().step(1).min(1).default(12),
 })
 
-/** Render one scope's entries as a bulleted list under a `## <scope>` heading. */
-function renderScope(scope: MemoryScope, entries: readonly MemoryEntry[]): string {
+/**
+ * Render one scope's entries as a bulleted list under a `## <scope>` heading.
+ *
+ * Load-time defenses applied per line:
+ * - `redactBlocked`: scanner-violating content surfaces as `[BLOCKED: …]`.
+ * - conflict annotation: entries touched by a same-scope newer correction get
+ *   a short staleness marker so the model weighs them accordingly.
+ * @param scope - the heading label.
+ * @param entries - the (healthy, non-excluded) entries to render.
+ * @param conflicts - entry-id → status map from {@link annotateConflicts}.
+ */
+function renderScope(scope: MemoryScope, entries: readonly MemoryEntry[], conflicts?: ReadonlyMap<string, ConflictStatus>): string {
   if (entries.length === 0) return ''
-  const lines = entries.map(entry => `- ${entry.content}`)
+  const lines = entries.map(entry => {
+    let line = `- ${redactBlocked(entry.content)}`
+    const status = conflicts?.get(entry.id as string)
+    if (status === 'conflicting') line += ' (⚠ contradicts a newer correction — verify before trusting)'
+    else if (status === 'stale') line += ' (⚠ possibly outdated — a newer correction touches this topic)'
+    return line
+  })
   return `## ${scope}\n${lines.join('\n')}`
+}
+
+/** The note appended when soft-decayed entries were folded out of the view. */
+function staleNote(count: number): string {
+  const noun = count === 1 ? 'memory' : 'memories'
+  return `(${count} stale ${noun} hidden by soft decay — recall them via memory_search/memory_get to refresh)`
 }
 
 /**
  * Read a frozen memory-content snapshot from the store across the global,
  * project, and user scopes, joined and truncated to the character budget.
+ *
+ * Folding rules applied before rendering:
+ * - Soft-decayed entries (`staleSince` set) are hidden entirely and summarized
+ *   in a trailing count line — they remain searchable via tools.
+ * - Healthy entries are cross-checked against same-scope correction-category
+ *   entries ({@link annotateConflicts}); contradicted topics get inline markers.
  * @param memory - the live memory store.
  * @param charLimit - character budget; `0` yields no content.
  * @param exclude - optional predicate: entries it accepts are omitted (used to
@@ -143,12 +189,25 @@ function renderScope(scope: MemoryScope, entries: readonly MemoryEntry[]): strin
 export function readMemorySnapshot(memory: MemoryStore, charLimit: number, exclude?: (entry: MemoryEntry) => boolean): string {
   if (charLimit <= 0) return ''
   const parts: string[] = []
+  let hiddenStale = 0
   for (const scope of SNAPSHOT_SCOPES) {
-    const entries = exclude === undefined ? memory.list(scope) : memory.list(scope).filter(entry => !exclude(entry))
-    const rendered = renderScope(scope, entries)
+    const all = memory.list(scope)
+    hiddenStale += all.filter(entry => entry.staleSince !== undefined).length
+    const visible = all.filter(entry => entry.staleSince === undefined)
+    const filtered = exclude === undefined ? visible : visible.filter(entry => !exclude(entry))
+    if (filtered.length === 0) continue
+    const conflicts = annotateConflicts(filtered)
+    const rendered = renderScope(scope, filtered, conflicts.size > 0 ? conflicts : undefined)
     if (rendered.length > 0) parts.push(rendered)
   }
   let text = parts.join('\n\n')
+  if (hiddenStale > 0) {
+    const note = staleNote(hiddenStale)
+    // Keep the whole view within budget even with the note attached.
+    text = text.length + note.length + 2 > charLimit && text.length > 0
+      ? text
+      : text.length === 0 ? note : `${text}\n\n${note}`
+  }
   if (text.length > charLimit) {
     text = `${text.slice(0, charLimit)}\n…(memory truncated at ${charLimit} characters)`
   }
@@ -168,15 +227,22 @@ export function readMemorySnapshot(memory: MemoryStore, charLimit: number, exclu
 export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?: (entry: MemoryEntry) => boolean): string {
   if (charLimit <= 0) return ''
   const all = exclude === undefined ? memory.list() : memory.list().filter(entry => !exclude(entry))
-  const entries: IndexEntry[] = all.map(entry => ({
+  const hiddenStale = all.filter(entry => entry.staleSince !== undefined).length
+  const visible = all.filter(entry => entry.staleSince === undefined)
+  const entries: IndexEntry[] = visible.map(entry => ({
     id: entry.id as string,
     scope: entry.scope,
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
-    content: entry.content,
+    // Load-time guard: the index line shows a placeholder, never a payload.
+    content: redactBlocked(entry.content),
     updatedAt: entry.updatedAt,
   }))
-  return renderMemoryIndex(entries, charLimit)
+  let text = renderMemoryIndex(entries, charLimit)
+  if (hiddenStale > 0 && text.length > 0) {
+    text = `${text}\n…${staleNote(hiddenStale)}`
+  }
+  return text
 }
 
 /**
@@ -214,7 +280,8 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     return base !== undefined && base.length > 0 ? base : undefined
   }
 
-  ctx.on('session/created', (session: Session) => {
+  /** Freeze (or re-freeze) the per-session snapshot from live settings + store. */
+  const freezeFor = (session: Session): void => {
     const settings = current()
     const memory = ctx.get('memory')
     // The project-notes snapshot: rendering is synchronous AND reconciles
@@ -238,7 +305,55 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       index: readMemoryIndex(memory, charLimit, exclude),
       notes,
     })
+  }
+
+  ctx.on('session/created', freezeFor, { global: true })
+
+  // Compaction is the one sanctioned moment to break the KV-cache prefix —
+  // the prompt rebuilds anyway — so re-freeze here to surface memories that
+  // were learned mid-session (review/flush extraction) without paying the
+  // staleness for the rest of the session (Hermes-style boundary invalidation).
+  ctx.on('session/event', (session: Session, event) => {
+    if (event.type !== 'compaction/end') return
+    if (event.data.error !== undefined) return
+    try {
+      freezeFor(session)
+    } catch {
+      // Best-effort: keep serving the previous frozen snapshot on failure.
+    }
   }, { global: true })
+
+  // P1-11 step-level auto recall (opt-in): on every agent step, run a BM25
+  // search keyed on the step's user text and append a fenced
+  // `<recalled-memory>` message. The system prompt is untouched — the block
+  // rides in the logged user-message channel of this step only, so the
+  // KV-cache prefix stays stable. Synchronous store search; never throws into
+  // the waterfall (any failure falls through to `next()` unchanged).
+  ctx.on('agent/pre-step', async (payload, next) => {
+    try {
+      const settings = current()
+      if (!settings.autoRecallEnabled) return next()
+      const memory = ctx.get('memory')
+      if (memory === undefined) return next()
+      const query = payload.messages.map(userMessageText).join('\n').trim()
+      if (query.length < settings.autoRecallMinChars) return next()
+      const result = memory.search({ query, limit: settings.autoRecallLimit })
+      // Soft-decayed entries stay hidden until deliberately recalled again.
+      const hits = result.entries.filter(entry => entry.staleSince === undefined)
+      if (hits.length === 0) return next()
+      memory.markRecalled(hits.map(entry => entry.id))
+      const block = buildAutoRecallBlock(hits, AUTO_RECALL_CHAR_LIMIT)
+      if (block.length === 0) return next()
+      const recallMessage = createUserMessage({
+        content: [{ type: 'text', text: block }],
+        source: { kind: 'plugin', plugin: 'dsh-memory-context' },
+      })
+      return { kind: 'enter', messages: [...payload.messages, recallMessage] }
+    } catch {
+      // Recall must never break the step: fall through unchanged.
+      return next()
+    }
+  })
 
   ctx.effect(() => ctx.systemPrompt.section({
     name: SECTION_NAME,
@@ -264,4 +379,14 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       return buildNotesSectionText(snapshot?.notes.conventions ?? '', snapshot?.notes.pitfalls ?? '', settings.notesCharLimit)
     },
   }), 'memory-context.notes-section()')
+}
+
+/** Extract the concatenated text blocks of one incoming user message. */
+function userMessageText(message: unknown): string {
+  const content = (message as { content?: readonly { type?: string; text?: unknown }[] } | undefined)?.content
+  if (content === undefined || !Array.isArray(content)) return ''
+  return content
+    .filter(block => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => (block as { text: string }).text)
+    .join('\n')
 }

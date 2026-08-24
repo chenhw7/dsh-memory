@@ -200,6 +200,9 @@ The bundle owns three settings namespaces, each visible as its own card in Setti
 | `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
 | `notesAgentsPointer` | `true` | Maintain the managed pointer block in the repo's `AGENTS.md`. |
 | `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (oldest truncated). |
+| `autoRecallEnabled` | `false` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable. |
+| `autoRecallLimit` | `5` | Max entries in one auto-recall fence. |
+| `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters. |
 
 ### `memory-review` — extraction, dedup & decay
 
@@ -213,8 +216,12 @@ The bundle owns three settings namespaces, each visible as its own card in Setti
 | `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
 | `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
 | `judgeEnabled` | `true` | Run the LLM dedup judge on prefilter hits. When `false`, prefilter hits merge directly (cheaper, but may false-merge same-template different-topic pairs). |
-| `decayDays` | `30` | Auto-decay project-scoped entries not recalled within N days. `0` = disabled. Pinned, `global`, and `user` entries are never decayed. |
+| `decayDays` | `30` | Lifecycle policy for entries not recalled within N days. `0` = disabled. `project`-scoped entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
 | `pitfallStreakThreshold` | `2` | Consecutive same-signature tool failures that must occur (and then be resolved) before a pitfall entry is extracted into the notes files. |
+| `curatorEnabled` | `true` | Low-frequency curator pass: every `curatorEveryNSessions` session creations, the longest oversized entries are rewritten into concise one-liners by the extraction model (budget-gated). |
+| `curatorEveryNSessions` | `20` | Run the curator pass every N session creations. |
+| `curatorMaxEntries` | `5` | Max entries selected per curation pass (longest first). |
+| `curatorMinChars` | `400` | Only entries at least this long are selected for re-summarization. |
 
 ### `tool-memory` — model-facing tools
 

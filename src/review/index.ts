@@ -42,7 +42,8 @@ import {
   messageText,
 } from './accumulator.ts'
 import type { AccumulatorState, AccumulatorView } from './accumulator.ts'
-import { runFlushExtraction, runReviewExtraction, type ExtractionModelOverride } from './extract.ts'
+import { runFlushExtraction, runReviewExtraction, runCuration, type ExtractionModelOverride } from './extract.ts'
+import type { MemoryEntry } from '../types.ts'
 
 /** Cordis function-plugin name. */
 export const name = 'memory-review'
@@ -80,6 +81,14 @@ export interface Config {
   judgeEnabled?: boolean
   /** Consecutive same-signature tool failures required before a success emits a pitfall candidate. Defaults to 2. */
   pitfallStreakThreshold?: number
+  /** Enable the low-frequency curator pass that re-summarizes oversized entries. Defaults to `true`. */
+  curatorEnabled?: boolean
+  /** Run the curator pass every N session creations. Defaults to `20`. */
+  curatorEveryNSessions?: number
+  /** Max entries selected per curation pass (longest first). Defaults to `5`. */
+  curatorMaxEntries?: number
+  /** Only entries at least this long (chars) are selected for re-summarization. Defaults to `400`. */
+  curatorMinChars?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -92,6 +101,10 @@ export const Config: z<Config> = z.object({
   extractionBudget: z.number().step(1).min(0).default(20),
   judgeEnabled: z.boolean().default(true),
   pitfallStreakThreshold: z.number().step(1).min(1).default(2),
+  curatorEnabled: z.boolean().default(true),
+  curatorEveryNSessions: z.number().step(1).min(1).default(20),
+  curatorMaxEntries: z.number().step(1).min(1).default(5),
+  curatorMinChars: z.number().step(1).min(1).default(400),
 })
 
 /** Resolved config with every default materialized. */
@@ -104,6 +117,10 @@ interface ResolvedConfig {
   readonly extractionBudget: number
   readonly judgeEnabled: boolean
   readonly pitfallStreakThreshold: number
+  readonly curatorEnabled: boolean
+  readonly curatorEveryNSessions: number
+  readonly curatorMaxEntries: number
+  readonly curatorMinChars: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -124,6 +141,10 @@ function resolveConfig(config: Config): ResolvedConfig {
     extractionBudget: config.extractionBudget ?? 20,
     judgeEnabled: config.judgeEnabled ?? true,
     pitfallStreakThreshold: config.pitfallStreakThreshold ?? 2,
+    curatorEnabled: config.curatorEnabled ?? true,
+    curatorEveryNSessions: config.curatorEveryNSessions ?? 20,
+    curatorMaxEntries: config.curatorMaxEntries ?? 5,
+    curatorMinChars: config.curatorMinChars ?? 400,
   }
 }
 
@@ -292,9 +313,40 @@ export function apply(ctx: Context, config: Config = {}): void {
       // Best-effort: a janitor failure never blocks session creation.
     })
   }, { global: true })
+
+  // Curator pass: every N session creations, offer the longest oversized
+  // entries to the LLM for a concise rewrite (nanobot-style consolidation,
+  // bounded by the extraction budget). Fire-and-forget; never blocks
+  // session creation. Selection is deterministic: length desc, then age.
+  let sessionCount = 0
+  ctx.on('session/created', (session: Session) => {
+    sessionCount++
+    const cfg = resolved()
+    if (!cfg.curatorEnabled) return
+    if (sessionCount % cfg.curatorEveryNSessions !== 0) return
+    const memory = ctx.get('memory')
+    if (memory === undefined) return
+    const selected: MemoryEntry[] = memory.list()
+      .filter(entry => entry.content.length >= cfg.curatorMinChars)
+      .sort((a, b) => b.content.length - a.content.length || a.createdAt - b.createdAt)
+      .slice(0, cfg.curatorMaxEntries)
+    if (selected.length < 2) return
+    if (!checkBudget(session)) return
+    void runCuration(ctx, session, selected, cfg.extractionModel).catch(() => {
+      // Best-effort: curation failures never surface into session creation.
+    })
+  }, { global: true })
 }
 
-/** Read the projection snapshot and run one review extraction if the threshold is met. */
+/** Read the projection snapshot and run one review extraction if the threshold is met.
+ *
+ * Failure semantics: `runReviewExtraction` throws when an extraction call
+ * fails. The high-water mark is advanced ONLY after a successful drain, so a
+ * failed batch stays "unprocessed" and is retried on the next threshold
+ * crossing — re-storing already-saved entries is idempotent thanks to the
+ * dedup prefilter + LLM judge. The `agent/pre-step` listener wraps this call
+ * in try/catch, so the failure never blocks the step (§3.6 best-effort).
+ */
 async function maybeRunReview(
   ctx: Context,
   agent: Agent,

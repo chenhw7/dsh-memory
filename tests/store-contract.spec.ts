@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MemoryId, scanContent, validateProjectScope } from '../src/index.ts'
+import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 
@@ -14,6 +14,7 @@ class TestMemoryStore extends MemoryStore {
 
   override async add(input: AddMemoryInput): Promise<{ entry: MemoryEntry }> {
     validateProjectScope(input)
+    validateContent(input.content)
     const scan = scanContent(input.content)
     if (!scan.allowed) {
       throw new Error(`rejected: ${scan.reasons.join('; ')}`)
@@ -32,6 +33,9 @@ class TestMemoryStore extends MemoryStore {
     this.map.set(id, entry)
     return { entry }
   }
+
+  /** Recall tracking is optional: the base-class default is a no-op. */
+  override markRecalled(_ids: readonly string[]): void { /* no-op */ }
 
   override get(id: string): MemoryEntry | undefined {
     return this.map.get(id)
@@ -52,6 +56,7 @@ class TestMemoryStore extends MemoryStore {
     const existing = this.map.get(id)
     if (existing === undefined) return undefined
     const newContent = input.content ?? existing.content
+    validateContent(newContent)
     const scan = scanContent(newContent)
     if (!scan.allowed) {
       throw new Error(`rejected: ${scan.reasons.join('; ')}`)
@@ -150,6 +155,24 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
       await expect(
         store.add({ scope: 'project', content: 'x' } as AddMemoryInput),
       ).rejects.toThrow('project-scoped')
+    })
+
+    it('rejects empty content on add', async () => {
+      const store = makeStore()
+      await expect(store.add({ scope: 'global', content: '' })).rejects.toThrow('non-empty')
+    })
+
+    it('rejects whitespace-only content on add and update', async () => {
+      const store = makeStore()
+      await expect(store.add({ scope: 'global', content: '   ' })).rejects.toThrow('non-empty')
+      const { entry } = await store.add({ scope: 'global', content: 'real' })
+      await expect(store.update(entry.id, { content: '\n\t ' })).rejects.toThrow('non-empty')
+    })
+
+    it('markRecalled is a safe no-op for providers without recall tracking', async () => {
+      const store = makeStore()
+      expect(() => store.markRecalled(['any-id'])).not.toThrow()
+      expect(() => store.markRecalled([])).not.toThrow()
     })
 
     it('lists by scope', async () => {

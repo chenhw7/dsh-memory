@@ -80,23 +80,47 @@ export interface AccumulatorState {
 /** The wire payload (read-side projection) is the accumulator state itself. */
 export type AccumulatorView = AccumulatorState
 
-/** Keyword hits in user messages: explicit instruction to remember. */
+/**
+ * Keyword hits in user messages: explicit instruction to remember. The
+ * collection layer only widens the funnel — admission conservatism (explicit
+ * demand or repeated theme) is enforced by the extraction prompt, so a
+ * missed pattern here is free loss while a false hit is cheap.
+ */
 const KEYWORD_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[] = [
+  // Chinese explicit-remember intents.
   { name: 'keyword', re: /记住/ },
   { name: 'keyword', re: /别忘了/ },
   { name: 'keyword', re: /以后都/ },
+  { name: 'keyword', re: /记下来/ },
+  { name: 'keyword', re: /记一下/ },
+  { name: 'keyword', re: /帮我记/ },
+  // English explicit-remember intents.
   { name: 'keyword', re: /remember\s+that/i },
   { name: 'keyword', re: /don'?t\s+forget/i },
   { name: 'keyword', re: /from\s+now\s+on/i },
+  { name: 'keyword', re: /keep\s+in\s+mind/i },
+  { name: 'keyword', re: /make\s+a\s+note/i },
+  { name: 'keyword', re: /for\s+the\s+record/i },
 ]
 
-/** Correction signals in user messages: the user revises a prior statement. */
+/**
+ * Correction signals in user messages: the user revises a prior statement.
+ * Same funnel philosophy as the keyword patterns above.
+ */
 const CORRECTION_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[] = [
+  // Chinese revisions of a prior statement.
   { name: 'correction', re: /不对/ },
   { name: 'correction', re: /不要/ },
+  { name: 'correction', re: /其实是?/ },
+  { name: 'correction', re: /应该是/ },
+  { name: 'correction', re: /搞错了/ },
+  { name: 'correction', re: /说错了/ },
+  // English revisions of a prior statement.
   { name: 'correction', re: /no,?\s+i\s+said/i },
   { name: 'correction', re: /that'?s\s+wrong/i },
   { name: 'correction', re: /actually/i },
+  { name: 'correction', re: /i\s+meant/i },
+  { name: 'correction', re: /no,?\s+it'?s/i },
 ]
 
 /** Cap on concurrently open tool calls retained in the projection state. */

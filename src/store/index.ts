@@ -15,7 +15,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { MemoryStore, MemoryId, AuditId, scanContent, validateProjectScope } from '../index.ts'
+import { MemoryStore, MemoryId, AuditId, scanContent, validateProjectScope, validateContent } from '../index.ts'
+import { Bm25Index, tokenizeForSearch } from './bm25.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -40,6 +41,7 @@ const memoryEntrySchema = z.object({
   updatedAt: z.number(),
   pinned: z.boolean().optional(),
   lastRecalledAt: z.number().optional(),
+  staleSince: z.number().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
@@ -49,9 +51,10 @@ const auditEntrySchema = z.object({
   entryId: z.string().min(1),
   scope: z.enum(['global', 'project', 'user']),
   category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
-  source: z.enum(['tool', 'review', 'flush', 'ui']),
+  source: z.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
   sessionId: z.string().optional(),
   ts: z.number(),
+  seq: z.number().optional(),
   contentPreview: z.string(),
 })
 
@@ -84,35 +87,18 @@ type AuditTable = KvTable<AuditId, AuditEntry>
 const DEFAULT_AUDIT_CAP = 200
 
 /**
- * Tokenize a query string for lexical search. Splits on word boundaries for
- * Latin script; CJK characters are matched per-character (each is a token).
- * Tokens are case-folded; empty tokens are dropped.
+ * Deterministic audit ordering: newest/oldest by `ts`, ties broken by the
+ * monotonic append `seq`, then by id for records written before `seq` existed.
+ * Ids are random UUIDs, so without `seq` a burst of writes inside one
+ * millisecond would order non-deterministically.
  */
-function tokenizeQuery(query: string): string[] {
-  const lowered = query.toLowerCase()
-  const tokens: string[] = []
-  // Match runs of word characters (Latin) OR single CJK characters.
-  // CJK ranges: Hiragana, Katakana, CJK Unified, CJK Extension A, Hangul.
-  const re = /[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/g
-  let match: RegExpExecArray | null
-  while ((match = re.exec(lowered)) !== null) {
-    tokens.push(match[0])
-  }
-  return tokens
+function compareAuditDesc(a: AuditEntry, b: AuditEntry): number {
+  return b.ts - a.ts || (b.seq ?? 0) - (a.seq ?? 0) || (a.id < b.id ? -1 : 1)
 }
 
-/**
- * Count how many query tokens appear in the entry content (case-insensitive).
- * Returns 0 when no tokens match (the entry should be filtered out).
- */
-function tokenHitCount(content: string, tokens: readonly string[]): number {
-  if (tokens.length === 0) return 0
-  const lowered = content.toLowerCase()
-  let hits = 0
-  for (const token of tokens) {
-    if (lowered.includes(token)) hits++
-  }
-  return hits
+/** Ascending counterpart of {@link compareAuditDesc} (append order). */
+function compareAuditAsc(a: AuditEntry, b: AuditEntry): number {
+  return a.ts - b.ts || (a.seq ?? 0) - (b.seq ?? 0) || (a.id < b.id ? -1 : 1)
 }
 
 /** Cordis plugin name. */
@@ -146,6 +132,8 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly entries: EntriesTable
   private readonly audit: AuditTable
   private readonly auditCap: number
+  /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
+  private auditSeq: number | undefined
 
   constructor(entries: EntriesTable, audit: AuditTable, auditCap: number = DEFAULT_AUDIT_CAP) {
     super()
@@ -154,8 +142,20 @@ export class DomainMemoryStore extends MemoryStore {
     this.auditCap = auditCap
   }
 
+  /** Next monotonic audit sequence number (survives reopen via the medium). */
+  private nextAuditSeq(): number {
+    if (this.auditSeq === undefined) {
+      let max = 0
+      for (const [, record] of this.audit.entries()) max = Math.max(max, record.seq ?? 0)
+      this.auditSeq = max
+    }
+    this.auditSeq += 1
+    return this.auditSeq
+  }
+
   override async add(input: AddMemoryInput): Promise<AddMemoryResult> {
     validateProjectScope(input)
+    validateContent(input.content)
     const scan = scanContent(input.content)
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
@@ -194,6 +194,7 @@ export class DomainMemoryStore extends MemoryStore {
     const existing = this.entries.get(id)
     if (existing === undefined) return undefined
     const newContent = input.content ?? existing.content
+    validateContent(newContent)
     const scan = scanContent(newContent)
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
@@ -221,43 +222,69 @@ export class DomainMemoryStore extends MemoryStore {
 
   override search(query: MemorySearchQuery): SearchMemoryResult {
     const limit = query.limit ?? 50
-    const tokens = query.query !== undefined && query.query.length > 0
-      ? tokenizeQuery(query.query)
-      : []
-    const scored: { entry: MemoryEntry; hits: number }[] = []
+    // Structured filters first; scoring runs over the surviving candidates.
+    const candidates: MemoryEntry[] = []
     for (const [, entry] of this.entries.entries()) {
       if (query.scope !== undefined && entry.scope !== query.scope) continue
       if (query.category !== undefined && entry.category !== query.category) continue
       if (query.projectName !== undefined && entry.projectName !== query.projectName) continue
-      if (tokens.length > 0) {
-        const hits = tokenHitCount(entry.content, tokens)
-        if (hits === 0) continue
-        scored.push({ entry, hits })
-      } else {
-        scored.push({ entry, hits: 0 })
-      }
+      candidates.push(entry)
     }
-    // Rank by token-hit count (desc), then by recency (updatedAt desc).
-    scored.sort((a, b) => b.hits - a.hits || b.entry.updatedAt - a.entry.updatedAt)
-    let all = scored.map(s => s.entry)
+    const queryTokens = query.query !== undefined && query.query.length > 0 ? tokenizeForSearch(query.query) : []
+    let ranked: { entry: MemoryEntry; score: number }[]
+    if (queryTokens.length > 0) {
+      // BM25 over the filtered set: relevance-weighted (IDF × saturation),
+      // CJK bigrams for word-level Chinese precision. OR semantics preserved —
+      // any shared term scores above zero and keeps the document in play.
+      const index = new Bm25Index(candidates.map(entry => tokenizeForSearch(entry.content)))
+      const scores = index.scores(queryTokens)
+      ranked = []
+      candidates.forEach((entry, i) => {
+        const score = scores[i] ?? 0
+        if (score > 0) ranked.push({ entry, score })
+      })
+    } else {
+      ranked = candidates.map(entry => ({ entry, score: 0 }))
+    }
+    // Rank by BM25 relevance (desc), then pinned entries (desc), then by
+    // recency (updatedAt desc). Pinned entries surface early even among
+    // equal-relevance matches — pin means "the user wants this remembered".
+    const pinOf = (entry: MemoryEntry): number => entry.pinned === true ? 1 : 0
+    ranked.sort((a, b) => b.score - a.score || pinOf(b.entry) - pinOf(a.entry) || b.entry.updatedAt - a.entry.updatedAt)
+    let all = ranked.map(r => r.entry)
     const total = all.length
     all = limit > 0 ? all.slice(0, limit) : all
     // Fire-and-forget: stamp the returned entries with a recall timestamp
     // so the janitor can decay entries that have not been recalled recently.
-    void this.markRecalled(all)
+    void this.stampRecalled(all)
     return { entries: all, total }
   }
 
   /**
-   * Stamp returned entries with a recall timestamp (fire-and-forget). Updates
+   * Stamp entries with a recall timestamp (fire-and-forget). Updates
    * `lastRecalledAt` on each entry so the janitor can track staleness.
+   * `updatedAt` is intentionally left untouched: recalling is not mutating.
    */
-  private async markRecalled(entries: readonly MemoryEntry[]): Promise<void> {
+  private async stampRecalled(entries: readonly MemoryEntry[]): Promise<void> {
     const now = Date.now()
     for (const entry of entries) {
-      const updated = { ...entry, lastRecalledAt: now }
-      await this.entries.put(entry.id, updated)
+      // Recall proves usefulness: it refreshes lastRecalledAt AND clears a
+      // soft-decay stamp, bringing the entry back into injection surfaces.
+      if (entry.lastRecalledAt === now && entry.staleSince === undefined) continue
+      const { staleSince: _cleared, ...rest } = entry
+      await this.entries.put(entry.id, { ...rest, lastRecalledAt: now })
     }
+  }
+
+  /**
+   * Record that the caller actually surfaced the given entries to the model
+   * (e.g. `memory_get` / `memory_list` tool results). Fire-and-forget; never
+   * throws into the caller. The base-class default is a no-op so providers
+   * without recall tracking stay contract-conformant.
+   */
+  override markRecalled(ids: readonly string[]): void {
+    if (ids.length === 0) return
+    void this.stampRecalled(ids.map(id => this.entries.get(id as MemoryId)).filter((e): e is MemoryEntry => e !== undefined))
   }
 
   override async pin(id: MemoryId): Promise<MemoryEntry | undefined> {
@@ -276,26 +303,40 @@ export class DomainMemoryStore extends MemoryStore {
     return updated
   }
 
-  override async janitor(decayDays: number): Promise<number> {
+  /**
+   * Run the janitor pass with the lifecycle's two-tier policy:
+   * - `project` entries overdue by `decayDays` (pinned exempt) are REMOVED
+   *   (hard decay, audited).
+   * - `global`/`user` entries overdue (pinned exempt) are soft-decayed: the
+   *   first overdue pass stamps `staleSince`, which hides them from injection
+   *   surfaces while keeping them searchable; a later recall clears the stamp.
+   * @param decayDays - days without recall before the policy applies.
+   * @param now - evaluation clock; defaults to wall time (tests inject fixed clocks).
+   * @returns the number of project entries removed.
+   */
+  override async janitor(decayDays: number, now: number = Date.now()): Promise<number> {
     if (decayDays <= 0) return 0
-    const now = Date.now()
     const decayMs = decayDays * 24 * 60 * 60 * 1000
     let removed = 0
     for (const [, entry] of this.entries.entries()) {
-      // Never decay pinned, global, or user entries.
       if (entry.pinned === true) continue
-      if (entry.scope === 'global' || entry.scope === 'user') continue
-      // Only project-scoped entries are candidates for decay.
-      if (entry.scope !== 'project') continue
       // Use lastRecalledAt if available, otherwise fall back to createdAt.
       const lastActive = entry.lastRecalledAt ?? entry.createdAt
       if (now - lastActive < decayMs) continue
-      // Decay: remove and log to the audit store.
-      const didRemove = await this.entries.delete(entry.id)
-      if (didRemove) {
-        removed++
-        await this.appendAudit('remove', entry.id, entry, undefined, undefined)
+      if (entry.scope === 'project') {
+        // Hard decay: remove and log to the audit store.
+        const didRemove = await this.entries.delete(entry.id)
+        if (didRemove) {
+          removed++
+          await this.appendAudit('remove', entry.id, entry, 'janitor', undefined)
+        }
+        continue
       }
+      // global/user: soft decay only — stamp once, never auto-delete.
+      if (entry.staleSince !== undefined) continue
+      const stamped: MemoryEntry = { ...entry, staleSince: now }
+      await this.entries.put(entry.id, stamped)
+      await this.appendAudit('update', entry.id, stamped, 'janitor', undefined)
     }
     return removed
   }
@@ -307,17 +348,18 @@ export class DomainMemoryStore extends MemoryStore {
   listAudit(): readonly AuditEntry[] {
     const all: AuditEntry[] = []
     for (const [, record] of this.audit.entries()) all.push(record)
-    all.sort((a, b) => b.ts - a.ts || (a.id > b.id ? -1 : 1))
+    all.sort(compareAuditDesc)
     return all
   }
 
   override health(): MemoryHealth {
-    let global = 0, project = 0, user = 0, pinned = 0
+    let global = 0, project = 0, user = 0, pinned = 0, stale = 0
     for (const [, entry] of this.entries.entries()) {
       if (entry.scope === 'global') global++
       else if (entry.scope === 'project') project++
       else user++
       if (entry.pinned === true) pinned++
+      if (entry.staleSince !== undefined) stale++
     }
     const audit = this.listAudit()
     const lastActivityTs = audit.length > 0 ? audit[0]!.ts : undefined
@@ -328,6 +370,7 @@ export class DomainMemoryStore extends MemoryStore {
       byScope: { global, project, user },
       pinned,
       auditRecords: audit.length,
+      stale,
       ...lastActivityTs !== undefined ? { lastActivityTs } : {},
       ...lastExtractionTs !== undefined ? { lastExtractionTs } : {},
     }
@@ -336,7 +379,7 @@ export class DomainMemoryStore extends MemoryStore {
   override exportAuditLog(): readonly AuditEntry[] {
     const all: AuditEntry[] = []
     for (const [, record] of this.audit.entries()) all.push(record)
-    all.sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+    all.sort(compareAuditAsc)
     return all
   }
 
@@ -362,6 +405,7 @@ export class DomainMemoryStore extends MemoryStore {
         source: source ?? 'tool',
         ...sessionId !== undefined ? { sessionId } : {},
         ts: Date.now(),
+        seq: this.nextAuditSeq(),
         contentPreview: preview(entry.content),
       }
       await this.audit.put(record.id, record)
@@ -376,7 +420,7 @@ export class DomainMemoryStore extends MemoryStore {
     if (this.audit.size <= this.auditCap) return
     const all: AuditEntry[] = []
     for (const [, record] of this.audit.entries()) all.push(record)
-    all.sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1))
+    all.sort(compareAuditAsc)
     const excess = all.length - this.auditCap
     for (let i = 0; i < excess; i++) {
       await this.audit.delete(all[i]!.id)

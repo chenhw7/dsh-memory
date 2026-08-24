@@ -17,9 +17,12 @@
  * @module @chenhw7/dsh-memory/context/conflict
  */
 
-import type { MemoryEntry } from '../types.ts'
+import type { MemoryEntry, MemoryCategory } from '../types.ts'
 import { tokenize } from '../review/dedup.ts'
 import { jaccardSimilarity } from '../review/dedup.ts'
+
+/** The minimal entry shape the conflict machinery needs. */
+type ConflictEntry = Pick<MemoryEntry, 'id' | 'content' | 'lastRecalledAt' | 'category'>
 
 /** The conflict status of one stored entry relative to current-session facts. */
 export type ConflictStatus = 'fresh' | 'stale' | 'conflicting'
@@ -62,7 +65,7 @@ const CONTRADICTION_SIGNALS = [
  * `conflicting`.
  */
 export function detectConflict(
-  entry: Pick<MemoryEntry, 'id' | 'content' | 'lastRecalledAt'>,
+  entry: ConflictEntry,
   facts: readonly SessionFact[],
 ): ConflictResult {
   const entryTokens = tokenize(entry.content)
@@ -100,11 +103,41 @@ export function detectConflict(
  * @returns one conflict result per entry.
  */
 export function detectConflicts(
-  entries: readonly Pick<MemoryEntry, 'id' | 'content' | 'lastRecalledAt'>[],
+  entries: readonly ConflictEntry[],
   facts: readonly SessionFact[],
 ): readonly ConflictResult[] {
   if (facts.length === 0) return []
   return entries
     .map(entry => detectConflict(entry, facts))
     .filter(result => result.status !== 'fresh')
+}
+
+/**
+ * Wire the pure conflict detector into snapshot assembly (§3.11, LLM-free
+ * variant): within one scope, correction-category entries act as the "newer
+ * statements" and every other entry is checked against them. An older entry
+ * sharing significant token overlap with a correction is flagged
+ * `conflicting` (explicit contradiction signals) or `stale` (same topic only),
+ * so the injection view can mark it instead of silently serving both sides.
+ *
+ * Deterministic and synchronous — runs once at freeze time, so the annotated
+ * text stays KV-cache-stable for the whole session.
+ * @param entries - one scope's healthy entries (staleness/exclusion already applied).
+ * @returns entry-id → status for every flagged entry (corrections themselves are never flagged).
+ */
+export function annotateConflicts(entries: readonly ConflictEntry[]): ReadonlyMap<string, ConflictStatus> {
+  const flagged = new Map<string, ConflictStatus>()
+  if (entries.length < 2) return flagged
+  // Corrections with an explicit category drive the check; untagged text is
+  // never treated as a fact source (too noisy at zero-LLM confidence).
+  const facts: SessionFact[] = entries
+    .filter(entry => entry.category === 'correction')
+    .map(entry => ({ text: entry.content, isCorrection: true }))
+  if (facts.length === 0) return flagged
+  for (const entry of entries) {
+    if (entry.category === 'correction') continue
+    const result = detectConflict(entry, facts)
+    if (result.status !== 'fresh') flagged.set(entry.id as string, result.status)
+  }
+  return flagged
 }

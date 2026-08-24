@@ -26,7 +26,7 @@ export type MemoryCategory =
   | 'procedure'
 
 /** Who triggered a write to the memory store (recorded in the audit trail). */
-export type AuditSource = 'tool' | 'review' | 'flush' | 'ui'
+export type AuditSource = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
 
 /** The operation kind recorded in one audit entry. */
 export type AuditOp = 'add' | 'update' | 'remove'
@@ -51,6 +51,13 @@ export interface MemoryEntry {
   readonly pinned?: boolean | undefined
   /** Unix epoch ms when this entry was last returned by a search/get; absent if never recalled. */
   readonly lastRecalledAt?: number | undefined
+  /**
+   * Soft-decay stamp (§ lifecycle): epoch ms when the janitor marked this
+   * `global`/`user` entry as stale (overdue without recall). Stale entries
+   * drop out of injection surfaces but stay searchable and recoverable —
+   * being recalled again clears the stamp. Absent on healthy entries.
+   */
+  readonly staleSince?: number | undefined
 }
 
 /** Input for creating a new memory entry. */
@@ -135,6 +142,13 @@ export interface AuditEntry {
   readonly sessionId?: string | undefined
   /** Unix epoch milliseconds when the audit record was appended. */
   readonly ts: number
+  /**
+   * Monotonic per-provider sequence number, assigned in append order. Breaks
+   * same-millisecond timestamp ties deterministically (ids are random UUIDs).
+   * Absent on records written before this field existed; ordering falls back
+   * to id comparison for such records.
+   */
+  readonly seq?: number | undefined
   /** First ~100 chars of the mutated content, scanner-clean. */
   readonly contentPreview: string
 }
@@ -149,6 +163,8 @@ export interface MemoryHealth {
   readonly pinned: number
   /** Total audit records. */
   readonly auditRecords: number
+  /** Entries currently soft-decayed (`staleSince` set) and hidden from injection. */
+  readonly stale?: number | undefined
   /** Timestamp of the most recent audit record, or undefined when the audit table is empty. */
   readonly lastActivityTs?: number | undefined
   /** Timestamp of the most recent extraction-sourced audit record, or undefined. */

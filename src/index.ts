@@ -123,15 +123,27 @@ export abstract class MemoryStore {
   abstract unpin(id: MemoryId): Promise<MemoryEntry | undefined>
 
   /**
-   * Run the janitor pass: decay stale entries per the lifecycle policy (§3.5).
-   * Pinned entries and `global`/`user`-scoped entries are never decayed.
-   * `project`-scoped entries whose `lastRecalledAt` is older than the decay
-   * threshold (or that have never been recalled and whose `createdAt` is older)
-   * are removed. Every action is recorded in the audit store.
-   * @param decayDays - entries not recalled within this many days are decayed.
-   * @returns the number of entries removed.
+   * Record that the caller surfaced the given entries to the model through a
+   * read path (`memory_get`, `memory_list`), stamping `lastRecalledAt` so the
+   * janitor can track staleness. Fire-and-forget and best-effort: the default
+   * implementation is a no-op, so providers without recall tracking remain
+   * contract-conformant and callers never need to handle failures.
+   * @param ids - The entry ids that were recalled.
    */
-  abstract janitor(decayDays: number): Promise<number>
+  markRecalled(ids: readonly string[]): void { /* default no-op */ }
+
+  /**
+   * Run the janitor pass with the lifecycle's two-tier policy (§3.5):
+   * project-scoped entries overdue by `decayDays` are removed (hard decay,
+   * pinned exempt); overdue `global`/`user` entries are soft-decayed — the
+   * first overdue pass stamps `staleSince` so injection surfaces hide them
+   * while they stay searchable, and a later recall clears the stamp.
+   * Every action is recorded in the audit store.
+   * @param decayDays - entries not recalled within this many days are decayed.
+   * @param now - evaluation clock; implementations default to wall time.
+   * @returns the number of entries removed (hard-decayed).
+   */
+  abstract janitor(decayDays: number, now?: number): Promise<number>
 
   /**
    * Return a health snapshot of the store: entry counts by scope, pinned
@@ -155,6 +167,20 @@ export abstract class MemoryStore {
 export function validateProjectScope(input: AddMemoryInput): void {
   if (input.scope === 'project' && (!input.projectName || input.projectName.trim().length === 0)) {
     throw new Error('project-scoped memory requires a projectName')
+  }
+}
+
+/**
+ * Validate that memory content is present and non-blank. Runs at the tool
+ * boundary (precise, model-readable error before any scan or write) and
+ * inside the store contract as defense-in-depth.
+ * @param content - The content to validate; `undefined` means "not supplied"
+ *   (used by update paths where content is optional).
+ * @throws when the content is absent, empty, or whitespace-only.
+ */
+export function validateContent(content: string | undefined): void {
+  if (content === undefined || content.trim().length === 0) {
+    throw new Error('memory content must be a non-empty string')
   }
 }
 

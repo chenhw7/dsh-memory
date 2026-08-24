@@ -14,6 +14,9 @@ lib/
 .env.*
 !.env.example
 
+# Machine-local profile backups (never commit host-specific manifests)
+.profile-backup*/
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -21,7 +21,7 @@ import type {
   MemoryScope,
   MemorySearchQuery,
 } from '../types.ts'
-import { scanContent, validateProjectScope } from '../index.ts'
+import { scanContent, validateProjectScope, validateContent } from '../index.ts'
 
 export const name = 'tool-memory'
 export const inject = ['tools']
@@ -60,13 +60,14 @@ interface EntryJson {
   readonly updatedAt: number
   readonly category?: MemoryCategory
   readonly projectName?: string
+  readonly stale?: boolean
 }
 
 /**
  * Project one {@link MemoryEntry} to the model-facing wire shape: the branded
- * id serializes as a plain string, and optional fields stay optional.
- * @param entry - the store entry.
- * @returns the JSON-serializable projection.
+ * id serializes as a plain string, and optional fields stay optional. A
+ * soft-decay stamp surfaces as `stale: true` so the model knows the entry is
+ * hidden from standing injections and may be outdated.
  */
 function toEntryJson(entry: MemoryEntry): EntryJson {
   return {
@@ -77,6 +78,7 @@ function toEntryJson(entry: MemoryEntry): EntryJson {
     updatedAt: entry.updatedAt,
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
+    ...entry.staleSince !== undefined ? { stale: true } : {},
   }
 }
 
@@ -232,6 +234,7 @@ export function apply(ctx: Context, config: Config): void {
                 projectName: { type: 'string' },
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
+                stale: { type: 'boolean' },
               },
             },
           },
@@ -321,6 +324,7 @@ export function apply(ctx: Context, config: Config): void {
               projectName: { type: 'string' },
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
+              stale: { type: 'boolean' },
             },
           },
         },
@@ -349,6 +353,9 @@ export function apply(ctx: Context, config: Config): void {
       // Project scope needs a projectName; the store would reject it too, but
       // failing here gives a precise error before any scan or write.
       validateProjectScope(input)
+      // Empty/blank content is a caller bug: fail with a precise error before
+      // any scan or write.
+      validateContent(input.content)
       // Scan at the tool boundary so a rejected payload never reaches the
       // store. The store contract re-scans as defense-in-depth.
       const scan = scanContent(input.content)
@@ -399,6 +406,7 @@ export function apply(ctx: Context, config: Config): void {
               projectName: { type: 'string' },
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
+              stale: { type: 'boolean' },
             },
           },
           found: { type: 'boolean', required: true },
@@ -421,8 +429,12 @@ export function apply(ctx: Context, config: Config): void {
       if (args.content === undefined && args.category === undefined) {
         throw new Error('memory_replace requires at least one of `content` or `category`')
       }
-      // Scan new content at the tool boundary; the store re-scans as well.
+      // Empty/blank replacement content is a caller bug: fail with a precise
+      // error before any scan or write. Content itself stays optional
+      // (category-only updates are legal).
       if (args.content !== undefined) {
+        validateContent(args.content)
+        // Scan new content at the tool boundary; the store re-scans as well.
         const scan = scanContent(args.content)
         if (!scan.allowed) {
           throw new Error(`content rejected: ${scan.reasons.join('; ')}`)
@@ -523,6 +535,7 @@ export function apply(ctx: Context, config: Config): void {
                 projectName: { type: 'string' },
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
+                stale: { type: 'boolean' },
               },
             },
           },
@@ -549,6 +562,9 @@ export function apply(ctx: Context, config: Config): void {
       const offset = args.offset ?? 0
       const limit = args.limit ?? defaultLimit()
       const paged = limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset)
+      // Only the returned page counts as recalled — browsing one page should
+      // not refresh the staleness of entries the model never saw.
+      store.markRecalled(paged.map(entry => entry.id))
       return {
         entries: paged.map(toEntryJson),
         total,
@@ -592,6 +608,7 @@ export function apply(ctx: Context, config: Config): void {
               projectName: { type: 'string' },
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
+              stale: { type: 'boolean' },
             },
           },
           found: { type: 'boolean', required: true },
@@ -615,6 +632,9 @@ export function apply(ctx: Context, config: Config): void {
       if (entry === undefined) {
         return { found: false }
       }
+      // Reading counts as recalling: stamp lastRecalledAt (fire-and-forget,
+      // best-effort) so the janitor does not decay entries the model reads.
+      store.markRecalled([entry.id])
       return { entry: toEntryJson(entry), found: true }
     },
     presentCall: args => ({

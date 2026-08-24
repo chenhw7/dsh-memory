@@ -285,6 +285,48 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       expect(updated!.lastRecalledAt).toBeTypeOf('number')
     })
 
+    it('memory_get-style markRecalled stamps lastRecalledAt without touching updatedAt', async () => {
+      const { entry } = await store.add({ scope: 'global', content: 'read-path recall fact' })
+      const before = store.get(entry.id)!
+
+      store.markRecalled([entry.id])
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      const updated = store.get(entry.id)!
+      expect(updated.lastRecalledAt).toBeTypeOf('number')
+      // Recalling is not mutating: updatedAt stays untouched.
+      expect(updated.updatedAt).toBe(before.updatedAt)
+    })
+
+    it('markRecalled ignores absent ids', async () => {
+      expect(() => store.markRecalled([MemoryId('nonexistent') as never])).not.toThrow()
+      expect(() => store.markRecalled([])).not.toThrow()
+    })
+
+    it('pinned entries rank above equally-relevant unpinned entries', async () => {
+      const plain = await store.add({ scope: 'global', content: 'alpha deployment note' })
+      const favored = await store.add({ scope: 'global', content: 'alpha release convention' })
+      await store.pin(favored.entry.id)
+
+      // One shared token ("alpha") → equal hit counts; pinned must come first
+      // even though the plain entry is more recent.
+      const result = store.search({ query: 'alpha' })
+      expect(result.total).toBe(2)
+      expect(result.entries[0]!.id).toBe(favored.entry.id)
+      expect(result.entries[1]!.id).toBe(plain.entry.id)
+      // Let the search's fire-and-forget recall stamps land before disposal.
+      await new Promise(resolve => setTimeout(resolve, 50))
+    })
+
+    it('rejects empty and whitespace-only content at the real store boundary', async () => {
+      await expect(store.add({ scope: 'global', content: '' })).rejects.toThrow('non-empty')
+      await expect(store.add({ scope: 'global', content: '  \n\t' })).rejects.toThrow('non-empty')
+      const { entry } = await store.add({ scope: 'global', content: 'keep' })
+      await expect(store.update(entry.id, { content: '' })).rejects.toThrow('non-empty')
+      // Category-only update remains legal.
+      await expect(store.update(entry.id, { category: 'insight' })).resolves.toBeDefined()
+    })
+
     it('janitor decays stale project entries but not pinned/global/user', async () => {
       // Add a stale project entry (createdAt far in the past, never recalled).
       const staleProject = await store.add({ scope: 'project', content: 'old project fact', projectName: 'demo' })
@@ -341,6 +383,71 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       // No decay expected with fresh entries.
       await store.janitor(30)
       expect(store.listAudit().length).toBe(auditBefore)
+    })
+
+    it('janitor hard-decays overdue project entries when the injected clock passes them', async () => {
+      const { entry } = await store.add({ scope: 'project', content: 'aged fact', projectName: 'demo' })
+      const future = Date.now() + 31 * 24 * 60 * 60 * 1000
+      const removed = await store.janitor(30, future)
+      expect(removed).toBe(1)
+      expect(store.get(entry.id)).toBeUndefined()
+      // The removal is audited with the janitor source.
+      const removal = store.listAudit().find(r => r.entryId === entry.id)
+      expect(removal?.op).toBe('remove')
+      expect(removal?.source).toBe('janitor')
+    })
+
+    it('overdue global/user entries are soft-decayed (stamped), never removed', async () => {
+      const g = await store.add({ scope: 'global', content: 'global fact' })
+      const u = await store.add({ scope: 'user', content: 'user fact' })
+      const future = Date.now() + 31 * 24 * 60 * 60 * 1000
+      const removed = await store.janitor(30, future)
+      expect(removed).toBe(0)
+      const gAfter = store.get(g.entry.id)!
+      const uAfter = store.get(u.entry.id)!
+      expect(gAfter.staleSince).toBeTypeOf('number')
+      expect(uAfter.staleSince).toBeTypeOf('number')
+      // Stamping is an audited janitor update.
+      const stamp = store.listAudit().find(r => r.entryId === g.entry.id && r.source === 'janitor')
+      expect(stamp?.op).toBe('update')
+    })
+
+    it('a second overdue pass does not restamp; pinning exempts entries', async () => {
+      const g = await store.add({ scope: 'global', content: 'stable global fact' })
+      const pinned = await store.add({ scope: 'user', content: 'pinned user fact' })
+      await store.pin(pinned.entry.id)
+      const future = Date.now() + 400 * 24 * 60 * 60 * 1000
+      await store.janitor(30, future)
+      const firstStamp = store.get(g.entry.id)!.staleSince!
+      await store.janitor(30, future + 10_000)
+      expect(store.get(g.entry.id)!.staleSince).toBe(firstStamp)
+      expect(store.get(pinned.entry.id)!.staleSince).toBeUndefined()
+    })
+
+    it('recall via markRecalled clears the soft-decay stamp', async () => {
+      const g = await store.add({ scope: 'global', content: 'revived fact' })
+      const future = Date.now() + 31 * 24 * 60 * 60 * 1000
+      await store.janitor(30, future)
+      expect(store.get(g.entry.id)!.staleSince).toBeDefined()
+
+      store.markRecalled([g.entry.id])
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      const revived = store.get(g.entry.id)!
+      expect(revived.staleSince).toBeUndefined()
+      expect(revived.lastRecalledAt).toBeTypeOf('number')
+    })
+
+    it('health() reports the stale count', async () => {
+      const keep = await store.add({ scope: 'global', content: 'pinned fact survives' })
+      await store.pin(keep.entry.id)
+      const doomed = await store.add({ scope: 'global', content: 'doomed fact' })
+      const future = Date.now() + 31 * 24 * 60 * 60 * 1000
+      await store.janitor(30, future)
+      const h = store.health()
+      expect(h.stale).toBe(1)
+      expect(h.totalEntries).toBe(2)
+      expect(store.get(doomed.entry.id)).toBeDefined()
     })
   })
 

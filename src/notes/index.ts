@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import path from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { scanContent } from '../scanner.ts'
 import type { MemoryStore } from '../index.ts'
 import { isRenderedEntry } from './scope.ts'
 import { renderConventions, renderPitfalls } from './render.ts'
@@ -123,6 +124,14 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
       const conventions: import('../types.ts').MemoryEntry[] = []
       const pitfalls: import('../types.ts').MemoryEntry[] = []
       for (const entry of memory.list()) {
+        // Load-time guard: entries that fail the scanner never reach the
+        // exported files (which feed both git and future injections). Unlike
+        // the prompt surfaces there is no placeholder here — an omitted
+        // section entry is simply absent; the store keeps the original for
+        // user inspection and removal.
+        if (!scanContent(entry.content).allowed) continue
+        // Soft-decayed entries drop out of every standing view, files included.
+        if (entry.staleSince !== undefined) continue
         const kind = isRenderedEntry(entry, projectName)
         if (kind === 'conventions') conventions.push(entry)
         else if (kind === 'pitfalls') pitfalls.push(entry)

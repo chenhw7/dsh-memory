@@ -100,6 +100,19 @@ describe('mergeContent', () => {
     const merged = mergeContent('use pnpm', 'never commit lockfile')
     expect(merged).toBe('use pnpm never commit lockfile')
   })
+
+  it('bounds growth: past the cap it keeps the longer side instead of appending', () => {
+    const oldContent = 'o'.repeat(500)
+    const newContent = 'n'.repeat(400)
+    // 500 + 1 + 400 > 600 → no concatenation; the longer (old) side wins.
+    expect(mergeContent(oldContent, newContent)).toBe(oldContent)
+    expect(mergeContent(newContent, oldContent)).toBe(oldContent)
+  })
+
+  it('honors a custom cap and still merges under it', () => {
+    expect(mergeContent('aaa', 'bbb', 10)).toBe('aaa bbb')
+    expect(mergeContent('aaa'.repeat(3), 'bbb', 8)).toBe('aaaaaaaaa')
+  })
 })
 
 describe('CJK dedup (Chinese context)', () => {

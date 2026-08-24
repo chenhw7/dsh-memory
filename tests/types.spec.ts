@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { MemoryId } from '../src/brand.ts'
-import { validateProjectScope } from '../src/index.ts'
+import { validateProjectScope, validateContent } from '../src/index.ts'
 import type { AddMemoryInput } from '../src/types.ts'
 
 describe('MemoryId', () => {
@@ -46,5 +46,27 @@ describe('validateProjectScope', () => {
     expect(() =>
       validateProjectScope({ scope: 'user', content: 'x' }),
     ).not.toThrow()
+  })
+})
+
+describe('validateContent', () => {
+  it('accepts non-blank content', () => {
+    expect(() => validateContent('real content')).not.toThrow()
+  })
+
+  it('rejects undefined (content not supplied)', () => {
+    expect(() => validateContent(undefined)).toThrow('non-empty')
+  })
+
+  it('rejects empty and whitespace-only content', () => {
+    expect(() => validateContent('')).toThrow('non-empty')
+    expect(() => validateContent('   ')).toThrow('non-empty')
+    expect(() => validateContent('\n\t ')).toThrow('non-empty')
+  })
+
+  it('rejects zero-width-only content as blank', () => {
+    // Zero-width characters are invisible but not blank per trim(); the
+    // contract only guarantees rejection of trim-blank strings.
+    expect(() => validateContent('\u200bx')).not.toThrow()
   })
 })

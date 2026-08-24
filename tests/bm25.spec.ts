@@ -1,0 +1,84 @@
+import { describe, it, expect } from 'vitest'
+import { tokenizeForSearch, Bm25Index, rankTexts } from '../src/store/bm25.ts'
+
+describe('tokenizeForSearch', () => {
+  it('splits Latin runs into lowercase word tokens', () => {
+    expect(tokenizeForSearch('Use PNPM here')).toEqual(['use', 'pnpm', 'here'])
+  })
+
+  it('emits CJK unigrams AND adjacent bigrams', () => {
+    const tokens = tokenizeForSearch('记忆系统')
+    expect(tokens).toContain('记')
+    expect(tokens).toContain('忆')
+    expect(tokens).toContain('记忆')
+    expect(tokens).toContain('忆系')
+    expect(tokens).toContain('系统')
+  })
+
+  it('keeps Latin and CJK streams separate', () => {
+    const tokens = tokenizeForSearch('用 pnpm 构建')
+    expect(tokens).toContain('pnpm')
+    expect(tokens).toContain('构建')
+    expect(tokens).toContain('构')
+  })
+
+  it('returns an empty bag for empty input', () => {
+    expect(tokenizeForSearch('')).toEqual([])
+  })
+})
+
+describe('Bm25Index', () => {
+  it('scores zero when nothing overlaps', () => {
+    const index = new Bm25Index([['alpha'], ['beta']])
+    expect(index.scores(['gamma'])).toEqual([0, 0])
+  })
+
+  it('gives every document zero for an empty query', () => {
+    const index = new Bm25Index([['alpha'], ['beta']])
+    expect(index.scores([])).toEqual([0, 0])
+  })
+
+  it('ranks term-dense documents above passing mentions', () => {
+    const scores = new Bm25Index([
+      ['pnpm', 'pnpm', 'pnpm', 'workspace'],
+      ['node', 'pnpm', 'misc'],
+    ]).scores(['pnpm'])
+    expect(scores[0]).toBeGreaterThan(scores[1]!)
+  })
+
+  it('downweights terms common to all documents (IDF)', () => {
+    // "the" is in both docs, "unique" only in doc 1 — the unique term must dominate.
+    const scores = new Bm25Index([
+      ['the', 'unique'],
+      ['the', 'other'],
+    ]).scores(['the'])
+    const uniqueScores = new Bm25Index([
+      ['the', 'unique'],
+      ['the', 'other'],
+    ]).scores(['unique'])
+    // A ubiquitous term still scores ≥ 0 but strictly less than a rare one.
+    expect(scores[0]).toBeGreaterThanOrEqual(0)
+    expect(uniqueScores[0]).toBeGreaterThan(scores[0]!)
+  })
+})
+
+describe('rankTexts (store search seam)', () => {
+  it('prefers the CJK bigram match over unigram-only overlap', () => {
+    const scores = rankTexts('记忆系统', [
+      '这个插件负责记忆系统的持久化',   // contains bigram 记忆 + 系统
+      '这句话只提到如何记录日志',       // shares 记/录-style unigrams, no target bigram
+    ])
+    expect(scores[0]).toBeGreaterThan(scores[1]!)
+  })
+
+  it('preserves OR semantics: any shared token keeps the document in play', () => {
+    const scores = rankTexts('python testing', [
+      'we write python scripts',
+      'vitest runs the testing suite',
+      'unrelated cooking recipe',
+    ])
+    expect(scores[0]).toBeGreaterThan(0)
+    expect(scores[1]).toBeGreaterThan(0)
+    expect(scores[2]).toBe(0)
+  })
+})

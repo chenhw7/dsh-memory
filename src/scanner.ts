@@ -125,3 +125,24 @@ export function scanContent(content: string): ScanResult {
   const reasons = filtered.map(hit => `${hit.kind}: ${hit.pattern}`)
   return { allowed: false, reasons }
 }
+
+/** The marker prefix stamped on blocked content in prompt-facing views. */
+export const BLOCKED_MARKER = '[BLOCKED'
+
+/**
+ * Render one stored content string for a PROMPT-FACING surface (the injection
+ * snapshot, the existence index, the notes export, the extraction snapshot).
+ *
+ * This is the load-time counterpart of the write-time {@link scanContent}
+ * gate: content that fails the scanner is replaced by a `[BLOCKED: …]`
+ * placeholder wherever it would re-enter an LLM context. The original stays
+ * in the store untouched so the user can still inspect and remove it —
+ * silent deletion would only hide the attack.
+ * @param content - the stored content to render.
+ * @returns the original content when clean, otherwise the placeholder.
+ */
+export function redactBlocked(content: string): string {
+  const scan = scanContent(content)
+  if (scan.allowed) return content
+  return `${BLOCKED_MARKER}: ${scan.reasons.join('; ')}]`
+}

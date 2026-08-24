@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectConflict, detectConflicts, type SessionFact } from '../src/context/conflict.ts'
+import { detectConflict, detectConflicts, annotateConflicts, type SessionFact } from '../src/context/conflict.ts'
 
 describe('detectConflict (§3.11)', () => {
   it('returns "fresh" when no correction facts are present', () => {
@@ -71,5 +71,41 @@ describe('detectConflicts (§3.11)', () => {
     const results = detectConflicts(entries, facts)
     expect(results.length).toBeGreaterThanOrEqual(1)
     expect(results.every(r => r.status === 'conflicting' || r.status === 'stale')).toBe(true)
+  })
+})
+
+describe('annotateConflicts — snapshot wiring (§3.11, LLM-free)', () => {
+  const base = { lastRecalledAt: undefined } as const
+
+  it('flags an older entry contradicted by a correction-category entry', () => {
+    const entries = [
+      { id: 'old', content: 'the build command is npm run build', ...base },
+      { id: 'corr', content: 'actually the build command is pnpm build, that was wrong', category: 'correction' as const, ...base },
+    ]
+    const flagged = annotateConflicts(entries)
+    expect(flagged.get('old')).toBe('conflicting')
+    // The correction itself is never flagged.
+    expect(flagged.has('corr')).toBe(false)
+  })
+
+  it('marks same-topic overlap without contradiction signals as "stale"', () => {
+    const entries = [
+      { id: 'old', content: 'the build command is npm run build', ...base },
+      { id: 'corr', content: 'the build command is pnpm now', category: 'correction' as const, ...base },
+    ]
+    const flagged = annotateConflicts(entries)
+    expect(flagged.get('old')).toBe('stale')
+  })
+
+  it('returns an empty map when no correction-category entries exist', () => {
+    const entries = [
+      { id: 'a', content: 'use pnpm here', ...base },
+      { id: 'b', content: 'use pnpm there', ...base },
+    ]
+    expect(annotateConflicts(entries).size).toBe(0)
+  })
+
+  it('returns an empty map for fewer than two entries', () => {
+    expect(annotateConflicts([{ id: 'solo', content: 'anything', ...base }]).size).toBe(0)
   })
 })

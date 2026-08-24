@@ -173,6 +173,26 @@ describe('detectSignal', () => {
   it('detects correction signals', () => {
     expect(detectSignal("that's wrong")).toBe('correction')
   })
+  it('detects the widened Chinese keyword patterns', () => {
+    for (const text of ['帮我记一下这个命令', '把这个结论记下来', '记一下端口是 8080']) {
+      expect(detectSignal(text)).toBe('keyword')
+    }
+  })
+  it('detects the widened English keyword patterns', () => {
+    expect(detectSignal('keep in mind the proxy is blocked')).toBe('keyword')
+    expect(detectSignal('make a note of this quirk')).toBe('keyword')
+    expect(detectSignal('for the record, we use pnpm')).toBe('keyword')
+  })
+  it('detects the widened correction patterns (Chinese and English)', () => {
+    expect(detectSignal('其实是 vitest 不是 jest')).toBe('correction')
+    expect(detectSignal('应该是 pnpm 才对')).toBe('correction')
+    expect(detectSignal('之前搞错了，包名是 chenhw7')).toBe('correction')
+    expect(detectSignal('I meant the build script, not the test one')).toBe('correction')
+    expect(detectSignal("no, it's the config file")).toBe('correction')
+  })
+  it('still prefers keyword over correction when both match', () => {
+    expect(detectSignal('记住：其实是 vitest')).toBe('keyword')
+  })
 })
 
 describe('messageText', () => {
