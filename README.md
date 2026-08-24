@@ -26,13 +26,15 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Persistent memory** — facts, preferences, and conventions stored in a durable KV backend with audit logging.
 - **Three-layer scoping** — `global` (cross-project), `project` (per-repo, auto-detected), and `user` (cross-project profile).
 - **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
-- **Automatic learning** — a projection accumulator watches the conversation and extracts candidate memories via lightweight rules, then runs an LLM extraction when enough candidates accumulate.
-- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer; failure streaks that get resolved auto-sediment into the pitfall log.
-- **Dedup pipeline** — two-stage deduplication (token Jaccard prefilter + LLM judge) prevents near-duplicate accumulation.
-- **Memory lifecycle** — pin important memories, auto-decay stale project-scoped entries, and audit every write.
+- **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches.
+- **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate.
+- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer.
+- **Dedup pipeline** — two-stage deduplication (stop-word-filtered Jaccard prefilter + optional LLM judge with bounded merges) prevents near-duplicate accumulation; a low-frequency curator pass re-summarizes oversized entries.
+- **Two-tier memory lifecycle** — pin important memories; overdue project-scoped entries are removed while overdue `global`/`user` entries are soft-decayed (hidden from standing injections, still searchable, un-stamped on recall); every write is audited.
+- **Step-level auto recall (opt-in)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
-- **Security scanning** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved.
-- **Frontend-configurable** — all settings exposed through the dsh settings UI, apply live.
+- **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
+- **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
 
 ## Install
 
@@ -83,7 +85,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a specific version:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.2.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.3.0
 ```
 
 ### From a local checkout
@@ -106,8 +108,8 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.2.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.2.0.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.3.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.3.0.tgz
 ```
 
 ## Update
@@ -186,60 +188,62 @@ dsh web
 
 ## Configuration
 
-The bundle owns three settings namespaces, each visible as its own card in Settings → Plugins → Plugin configuration and **applied live** — a change takes effect on the next event or call, no restart. Every namespace resolves in layers: schema defaults → the composition `config:` entry (the `base`) → the user document in `$DSH_HOME/settings.yaml`. A field absent from the user layer inherits the composition value, so a deployment can pin a default and users override only what they need. With no settings service mounted (e.g. a headless profile), each plugin falls back to its composition entry exactly as composed.
+The bundle owns **two settings namespaces**, shown as four cards in Settings → Plugins → Plugin configuration and **applied live** — a change takes effect on the next event or call, no restart:
 
-### `memory` — injection & project notes
+- **`memory`** (cards: *Memory*, *Project Notes*, *Auto Recall*) — injection modes, budgets, lifecycle, notes export, auto recall. Owned by `memory-context`.
+- **`memory-review`** (card: *Automatic Extraction*) — extraction pipeline, model routing, dedup judge, pitfall streaks, curator pass. Owned by the `memory-review` plugin.
+
+Every namespace resolves in layers: schema defaults → the composition `config:` entry (the `base`) → the user document in `$DSH_HOME/settings.yaml`. A field absent from the user layer inherits the composition value, so a deployment can pin a default and users override only what they need. With no settings service mounted (e.g. a headless profile), each plugin falls back to its composition entry exactly as composed.
+
+### `memory` namespace
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
-| `memoryCharLimit` | `5000` | Per-scope character limit for injected memory content. |
-| `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. |
-| `notesDir` | `docs/agent-memory` | Repo-relative directory holding the generated notes files. |
+| `memoryCharLimit` | `5000` | Character budget for the frozen per-session memory snapshot injected in `full` mode (`0` = no content). |
+| `maxSearchResults` | `50` | Default cap for `memory_search` / `memory_list` when the call omits `limit`; read live by the tool plugin. `0` = no limit. |
+| `decayDays` | `30` | Lifecycle window for entries not recalled within N days; read live by the review plugin's janitor. `0` = disabled. Overdue `project` entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
+| `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. Entries rendered into the notes files are excluded from the memory section to avoid double injection. |
+| `notesDir` | `docs/agent-memory` | Repo-relative directory holding the generated `CONVENTIONS.md` / `PITFALLS.md`. |
 | `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
 | `notesAgentsPointer` | `true` | Maintain the managed pointer block in the repo's `AGENTS.md`. |
-| `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (oldest truncated). |
+| `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (newest kept). |
 | `autoRecallEnabled` | `false` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable. |
-| `autoRecallLimit` | `5` | Max entries in one auto-recall fence. |
-| `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters. |
+| `autoRecallLimit` | `5` | Max entries in one auto-recall fence (min 1). The fence itself is capped at 1200 characters. |
+| `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters (min 1). |
 
-### `memory-review` — extraction, dedup & decay
+### `memory-review` namespace
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `reviewEnabled` | `true` | Enable automatic periodic review extraction. |
-| `reviewCandidateThreshold` | `10` | Number of candidate messages before an LLM extraction runs. |
+| `reviewCandidateThreshold` | `10` | Unprocessed candidate signals that trigger one extraction drain (min 1). |
 | `flushOnCompaction` | `true` | Extract memories from shadowed events after compaction. |
-| `flushOnDispose` | `true` | Extract remaining context when a session is disposed. |
-| `extractionModelProvider` | `""` (session route) | Override the LLM provider for extraction/judge calls. Empty = use the session's conversational model (the default — extraction reuses the same model the user is chatting with, no extra keys or billing channel). |
-| `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
-| `extractionBudget` | `20` | Max extraction + judge calls per session. `0` = unlimited. |
+| `flushOnDispose` | `true` | Extract remaining context when a session is disposed (5 s cap). |
+| `extractionModelProvider` | `""` (session route) | Override the LLM provider for extraction/judge/curator calls. Empty = use the session's conversational model (the default — extraction reuses the same model the user is chatting with, no extra keys or billing channel). |
+| `extractionModelModel` | `""` (session route) | Override the model name for extraction/judge/curator calls. Empty = use the session's conversational model. Set both fields to route extraction to a cheaper/faster model. |
+| `extractionBudget` | `20` | LLM-call charges per session, shared across review drains, both flushes, and curator passes. `0` = unlimited. |
 | `judgeEnabled` | `true` | Run the LLM dedup judge on prefilter hits. When `false`, prefilter hits merge directly (cheaper, but may false-merge same-template different-topic pairs). |
-| `decayDays` | `30` | Lifecycle policy for entries not recalled within N days. `0` = disabled. `project`-scoped entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
-| `pitfallStreakThreshold` | `2` | Consecutive same-signature tool failures that must occur (and then be resolved) before a pitfall entry is extracted into the notes files. |
+| `pitfallStreakThreshold` | `2` | Consecutive same-signature tool failures that must occur (and then be resolved by a success) before one structured pitfall candidate is emitted for extraction into the notes files. One-shot failures are not extracted. |
 | `curatorEnabled` | `true` | Low-frequency curator pass: every `curatorEveryNSessions` session creations, the longest oversized entries are rewritten into concise one-liners by the extraction model (budget-gated). |
 | `curatorEveryNSessions` | `20` | Run the curator pass every N session creations. |
 | `curatorMaxEntries` | `5` | Max entries selected per curation pass (longest first). |
 | `curatorMinChars` | `400` | Only entries at least this long are selected for re-summarization. |
 
-### `tool-memory` — model-facing tools
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `maxSearchResults` | `50` | Maximum number of entries returned by `memory_search` / `memory_list` when the call omits `limit`. `0` = no limit. |
+> There is deliberately **no separate `tool-memory` settings namespace**: the tool plugin reads `maxSearchResults` live from the `memory` namespace above. Its composition `config.maxSearchResults` only serves as the fallback base when no settings service is mounted.
 
 ### Setting via composition vs. UI
 
-All three namespaces accept the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
+Both namespaces accept the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
 
 ```yaml
-tool-memory:
+memory:
   config:
     maxSearchResults: 100
 ```
 
-By default, extraction and the dedup judge use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` (in the composition config or the UI):
+By default, extraction, judging, and curation use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` (in the composition config or the UI — the UI offers dropdowns fed by the host model catalog):
 
 ```yaml
 memory-review:
@@ -248,18 +252,23 @@ memory-review:
     extractionModelModel: deepseek-chat
 ```
 
-Example `$DSH_HOME/settings.yaml` (all three namespaces):
+Example `$DSH_HOME/settings.yaml` (both namespaces):
 
 ```yaml
 memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
+  maxSearchResults: 50
+  decayDays: 30
   notesEnabled: true
   notesDir: docs/agent-memory
   notesCharLimit: 4000
   notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
+  autoRecallEnabled: false
+  autoRecallLimit: 5
+  autoRecallMinChars: 12
 memory-review:
   reviewEnabled: true
   reviewCandidateThreshold: 10
@@ -269,10 +278,11 @@ memory-review:
   extractionModelModel: ""
   extractionBudget: 20
   judgeEnabled: true
-  decayDays: 30
   pitfallStreakThreshold: 2
-tool-memory:
-  maxSearchResults: 50
+  curatorEnabled: true
+  curatorEveryNSessions: 20
+  curatorMaxEntries: 5
+  curatorMinChars: 400
 ```
 
 `memoryPolicyCustomText` is optional and only used when `memoryMode` is `custom`.
@@ -306,12 +316,12 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | Row | Export | Role |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain, registers `ctx.memory` |
+| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain, registers `ctx.memory` (BM25 search + two-tier decay) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools |
-| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + flush + dedup + janitor) |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write + AGENTS.md pointer) |
-| `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection + settings namespace |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service for memory management UI |
+| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator) and the `memory-review` settings namespace |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write + AGENTS.md pointer), registers `ctx.projectNotes` |
+| `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service for a future memory management UI |
 
 **Storage**: this bundle does **not** insert `storage-json` / `storage-domain` rows. The `dsh-web-app` bundle already provides them (with the correct root path under `$DSH_HOME/storages`). Inserting them here would clobber that config (patches replace whole rows, last-write-wins). The memory store provider consumes the `storageDomain` service as a peer dependency.
 
@@ -332,8 +342,9 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 
 ## Known Limitations
 
-- **No semantic/vector retrieval** — `memory_search` is token-based lexical matching (CJK per-character + Latin word tokens) over structured KV entries, not embeddings.
-- **Extraction quality tracks the session model** — review/flush reuse the session's routed provider/model.
+- **No semantic/vector retrieval** — `memory_search` is BM25 lexical ranking over structured KV entries (Latin word tokens, CJK unigrams + bigrams), not embeddings; synonyms that share no tokens will not match.
+- **Extraction quality tracks the session model** — review/flush/curator reuse the session's routed provider/model unless explicitly overridden.
+- **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected snapshot is frozen for KV-cache stability; step-level auto recall (opt-in) covers per-step freshness instead.
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
 
 ## License

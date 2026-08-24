@@ -23,13 +23,15 @@
 - **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
 - **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
-- **自动学习** — 投影累加器观察对话，并通过轻量规则提取候选记忆；当候选足够多时，运行 LLM 提取。
-- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现；连续失败最终解决的序列自动沉淀为踩坑记录。
-- **去重管线** — 两阶段去重（分词 Jaccard 预过滤 + LLM 判定），防止近似重复条目累积。
-- **记忆生命周期** — 固定重要记忆、自动衰减过期的 project 作用域条目、审计每次写入。
+- **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。
+- **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。
+- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现。
+- **去重管线** — 两阶段去重（停用词过滤的 Jaccard 预过滤 + 可选 LLM 裁决，合并长度有上限），防止近似重复条目累积；低频 curator pass 会将过长条目改写为简洁单行。
+- **两层记忆生命周期** — 固定重要记忆；过期的 project 作用域条目被移除，而过期的 `global`/`user` 条目做软衰减（从常驻注入面隐藏但仍可搜索，再次召回即解除）；每次写入都有审计。
+- **步级自动召回（可选）** — 每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息；不触碰 system prompt，保持 KV-cache 前缀稳定。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
-- **安全扫描** — 阻止 API Key、Token、提示注入模式和泄露尝试被写入记忆。
-- **前端可配置** — 所有设置都通过 dsh 设置界面暴露，实时生效。
+- **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
+- **前端可配置** — 所有设置通过 dsh 设置界面的四张卡片暴露，实时生效。
 
 ## 安装
 
@@ -81,7 +83,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定特定版本时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.2.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.3.0
 ```
 
 ### 从本地 checkout 安装
@@ -104,8 +106,8 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.2.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.2.0.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.3.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.3.0.tgz
 ```
 
 ## 更新
@@ -184,53 +186,62 @@ dsh web
 
 ## 配置
 
-本 bundle 拥有三个设置命名空间，各自在「设置 → 插件 → 插件配置」中显示为独立卡片，且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启。每个命名空间按分层 resolve：schema 默认 → 组合 `config:` 条目（base）→ `$DSH_HOME/settings.yaml` 中的用户文档。用户层缺失的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。当无 settings 服务挂载时（如 headless profile），各插件回退到组合条目，行为与组合配置完全一致。
+本 bundle 拥有**两个设置命名空间**，在「设置 → 插件 → 插件配置」中显示为四张卡片，且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启：
 
-### `memory` — 注入与项目笔记
+- **`memory`**（卡片：*Memory*、*Project Notes*、*Auto Recall*）——注入模式、字符预算、生命周期、项目笔记、自动召回。由 `memory-context` 持有。
+- **`memory-review`**（卡片：*Automatic Extraction*）——提取管线、模型路由、去重裁决、失败序列踩坑、curator pass。由 `memory-review` 插件持有。
+
+每个命名空间按分层 resolve：schema 默认 → 组合 `config:` 条目（base）→ `$DSH_HOME/settings.yaml` 中的用户文档。用户层缺失的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。当无 settings 服务挂载时（如 headless profile），各插件回退到组合条目，行为与组合配置完全一致。
+
+### `memory` 命名空间
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
 | `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
 | `memoryPolicyCustomText` | — | 当 `memoryMode` 为 `custom` 时使用的自定义策略文本。 |
-| `memoryCharLimit` | `5000` | 每个作用域注入记忆内容的字符上限。 |
-| `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。 |
+| `memoryCharLimit` | `5000` | 会话内冻结记忆快照注入 `full` 模式时的字符预算（`0` = 不注入内容）。 |
+| `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限，由工具插件实时读取。`0` = 无限制。 |
+| `decayDays` | `30` | N 天内未召回条目的生命周期窗口，由 review 插件的 janitor 实时读取。`0` = 禁用。过期的 `project` 条目被**移除**（硬衰减）；过期的 `global`/`user` 条目改为**软衰减**——打上 `stale` 戳，从注入面和笔记文件中隐藏但仍可搜索，再次召回即自动解除。固定（pin）条目始终豁免。 |
+| `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。已渲染进笔记文件的条目会从 memory 段落中排除，避免重复注入。 |
 | `notesDir` | `docs/agent-memory` | 仓库内生成 `CONVENTIONS.md` / `PITFALLS.md` 的目录。 |
 | `notesCharLimit` | `4000` | 注入的 `project-notes` 段落字符上限。 |
 | `notesAgentsPointer` | `true` | 维护仓库 `AGENTS.md` 中的托管指针块。 |
-| `notesMaxEntriesPerFile` | `100` | 每个生成笔记文件的最大条目数（超出截断最旧）。 |
+| `notesMaxEntriesPerFile` | `100` | 每个生成笔记文件的最大条目数（保留最新）。 |
+| `autoRecallEnabled` | `false` | 步级自动召回：每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息。不触碰 system prompt，保持 KV-cache 前缀稳定。 |
+| `autoRecallLimit` | `5` | 单次自动召回围栏内的最大条数（最小 1）。围栏本身上限 1200 字符。 |
+| `autoRecallMinChars` | `12` | 该步用户文本短于该字符数时跳过召回（最小 1）。 |
 
-### `memory-review` — 提取、去重与衰减
+### `memory-review` 命名空间
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
 | `reviewEnabled` | `true` | 启用自动周期性 review 提取。 |
-| `reviewCandidateThreshold` | `10` | 触发 LLM 提取前的候选消息数。 |
+| `reviewCandidateThreshold` | `10` | 触发一次提取 drain 所需的未处理候选信号数（最小 1）。 |
 | `flushOnCompaction` | `true` | 压缩后从被遮蔽的事件中提取记忆。 |
-| `flushOnDispose` | `true` | 会话销毁时提取剩余上下文。 |
-| `extractionModelProvider` | `""`（会话路由） | 覆盖提取/裁决调用的 LLM provider。留空 = 使用会话的对话模型（默认行为——提取复用用户正在聊天的模型，无需额外 key 或计费通道）。 |
-| `extractionModelModel` | `""`（会话路由） | 覆盖提取/裁决调用的模型名。留空 = 使用会话的对话模型。两者都设置可将提取路由到更廉价/更快的模型。 |
-| `extractionBudget` | `20` | 每会话最大提取 + 裁决调用次数。`0` = 无限。 |
+| `flushOnDispose` | `true` | 会话销毁时提取剩余上下文（5 秒上限）。 |
+| `extractionModelProvider` | `""`（会话路由） | 覆盖提取/裁决/curator 调用的 LLM provider。留空 = 使用会话的对话模型（默认行为——提取复用用户正在聊天的模型，无需额外 key 或计费通道）。 |
+| `extractionModelModel` | `""`（会话路由） | 覆盖提取/裁决/curator 调用的模型名。留空 = 使用会话的对话模型。两者都设置可将提取路由到更廉价/更快的模型。 |
+| `extractionBudget` | `20` | 每会话 LLM 调用配额，由 review drain、两种 flush 和 curator pass 共享。`0` = 无限。 |
 | `judgeEnabled` | `true` | 对预过滤命中运行 LLM 去重裁决。设为 `false` 时预过滤命中直接合并（更廉价，但可能误合并"同模板不同主题"对）。 |
-| `decayDays` | `30` | 自动衰减 N 天内未召回的 project 作用域条目。`0` = 禁用。固定的、`global` 和 `user` 条目永不衰减。 |
-| `pitfallStreakThreshold` | `2` | 判定踩坑所需的同签名连续失败次数（最终解决后提取进笔记文件）。 |
+| `pitfallStreakThreshold` | `2` | 判定踩坑所需的同签名连续失败次数（最终被一次成功解决后才发出一条结构化踩坑候选，提取进笔记文件）。一次性失败不提取。 |
+| `curatorEnabled` | `true` | 低频 curator pass：每 `curatorEveryNSessions` 次会话创建，把最长的超长条目交给提取模型改写为简洁单行（受预算约束）。 |
+| `curatorEveryNSessions` | `20` | 每 N 次会话创建运行一次 curator pass。 |
+| `curatorMaxEntries` | `5` | 每次 curation 最多选中的条目数（最长优先）。 |
+| `curatorMinChars` | `400` | 只有长度不小于该值的条目才会被选中改写。 |
 
-### `tool-memory` — 模型可用工具
-
-| 设置 | 默认值 | 说明 |
-|---|---|---|
-| `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限。`0` = 无限制。 |
+> 特意**没有独立的 `tool-memory` 设置命名空间**：工具插件从上面的 `memory` 命名空间实时读取 `maxSearchResults`。其组合配置 `config.maxSearchResults` 仅作为无 settings 服务挂载时的回退 base。
 
 ### 组合配置与 UI 设置
 
-三个命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
+两个命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
 
 ```yaml
-tool-memory:
+memory:
   config:
     maxSearchResults: 100
 ```
 
-默认情况下，提取和去重裁决使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可）：
+默认情况下，提取、去重裁决和 curation 使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可——UI 提供由宿主模型目录驱动的下拉框）：
 
 ```yaml
 memory-review:
@@ -239,18 +250,23 @@ memory-review:
     extractionModelModel: deepseek-chat
 ```
 
-`$DSH_HOME/settings.yaml` 示例（三个命名空间）：
+`$DSH_HOME/settings.yaml` 示例（两个命名空间）：
 
 ```yaml
 memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
+  maxSearchResults: 50
+  decayDays: 30
   notesEnabled: true
   notesDir: docs/agent-memory
   notesCharLimit: 4000
   notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
+  autoRecallEnabled: false
+  autoRecallLimit: 5
+  autoRecallMinChars: 12
 memory-review:
   reviewEnabled: true
   reviewCandidateThreshold: 10
@@ -260,10 +276,11 @@ memory-review:
   extractionModelModel: ""
   extractionBudget: 20
   judgeEnabled: true
-  decayDays: 30
   pitfallStreakThreshold: 2
-tool-memory:
-  maxSearchResults: 50
+  curatorEnabled: true
+  curatorEveryNSessions: 20
+  curatorMaxEntries: 5
+  curatorMinChars: 400
 ```
 
 `memoryPolicyCustomText` 是可选的，仅在 `memoryMode` 为 `custom` 时使用。
@@ -297,12 +314,12 @@ memory:
 | 行 | 导出 | 作用 |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
-| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域，注册 `ctx.memory` |
+| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域，注册 `ctx.memory`（BM25 检索 + 两层衰减） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具 |
-| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + flush + 去重 + janitor） |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 原子写 + AGENTS.md 指针） |
-| `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入 + 设置命名空间 |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务 |
+| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator），持有 `memory-review` 设置命名空间 |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 原子写 + AGENTS.md 指针），注册 `ctx.projectNotes` |
+| `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @90 + `project-notes` @91）、步级自动召回，持有 `memory` 设置命名空间 |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 面向未来记忆管理 UI 的 `@Remote` 服务 |
 
 **存储**：本 bundle **不**插入 `storage-json` / `storage-domain` 行。`dsh-web-app` bundle 已经提供它们（并在 `$DSH_HOME/storages` 下使用正确的根路径）。如果在这里重复插入，会覆盖已有配置（patch 会替换整行，后写覆盖先写）。memory store provider 将 `storageDomain` 服务作为 peer dependency 使用。
 
@@ -323,8 +340,9 @@ memory:
 
 ## 已知限制
 
-- **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的分词词法匹配（CJK 逐字 + Latin 逐词），不是 embeddings。
-- **提取质量跟随会话模型** — review/flush 复用会话当前路由的 provider/model。
+- **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的 BM25 词法排序（Latin 逐词、CJK 一元 + 二元分词），不是 embeddings；不含相同词元的同义表述无法命中。
+- **提取质量跟随会话模型** — review/flush/curator 复用会话当前路由的 provider/model，除非显式覆盖。
+- **会话中途的提取在下次压缩或新会话前不会出现在提示里** — 注入快照为 KV-cache 稳定性而冻结；步级自动召回（可选）提供逐步新鲜度。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
 
 ## 许可证
