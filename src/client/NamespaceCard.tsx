@@ -21,6 +21,8 @@ export interface FieldSpec {
   readonly kind: 'checkbox' | 'number' | 'text'
   readonly labelKey?: string
   readonly hintKey?: string
+  /** Client-side lower bound mirroring the host schema's `.min(n)`; defaults to 0. */
+  readonly minValue?: number
 }
 
 /** The full card content: card-chrome locale keys + the fields, in display order. */
@@ -91,7 +93,7 @@ export function NamespaceCard(props: NamespaceCardProps) {
     const v = draft[field.key]
     if (v === undefined || v === null || v === '') return false
     const n = Number(v)
-    return !Number.isFinite(n) || n < 0
+    return !Number.isFinite(n) || n < (field.minValue ?? 0)
   }
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(committed)

@@ -42,6 +42,12 @@ export interface MemoryConfig {
   notesCharLimit?: number
   notesAgentsPointer?: boolean
   notesMaxEntriesPerFile?: number
+  /** Step-level auto recall toggle; rendered on the dedicated Auto Recall card. */
+  autoRecallEnabled?: boolean
+  /** Max entries in one auto-recall fence; rendered on the Auto Recall card. */
+  autoRecallLimit?: number
+  /** Skip recall below this user-text length; rendered on the Auto Recall card. */
+  autoRecallMinChars?: number
 }
 
 /** The registration-side face the card's slot entry injects. */

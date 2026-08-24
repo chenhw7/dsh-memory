@@ -1,15 +1,17 @@
 /**
  * Memory management UI — client plugin entry.
  *
- * Contributes three cards into Settings → Plugins → Plugin configuration
+ * Contributes four cards into Settings → Plugins → Plugin configuration
  * (`settings.plugin.item`):
  * 1. "Memory" (curated MemoryPluginCard, `memory` namespace) — injection mode,
  *    char budget, search-result cap, decay days.
  * 2. "Project Notes" (spec-driven NamespaceCard, `memory` namespace) — notes
  *    export toggle and its knobs.
- * 3. "Automatic Extraction" (spec-driven NamespaceCard, `memory-review`
+ * 3. "Auto Recall" (spec-driven NamespaceCard, `memory` namespace) — the
+ *    step-level BM25 recall fence and its knobs.
+ * 4. "Automatic Extraction" (spec-driven NamespaceCard, `memory-review`
  *    namespace) — the extraction pipeline: review/flush, model routing,
- *    budget, dedup, pitfall streak.
+ *    budget, dedup, pitfall streak, curator pass.
  *
  * All write through the standard `ctx.settingsScope` transport and apply live.
  * There is intentionally NO separate "Memory" navigation section: the user's
@@ -55,20 +57,35 @@ const NOTES_SPEC: NamespaceCardSpec = {
   ],
 }
 
+/** The auto-recall card: the step-level recall fence, from the `memory` namespace. */
+const AUTORECALL_SPEC: NamespaceCardSpec = {
+  titleKey: 'autoRecallCardTitle',
+  descriptionKey: 'autoRecallCardDescription',
+  fields: [
+    { key: 'autoRecallEnabled', kind: 'checkbox' },
+    { key: 'autoRecallLimit', kind: 'number', minValue: 1 },
+    { key: 'autoRecallMinChars', kind: 'number', minValue: 1 },
+  ],
+}
+
 /** The automatic-extraction card: the full `memory-review` namespace, live. */
 const REVIEW_SPEC: NamespaceCardSpec = {
   titleKey: 'reviewCardTitle',
   descriptionKey: 'reviewCardDescription',
   fields: [
     { key: 'reviewEnabled', kind: 'checkbox' },
-    { key: 'reviewCandidateThreshold', kind: 'number', labelKey: 'reviewThreshold', hintKey: 'reviewThresholdHint' },
+    { key: 'reviewCandidateThreshold', kind: 'number', labelKey: 'reviewThreshold', hintKey: 'reviewThresholdHint', minValue: 1 },
     { key: 'flushOnCompaction', kind: 'checkbox' },
     { key: 'flushOnDispose', kind: 'checkbox' },
     { key: 'extractionModelProvider', kind: 'text' },
     { key: 'extractionModelModel', kind: 'text' },
     { key: 'extractionBudget', kind: 'number' },
     { key: 'judgeEnabled', kind: 'checkbox' },
-    { key: 'pitfallStreakThreshold', kind: 'number' },
+    { key: 'pitfallStreakThreshold', kind: 'number', minValue: 1 },
+    { key: 'curatorEnabled', kind: 'checkbox' },
+    { key: 'curatorEveryNSessions', kind: 'number', minValue: 1 },
+    { key: 'curatorMaxEntries', kind: 'number', minValue: 1 },
+    { key: 'curatorMinChars', kind: 'number', minValue: 1 },
   ],
 }
 
@@ -95,6 +112,7 @@ interface CardEntry {
 const CARDS: readonly CardEntry[] = [
   { key: 'memory' },
   { key: 'memory-notes', namespace: 'memory', spec: NOTES_SPEC },
+  { key: 'memory-autorecall', namespace: 'memory', spec: AUTORECALL_SPEC },
   { key: 'memory-review', spec: REVIEW_SPEC },
 ]
 
