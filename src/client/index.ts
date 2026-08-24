@@ -39,7 +39,10 @@ import type { ClientContext, SettingsScope } from '@deepseek-ai/dsh-client-runti
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryConfig, MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
 import { namespaceCard } from './NamespaceCard.tsx'
-import type { NamespaceCardInjected, NamespaceCardSpec } from './NamespaceCard.tsx'
+import type {
+  ModelCatalogView, NamespaceCardInjected, NamespaceCardSpec,
+} from './NamespaceCard.tsx'
+import { modelOptions, providerOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
 export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
@@ -68,6 +71,9 @@ const AUTORECALL_SPEC: NamespaceCardSpec = {
   ],
 }
 
+/** Settings key of the provider field — lives with its resolvers in model-catalog. */
+const PROVIDER_FIELD = 'extractionModelProvider'
+
 /** The automatic-extraction card: the full `memory-review` namespace, live. */
 const REVIEW_SPEC: NamespaceCardSpec = {
   titleKey: 'reviewCardTitle',
@@ -77,8 +83,18 @@ const REVIEW_SPEC: NamespaceCardSpec = {
     { key: 'reviewCandidateThreshold', kind: 'number', labelKey: 'reviewThreshold', hintKey: 'reviewThresholdHint', minValue: 1 },
     { key: 'flushOnCompaction', kind: 'checkbox' },
     { key: 'flushOnDispose', kind: 'checkbox' },
-    { key: 'extractionModelProvider', kind: 'text' },
-    { key: 'extractionModelModel', kind: 'text' },
+    {
+      key: PROVIDER_FIELD,
+      kind: 'select',
+      options: providerOptions,
+      emptyOptionKey: 'followSessionRoute',
+    },
+    {
+      key: 'extractionModelModel',
+      kind: 'select',
+      options: modelOptions,
+      emptyOptionKey: 'followSessionRoute',
+    },
     { key: 'extractionBudget', kind: 'number' },
     { key: 'judgeEnabled', kind: 'checkbox' },
     { key: 'pitfallStreakThreshold', kind: 'number', minValue: 1 },
@@ -116,6 +132,33 @@ const CARDS: readonly CardEntry[] = [
   { key: 'memory-review', spec: REVIEW_SPEC },
 ]
 
+/** Structural face of the pieces of the client connection the loader needs. */
+interface ConnectionFace {
+  readonly api?: {
+    readonly llm?: {
+      readonly models: (payload: Record<string, never>) => Promise<{
+        result: { ok: true; value: unknown } | { ok: false; error: unknown }
+      }>
+    }
+  }
+}
+
+/**
+ * Build the model-catalog loader wired to the connection's host-scoped
+ * `llm.models` RPC (the same catalog the Models settings page renders).
+ * Returns undefined when this connection cannot serve the llm domain, so
+ * select fields degrade to free text instead of breaking.
+ * @param connection - the optional client connection handle.
+ */
+function createCatalogLoader(connection: ConnectionFace | undefined): (() => Promise<ModelCatalogView | undefined>) | undefined {
+  const llm = connection?.api?.llm
+  if (llm === undefined || typeof llm.models !== 'function') return undefined
+  return async () => {
+    const response = await llm.models({})
+    return response.result.ok ? response.result.value as ModelCatalogView : undefined
+  }
+}
+
 /**
  * Mount the memory configuration cards inside Settings → Plugins → Plugin
  * configuration. Each card binds its namespace's settings scope through the
@@ -127,6 +170,10 @@ const CARDS: readonly CardEntry[] = [
 export function apply(ctx: ClientContext): void {
   // Register locale dictionaries for i18n.
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-memory: locale dictionaries')
+
+  // Optional: the connection's llm face powers the extraction-model dropdowns.
+  // Absent (headless / older deployment) the selects fall back to free text.
+  const loadCatalog = createCatalogLoader(ctx.get('connection') as ConnectionFace | undefined)
 
   ctx.slots.inject('settings.plugin.item', function* () {
     for (const card of CARDS) {
@@ -148,10 +195,12 @@ export function apply(ctx: ClientContext): void {
       } else {
         const spec = card.spec
         const typed = scope as SettingsScope<Record<string, unknown>>
+        const withCatalog = loadCatalog !== undefined && spec.fields.some(f => f.kind === 'select')
         const injected = (): NamespaceCardInjected => ({
           hooks: { ns: typed },
           set: (field, value) => typed.set(field, value),
           unset: (field) => typed.unset(field),
+          ...(withCatalog ? { loadCatalog } : {}),
         })
         yield ctx.slots.register({
           name: 'settings.plugin.item',

@@ -8,21 +8,56 @@
  * @module @chenhw7/dsh-memory/client/NamespaceCard
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
 import { css } from './card-styles.ts'
-import { TextField, NumberField, CheckboxField } from './fields.tsx'
+import { TextField, NumberField, CheckboxField, SelectField } from './fields.tsx'
+import type { FieldBaseProps } from './fields.tsx'
+
+/** One model entry in a provider's catalog group (structural view of `llm.models`). */
+export interface CatalogModelEntry {
+  readonly id: string
+  readonly name?: string
+}
+
+/** One provider and its advertised models in the host-scoped model catalog. */
+export interface CatalogProviderGroup {
+  readonly id: string
+  readonly name?: string
+  readonly models?: readonly CatalogModelEntry[]
+}
+
+/**
+ * Structural view of the host's session-independent model catalog (the
+ * `llm.models` wire shape). Declared locally so this plugin stays decoupled
+ * from the deployment's apiproxy types.
+ */
+export interface ModelCatalogView {
+  readonly groups?: readonly CatalogProviderGroup[]
+}
+
+/** Inputs a select field's option resolver receives. */
+export interface SelectOptionsInput {
+  /** Last good model catalog; undefined until the first successful load. */
+  readonly catalog: ModelCatalogView | undefined
+  /** Current draft values — lets one field react to another (provider → models). */
+  readonly draft: Readonly<Record<string, unknown>>
+}
 
 /** One displayed field: its settings key, control kind, and locale keys. */
 export interface FieldSpec {
   readonly key: string
-  readonly kind: 'checkbox' | 'number' | 'text'
+  readonly kind: 'checkbox' | 'number' | 'text' | 'select'
   readonly labelKey?: string
   readonly hintKey?: string
   /** Client-side lower bound mirroring the host schema's `.min(n)`; defaults to 0. */
   readonly minValue?: number
+  /** For kind `'select'`: derive the options from the loaded model catalog + draft. */
+  readonly options?: (input: SelectOptionsInput) => { value: string; label: string }[]
+  /** For kind `'select'`: locale key of the sentinel empty-value option rendered first. */
+  readonly emptyOptionKey?: string
 }
 
 /** The full card content: card-chrome locale keys + the fields, in display order. */
@@ -42,6 +77,11 @@ export interface NamespaceCardInjected {
   set: (field: string, value: unknown) => Promise<void>
   /** Queue one field clear (re-inherits the composition layer). */
   unset: (field: string) => Promise<void>
+  /**
+   * Load the host-scoped model catalog for select fields; undefined when the
+   * connection cannot serve it (select fields then degrade to free text).
+   */
+  loadCatalog?: () => Promise<ModelCatalogView | undefined>
 }
 
 /** Props the renderer binds for a namespace card. */
@@ -64,11 +104,48 @@ function isOverridden(snap: SettingsScopeSnapshot<Record<string, unknown>>, fiel
   return Object.prototype.hasOwnProperty.call(user, field)
 }
 
+/** Lifecycle of the model-catalog load a select-bearing card performs on expand. */
+type CatalogStatus = 'idle' | 'loading' | 'ready' | 'failed'
+
+/** Upper bound for the model-catalog load before it degrades to free text. */
+const MODEL_CATALOG_TIMEOUT_MS = 15_000
+
 export function NamespaceCard(props: NamespaceCardProps) {
   const snap = props.useNs(s => s)
   const t = props.t
   const spec = props.spec
   const [open, setOpen] = useState(false)
+
+  const canLoadCatalog = typeof props.loadCatalog === 'function'
+  const catalogStartedRef = useRef(false)
+  const [catalog, setCatalog] = useState<ModelCatalogView | undefined>(undefined)
+  const [catalogStatus, setCatalogStatus] = useState<CatalogStatus>('idle')
+
+  // Select fields need the host's model catalog; load it lazily on the first
+  // expand. The started-ref guards duplicates WITHOUT cancelling the in-flight
+  // load when status/open change — a cleanup keyed on status would dead-lock
+  // the state at 'loading' (it cancels exactly the request that must resolve).
+  // A bounded race degrades to free text if the host is slow to answer.
+  useEffect(() => {
+    if (!open || !canLoadCatalog || catalogStartedRef.current) return
+    catalogStartedRef.current = true
+    setCatalogStatus('loading')
+    const load = props.loadCatalog as () => Promise<ModelCatalogView | undefined>
+    void (async () => {
+      try {
+        const view = await Promise.race([
+          load(),
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new Error('model catalog timed out')), MODEL_CATALOG_TIMEOUT_MS)
+          }),
+        ])
+        setCatalog(view)
+        setCatalogStatus('ready')
+      } catch {
+        setCatalogStatus('failed')
+      }
+    })()
+  }, [open, canLoadCatalog])
 
   // The resolved value carries schema defaults + composition base + user
   // overrides, so the draft needs no local defaults map.
@@ -128,6 +205,61 @@ export function NamespaceCard(props: NamespaceCardProps) {
     setFailed(false)
   }
 
+  /** Render one select field: dropdown over the catalog, or free-text fallback. */
+  const renderSelectField = (field: FieldSpec & { kind: 'select' }, base: FieldBaseProps) => {
+    const rawValue = typeof draft[field.key] === 'string' ? draft[field.key] as string : ''
+    // The catalog cannot serve this card at all (no llm face / load failed /
+    // zero advertised options) — degrade to a text input so manual ids work.
+    if (!canLoadCatalog || catalogStatus === 'failed') {
+      return (
+        <TextField
+          {...base}
+          hint={`${base.hint} ${t('modelCatalogUnavailable')}`}
+          value={rawValue}
+          onChange={(v) => edit(field.key, v === '' ? undefined : v)}
+        />
+      )
+    }
+    if (catalogStatus !== 'ready') {
+      return (
+        <SelectField
+          {...base}
+          disabled
+          value=""
+          options={[{ value: '', label: t('modelCatalogLoading') }]}
+          onChange={() => { /* loading — nothing to select yet */ }}
+        />
+      )
+    }
+    const resolved = field.options?.({ catalog, draft }) ?? []
+    if (resolved.length === 0) {
+      return (
+        <TextField
+          {...base}
+          hint={`${base.hint} ${t('modelCatalogUnavailable')}`}
+          value={rawValue}
+          onChange={(v) => edit(field.key, v === '' ? undefined : v)}
+        />
+      )
+    }
+    const opts = field.emptyOptionKey === undefined
+      ? [...resolved]
+      : [{ value: '', label: t(field.emptyOptionKey) }, ...resolved]
+    // A committed id the catalog no longer advertises stays visible verbatim
+    // instead of rendering as a blank selection.
+    if (rawValue !== '' && !opts.some(o => o.value === rawValue)) {
+      opts.push({ value: rawValue, label: rawValue })
+    }
+    return (
+      <SelectField
+        {...base}
+        value={rawValue}
+        options={opts}
+        onChange={(v) => edit(field.key, v === '' ? undefined : v)}
+      />
+    )
+  }
+
   return (
     <li className={`${css.card}${open ? ` ${css.cardOpen}` : ''}`}>
       <button
@@ -181,6 +313,9 @@ export function NamespaceCard(props: NamespaceCardProps) {
                   onChange={(v) => edit(field.key, v === '' ? undefined : Number(v))}
                 />
               )
+            }
+            if (field.kind === 'select') {
+              return renderSelectField(field, base)
             }
             return (
               <TextField
