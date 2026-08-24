@@ -31,8 +31,9 @@ const _remove_param = z.object({}).passthrough()
 const _remove_result = z.object({}).passthrough()
 const _pin_param = z.object({}).passthrough()
 const _pin_result = z.object({}).passthrough()
-// health() takes no request parameter — no _health_param schema needed.
+// health() and projects() take no request parameter — no schema needed for them.
 const _health_result = z.object({}).passthrough()
+const _projects_result = z.object({}).passthrough()
 const _auditLog_param = z.object({}).passthrough()
 const _auditLog_result = z.object({}).passthrough()
 
@@ -60,7 +61,7 @@ const descriptors = [
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryUpdateRequest`, schema: _update_param } }],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryUpdateResult`, schema: _update_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
-  { id: `${pkg}#${ns}/remove`, service: ns, namespace: ns, method: 'remove', invocation: { kind: 'direct' },
+  { id: `${pkg}#${ns}/removeEntry`, service: ns, namespace: ns, method: 'removeEntry', invocation: { kind: 'direct' },
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryRemoveRequest`, schema: _remove_param } }],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryRemoveResult`, schema: _remove_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
@@ -74,6 +75,11 @@ const descriptors = [
     // an empty args object.
     parameters: [],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryHealthResult`, schema: _health_result },
+    sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
+  { id: `${pkg}#${ns}/projects`, service: ns, namespace: ns, method: 'projects', invocation: { kind: 'direct' },
+    // Same no-parameter shape as health(): projects() takes no request object.
+    parameters: [],
+    result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryProjectsResult`, schema: _projects_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
   { id: `${pkg}#${ns}/auditLog`, service: ns, namespace: ns, method: 'auditLog', invocation: { kind: 'direct' },
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryAuditRequest`, schema: _auditLog_param } }],

@@ -14,6 +14,7 @@ export interface MemoryEntryJson {
   updatedAt: number
   pinned?: boolean
   lastRecalledAt?: number
+  staleSince?: number
 }
 export interface MemoryListResult { entries: readonly MemoryEntryJson[]; total: number }
 export interface MemorySearchResult { entries: readonly MemoryEntryJson[]; total: number }
@@ -27,9 +28,11 @@ export interface MemoryHealthResult {
   byScope: { global: number; project: number; user: number }
   pinned: number
   auditRecords: number
+  stale?: number
   lastActivityTs?: number
   lastExtractionTs?: number
 }
+export interface MemoryProjectsResult { projects: readonly string[] }
 export interface AuditEntryJson {
   id: string
   op: 'add' | 'update' | 'remove'
@@ -50,9 +53,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     get: (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     add: (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     update: (request: { id: string; content?: string; category?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
-    remove: (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
+    removeEntry: (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     pin: (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
     health: () => Promise<RemoteResult<MemoryHealthResult>>
+    projects: () => Promise<RemoteResult<MemoryProjectsResult>>
     auditLog: (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
   }
   interface TypertRemoteMap {
@@ -61,9 +65,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/get': (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     'memoryRemote/add': (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     'memoryRemote/update': (request: { id: string; content?: string; category?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
-    'memoryRemote/remove': (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
+    'memoryRemote/removeEntry': (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     'memoryRemote/pin': (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
     'memoryRemote/health': () => Promise<RemoteResult<MemoryHealthResult>>
+    'memoryRemote/projects': () => Promise<RemoteResult<MemoryProjectsResult>>
     'memoryRemote/auditLog': (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
   }
   interface TypertRemoteNamespaceMap {

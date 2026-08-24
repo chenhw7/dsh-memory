@@ -482,7 +482,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 ### 7.7 `@Remote` 服务 — `/remote-service`（`src/remote/`）
 
-`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露九个可从浏览器经 Typert 协议调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
+`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露十个可从浏览器调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
 
 | 方法 | 线上请求 | 线上结果 | 说明 |
 |---|---|---|---|
@@ -491,16 +491,25 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | `get` | `MemoryGetRequest` (id) | `{ entry?, found }` | — |
 | `add` | `MemoryAddRequest` (scope, content, category?, projectName?) | `{ entry?, error? }` | async；`source: 'ui'` |
 | `update` | `MemoryUpdateRequest` (id, content?, category?) | `{ entry?, found, error? }` | async；`source: 'ui'` |
-| `remove` | `MemoryRemoveRequest` (id) | `{ removed }` | async |
+| `removeEntry` | `MemoryRemoveRequest` (id) | `{ removed }` | async。不叫 `remove`：gateway 客户端把贡献物方法名与命名空间服务自有成员做保留字校验，`remove` 是其内部卸载方法名，撞名即挂载失败 |
 | `pin` | `MemoryPinRequest` (id, pinned) | `{ entry?, found }` | pin/unpin 切换 |
-| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, lastActivityTs?, lastExtractionTs? }` | 同步 |
+| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` | 同步；`stale` 为软衰减计数透传 |
+| `projects` | — | `{ projects[] }` | 从 `store.list('project')` 聚合 distinct `projectName`（remote 层聚合，不改 store），供工作区选择器 |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | 最新尾部，默认 100 |
 
-线上类型在 `src/remote/index.ts`；客户端镜像为生成/手写的 `typert.remote-client.*` 产物（以 `./remote` 导出）。随附的设置 UI **暂未**消费该服务——它是未来交互式记忆管理页面的接缝。
+条目投影 `MemoryEntryJson` 含 `staleSince?`（软衰减时间戳）。
+
+线上类型在 `src/remote/index.ts`；客户端镜像为手写的 `typert.remote-client.*` 产物（以 `./remote` 导出，需随方法变更手动同步）。
+
+**部署安全（已核实宿主源码）：** 不存在按方法的 `PRIVILEGED_METHODS` 注册表——信任门在传输层。所有 `/api` 请求统一过 `api-request-trust` 栅栏（loopback / 部署派生 LAN 字面量 / 声明式 `trustedHosts`，防 DNS rebinding 与跨站请求），非本机调用方根本到不了任何方法。
 
 ### 7.8 客户端 UI — `/client`（`src/client/`）
 
-向 Settings → Plugins → Plugin configuration（`settings.plugin.item` slot）贡献**四张卡片**，全部经 `ctx.settingsScope.bind({ namespace })` 绑定、实时生效：
+客户端有两类界面：Plugins 页签内的**四张配置卡片**，以及 Settings 独立导航区的 **Memory 内容管理页**（一期只读）。
+
+#### 配置卡片（`settings.plugin.item` slot）
+
+向 Settings → Plugins → Plugin configuration 贡献**四张卡片**，全部经 `ctx.settingsScope.bind({ namespace })` 绑定、实时生效：
 
 | 卡片（slot key） | 命名空间 | 组件 | 字段 |
 |---|---|---|---|
@@ -516,6 +525,18 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 - **模型目录下拉：** `select` 字段在首次展开时经连接的 `api.llm.models({})` RPC 懒加载选项（与 Models 设置页同一目录），并与 15 秒超时竞速。解析器（`model-catalog.ts`）提供 `providerOptions`（全部目录分组）与 `modelOptions`（所选 provider 的 models，否则聚合全部分组并以 `provider · model` 标注去重）。哨兵空选项 = "跟随会话路由"，映射为 `unset`（写 `''` 会造成假 overridden——overridden 按存在性判断）。无 llm face / 加载失败 / 零选项时下拉降级为自由文本 TextField 并附可用性提示；目录不再提供的已存 id 保持原样可见。
 - **宿主契约约束：** 宿主不以运行时值导出 `PluginCard`/`ValueField`/`CardForm`，故卡片外壳、字段组件（`fields.tsx`）与 CSS（`card-styles.ts`，经 `<style data-dsh-memory>` 注入的 `dsm-c-*` 类，逐行移植自宿主的 `--dsw-alias-*` token）均在本地复刻。`RULES` 数组必须在 `inject()` 调用前定义（esbuild 提升 `var` 声明但不提升初始化式——详见 CLIENT_UI_LESSONS）。
 - **构建：** `scripts/build-client.cjs` 用 esbuild 把 TSX 客户端打包成 loader 兼容产物（宿主包全部 external）；`scripts/fix-imports.cjs` 修正 tsc 输出里的 `.ts → .js` 引用并复制 Typert 产物。client 源码被排除在服务端 tsconfig program 之外（client 代码不经 tsc 检查；esbuild 擦除 type import）。
+
+#### Memory 内容管理页（`settings.section` slot，id `memory`，order 25）
+
+Settings 导航中的独立「Memory」区（位于 Agent presets 之后），浏览整个 web profile 的记忆库（三 scope × 全部工作区）。一期为只读：
+
+- **仪表盘条：** 总数 / 三 scope 分布 / 置顶 / 休眠（stale，带 hint）/ 审计数 / 最近活动 / 最近提取，来自 `health()`。
+- **工具栏：** scope 分段切换；工作区下拉（数据源 `projects()`）；BM25 搜索框（300 ms 防抖）；类别多选 chips。
+- **列表：** 远程分页（每页 100，`list` limit/offset）。激活搜索或类别筛选时改为一次无上限 `search` 取全量命中、本地过滤分页——wire 的 search 无 offset，两种模式下 total 均精确。行内含内容截断展开、scope/category 徽标、projectName、📌 置顶与 😴 休眠（灰显 + hint）标记、三个时间戳。
+- **状态机（`memory-section-store.ts`）：** Controller + `createSnapshotStore`（镜像宿主 section-store 房规），`idle → loading → ready/error`；seq token 丢弃过期响应；筛选变更只重取当前页（`reload`），初次挂载/重试/断连恢复走全量 `load()`；`connection/reset` 后自动重载。
+- **数据面（实测结论）：** 经 `connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })` 直呼——宿主 `TypertGatewayService` 对 `/api` 上所有 `<namespace>/<method>` 形态的 endpoint 做 source-mode discovery（反射带 `typertRemote` 绑定的服务按形参名分发），**无需客户端 `$mount` 贡献物**。不走 `$mount` 的原因：(1) 贡献物方法名不得与命名空间服务自有成员撞名（`remove` 即撞，已把服务方法改名 `removeEntry` 规避）；(2) cordis 不允许 fiber inject 声明自己 apply 里才创建的服务，「自产自销」式挂载会触发 *cannot get property "remote.memoryRemote" without inject*。注意 `connection.api.*`（如 ui-agent-preset 的 `api.agentPresets`）是另一套 apiproxy HTTP RPC 面，与 Typert namespace 无关。
+- **i18n 与样式：** 复用 `settings.memory` locale 命名空间增补 en+zh 词条；样式在 `section-styles.ts`（`dsm-s-*` 类 + `<style data-dsh-memory="section">` 注入，沿用宿主 `--dsw-alias-*` token）。配置与内容的职责分界在页面 intro 文案中锚定 Plugins 页签。
+- **测试：** host 侧 `tests/remote-service.spec.ts`（projects 聚合 / staleSince·stale 透传 / 分页边界）；客户端 jsdom 套件 `tests/memory-section.client.spec.tsx`（初始加载 / scope 切换 / 工作区筛选 / 防抖搜索 / chips / 分页 / 错误恢复 / stale 标记 / CJK 行），经 vitest 别名把 `@deepseek-ai/dsh-client-runtime/client` 指到同契约 stub（npm 发布物是浏览器 loader bundle，Node 无法消费）。
 
 ---
 

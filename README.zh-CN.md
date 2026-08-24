@@ -32,6 +32,7 @@
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
 - **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
 - **前端可配置** — 所有设置通过 dsh 设置界面的四张卡片暴露，实时生效。
+- **记忆管理中心（一期只读）** — dsh 设置界面新增独立「记忆」区，可浏览整个 web profile 的记忆库：健康仪表盘、作用域与工作区筛选、BM25 搜索、类别筛选、远程分页与软衰减标记，中英双语。
 
 ## 安装
 
@@ -319,7 +320,7 @@ memory:
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator），持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 原子写 + AGENTS.md 指针），注册 `ctx.projectNotes` |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @90 + `project-notes` @91）、步级自动召回，持有 `memory` 设置命名空间 |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 面向未来记忆管理 UI 的 `@Remote` 服务 |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（设置「记忆」区经 `/api` 通道消费） |
 
 **存储**：本 bundle **不**插入 `storage-json` / `storage-domain` 行。`dsh-web-app` bundle 已经提供它们（并在 `$DSH_HOME/storages` 下使用正确的根路径）。如果在这里重复插入，会覆盖已有配置（patch 会替换整行，后写覆盖先写）。memory store provider 将 `storageDomain` 服务作为 peer dependency 使用。
 

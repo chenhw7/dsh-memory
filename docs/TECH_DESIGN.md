@@ -482,7 +482,7 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 
 ### 7.7 `@Remote` service — `/remote-service` (`src/remote/`)
 
-`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes nine `@Remote` methods callable from a browser via the Typert protocol. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
+`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes ten `@Remote` methods callable from a browser. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
 
 | Method | Wire request | Wire result | Notes |
 |---|---|---|---|
@@ -491,16 +491,25 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 | `get` | `MemoryGetRequest` (id) | `{ entry?, found }` | — |
 | `add` | `MemoryAddRequest` (scope, content, category?, projectName?) | `{ entry?, error? }` | async; `source: 'ui'` |
 | `update` | `MemoryUpdateRequest` (id, content?, category?) | `{ entry?, found, error? }` | async; `source: 'ui'` |
-| `remove` | `MemoryRemoveRequest` (id) | `{ removed }` | async |
+| `removeEntry` | `MemoryRemoveRequest` (id) | `{ removed }` | async. Not named `remove`: the gateway client validates contribution method names against the namespace service's own members — `remove` is its internal uninstall method, and a collision fails the mount |
 | `pin` | `MemoryPinRequest` (id, pinned) | `{ entry?, found }` | toggles pin/unpin |
-| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, lastActivityTs?, lastExtractionTs? }` | synchronous |
+| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` | synchronous; `stale` passes through the soft-decay count |
+| `projects` | — | `{ projects[] }` | aggregates distinct `projectName` from `store.list('project')` (remote-layer aggregation, no store change); feeds the workspace selector |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | newest tail, default 100 |
 
-Wire types live in `src/remote/index.ts`; client-side mirrors are the generated/hand-written `typert.remote-client.*` artifacts (exported as `./remote`). The shipped settings UI does **not** consume this service yet — it is the seam for a future interactive memory-management page.
+Entry projection `MemoryEntryJson` carries `staleSince?` (soft-decay timestamp).
+
+Wire types live in `src/remote/index.ts`; client-side mirrors are the hand-written `typert.remote-client.*` artifacts (exported as `./remote`, synced manually on every method change).
+
+**Deployment security (verified against harness sources):** there is no per-method `PRIVILEGED_METHODS` registry — the trust fence is transport-level. Every `/api` request passes `api-request-trust` (loopback / deployment-derived LAN literals / declared `trustedHosts`, defending DNS rebinding and cross-site requests), so a non-loopback caller never reaches any method at all.
 
 ### 7.8 Client UI — `/client` (`src/client/`)
 
-Contributes **four cards** into Settings → Plugins → Plugin configuration (`settings.plugin.item` slot), all bound through `ctx.settingsScope.bind({ namespace })` and applying live:
+The client ships two kinds of surface: **four configuration cards** inside the Plugins tab, and the **Memory content-management section** as its own Settings nav entry (phase 1: read-only).
+
+#### Configuration cards (`settings.plugin.item` slot)
+
+Contributes **four cards** into Settings → Plugins → Plugin configuration, all bound through `ctx.settingsScope.bind({ namespace })` and applying live:
 
 | Card (slot key) | Namespace | Component | Fields |
 |---|---|---|---|
@@ -516,6 +525,18 @@ Mechanics:
 - **Model-catalog selects:** `select` fields resolve options lazily on first expand via the connection's `api.llm.models({})` RPC (the same catalog the Models settings page uses), raced against a 15 s timeout. Resolvers (`model-catalog.ts`) expose `providerOptions` (every catalog group) and `modelOptions` (the drafted provider's models, else all groups labeled `provider · model` with de-duplication). Sentinel empty option = "follow the session route" and maps to `unset` (writing `''` would fake an override — overridden-ness is presence-based). No llm face / failed load / zero options degrade the dropdown to a free-text TextField with an availability hint; committed ids the catalog no longer advertises stay visible verbatim.
 - **Host-contract constraints:** the host does not export `PluginCard`/`ValueField`/`CardForm` runtime values, so the card shell, field components (`fields.tsx`), and CSS (`card-styles.ts`, `dsm-c-*` classes injected via a `<style data-dsh-memory>` tag, ported over the host's `--dsw-alias-*` tokens) are replicated locally. The `RULES` array must be defined before the `inject()` call (esbuild hoists `var` declarations but not initializers — see CLIENT_UI_LESSONS).
 - **Build:** `scripts/build-client.cjs` esbuild-bundles the TSX client into a loader-compatible IIFE with host packages external; `scripts/fix-imports.cjs` fixes `.ts → .js` specifiers in tsc output and copies Typert artifacts. Client sources are excluded from the server tsconfig program (client code is not tsc-checked; esbuild erases type imports).
+
+#### Memory content-management section (`settings.section` slot, id `memory`, order 25)
+
+A standalone "Memory" entry in the Settings navigation (after Agent presets) that browses the whole web-profile memory store (all three scopes × all workspaces). Phase 1 is read-only:
+
+- **Health dashboard bar:** total / per-scope counts / pinned / dormant (stale, with a hint) / audit records / last activity / last extraction, from `health()`.
+- **Toolbar:** scope segmented switch; workspace dropdown fed by `projects()`; BM25 search box (300 ms debounce); multi-select category chips.
+- **List:** remote paging (100 per page, `list` limit/offset). With a search query or category chips active, one uncapped `search` fetches the full match set and the page filters/paginates locally — the wire search has no offset; totals stay exact in both modes. Rows carry truncated-expandable content, scope/category badges, projectName, 📌 pinned and 😴 dormant (greyed + hint) markers, and three timestamps.
+- **State machine (`memory-section-store.ts`):** Controller + `createSnapshotStore` (mirroring the host section-store house style), `idle → loading → ready/error`; a seq token discards stale responses; filter changes re-fetch only the page (`reload`), while first mount / retry / reconnect recovery run the full `load()`; `connection/reset` triggers an automatic reload.
+- **Data plane (verified live):** calls go straight over the generic `/api` RPC channel — `connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`. The host's `TypertGatewayService` claims every `<namespace>/<method>` endpoint on `/api` via source-mode discovery (reflecting services with a `typertRemote` binding and dispatching by parameter name), so NO client-side contribution mount is needed. Two gateway-client constraints make `$mount` unworkable for a self-produced namespace: descriptor method names may not collide with the namespace service's own members (`remove` does — the service method is therefore named `removeEntry`), and cordis forbids a fiber from declaring an inject dependency on a service it creates inside its own apply (*cannot get property "remote.memoryRemote" without inject*). Note that `connection.api.*` (e.g. ui-agent-preset's `api.agentPresets`) is a separate apiproxy HTTP RPC face, unrelated to Typert namespaces.
+- **i18n & styles:** the shared `settings.memory` locale namespace gains en+zh keys for the section; styles live in `section-styles.ts` (`dsm-s-*` classes + a `<style data-dsh-memory="section">` tag over the host's `--dsw-alias-*` tokens). The intro line anchors configuration to the Plugins tab so the two dimensions stay discoverable.
+- **Tests:** host side `tests/remote-service.spec.ts` (projects aggregation / staleSince·stale passthrough / pagination edges); client jsdom suite `tests/memory-section.client.spec.tsx` (initial load / scope switch / workspace filter / debounced search / chips / paging / error recovery / stale markers / CJK rows), with a vitest alias pointing `@deepseek-ai/dsh-client-runtime/client` at a contract-identical stub (the published artifact is a browser loader bundle Node cannot import).
 
 ---
 

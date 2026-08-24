@@ -35,6 +35,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
 - **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
+- **Memory manager UI (read-only, phase 1)** — a dedicated "Memory" section in the dsh settings UI browses the entire web-profile store: health dashboard, scope and workspace filters, BM25 search, category chips, remote paging, and soft-decay markers — in English and Chinese.
 
 ## Install
 
@@ -321,7 +322,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator) and the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write + AGENTS.md pointer), registers `ctx.projectNotes` |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service for a future memory management UI |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (consumed over the `/api` channel) |
 
 **Storage**: this bundle does **not** insert `storage-json` / `storage-domain` rows. The `dsh-web-app` bundle already provides them (with the correct root path under `$DSH_HOME/storages`). Inserting them here would clobber that config (patches replace whole rows, last-write-wins). The memory store provider consumes the `storageDomain` service as a peer dependency.
 

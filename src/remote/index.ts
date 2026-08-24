@@ -6,9 +6,18 @@
  * write-serialized through the existing store contract. The service delegates to
  * `ctx.memory` — it does not duplicate the store.
  *
- * Host integration: the `./remote` subpath must be mounted in `dsh-api-remotes`
- * (see TODO §3.8 verification notes). Write methods should be pinned to loopback
- * via `PRIVILEGED_METHODS`.
+ * Host integration: the `./remote-service` subpath is mounted as the
+ * `memory-remote` composition entry (cordis.patch.yml); the browser half mounts
+ * the matching client contribution itself (`src/typert.remote-client.js`).
+ *
+ * Deployment security (verified against the harness sources, 2026-08): there is
+ * NO per-method `PRIVILEGED_METHODS` registry — the trust fence is transport
+ * level. Every `/api` request passes `api-request-trust`
+ * (`packages/client/connection/src/api-request-trust.ts`), which admits
+ * loopback / deployment-derived LAN literals / declared `trustedHosts` hosts
+ * and rejects DNS-rebinding and cross-site requests before any RPC runs. So a
+ * non-loopback caller cannot reach `add`/`update`/`remove` at all; nothing to
+ * pin per method.
  *
  * @module @chenhw7/dsh-memory/remote
  */
@@ -61,6 +70,7 @@ export interface MemoryEntryJson {
   readonly updatedAt: number
   readonly pinned?: boolean
   readonly lastRecalledAt?: number
+  readonly staleSince?: number
 }
 
 function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
@@ -74,6 +84,7 @@ function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.pinned !== undefined ? { pinned: entry.pinned } : {},
     ...entry.lastRecalledAt !== undefined ? { lastRecalledAt: entry.lastRecalledAt } : {},
+    ...entry.staleSince !== undefined ? { staleSince: entry.staleSince } : {},
   }
 }
 
@@ -153,8 +164,14 @@ export interface MemoryHealthResult {
   byScope: { global: number; project: number; user: number }
   pinned: number
   auditRecords: number
+  stale?: number
   lastActivityTs?: number
   lastExtractionTs?: number
+}
+
+/** Distinct `projectName` values across all `project`-scoped entries. */
+export interface MemoryProjectsResult {
+  readonly projects: readonly string[]
 }
 
 export interface MemoryAuditRequest {
@@ -254,8 +271,14 @@ export class MemoryRemoteService extends TypertRemoteService {
     }
   }
 
-  @Remote('remove')
-  async remove(request: MemoryRemoveRequest): Promise<MemoryRemoveResult> {
+  /**
+   * Delete one entry. Named `removeEntry` rather than `remove`: the gateway's
+   * client-side namespace service reserves a handful of member names
+   * (`remove` among them — its internal uninstall method), and a contribution
+   * descriptor carrying one of those names fails validation at mount time.
+   */
+  @Remote('removeEntry')
+  async removeEntry(request: MemoryRemoveRequest): Promise<MemoryRemoveResult> {
     const store = this.memory()
     if (store === undefined) return { removed: false }
     const removed = await store.remove(request.id as MemoryId)
@@ -286,9 +309,26 @@ export class MemoryRemoteService extends TypertRemoteService {
       pinned: h.pinned,
       auditRecords: h.auditRecords,
     }
+    if (h.stale !== undefined) result.stale = h.stale
     if (h.lastActivityTs !== undefined) result.lastActivityTs = h.lastActivityTs
     if (h.lastExtractionTs !== undefined) result.lastExtractionTs = h.lastExtractionTs
     return result
+  }
+
+  /**
+   * Distinct project names across all `project`-scoped entries — the data
+   * source for the management UI's workspace selector. Aggregated here from
+   * `store.list('project')` so the store contract stays untouched.
+   */
+  @Remote('projects')
+  projects(): MemoryProjectsResult {
+    const store = this.memory()
+    if (store === undefined) return { projects: [] }
+    const names = new Set<string>()
+    for (const entry of store.list('project')) {
+      if (entry.projectName !== undefined) names.add(entry.projectName)
+    }
+    return { projects: [...names].sort() }
   }
 
   @Remote('auditLog')

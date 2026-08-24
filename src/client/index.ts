@@ -1,27 +1,33 @@
 /**
- * Memory management UI — client plugin entry.
+ * Memory management UI — browser half.
  *
- * Contributes four cards into Settings → Plugins → Plugin configuration
- * (`settings.plugin.item`):
- * 1. "Memory" (curated MemoryPluginCard, `memory` namespace) — injection mode,
- *    char budget, search-result cap, decay days.
- * 2. "Project Notes" (spec-driven NamespaceCard, `memory` namespace) — notes
- *    export toggle and its knobs.
- * 3. "Auto Recall" (spec-driven NamespaceCard, `memory` namespace) — the
- *    step-level BM25 recall fence and its knobs.
- * 4. "Automatic Extraction" (spec-driven NamespaceCard, `memory-review`
- *    namespace) — the extraction pipeline: review/flush, model routing,
- *    budget, dedup, pitfall streak, curator pass.
+ * Two surfaces over one store:
  *
- * All write through the standard `ctx.settingsScope` transport and apply live.
- * There is intentionally NO separate "Memory" navigation section: the user's
- * preference is that memory configuration lives inside the Plugins tab
- * alongside the others.
+ * 1. **Configuration** (unchanged since v0.3.0): four cards inside Settings →
+ *    Plugins → Plugin configuration (`settings.plugin.item`) — injection mode,
+ *    project notes, auto recall, automatic extraction. All write through the
+ *    standard `ctx.settingsScope` transport and apply live.
+ * 2. **Content management** (phase 1): a dedicated "Memory" settings section
+ *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
+ *    memory store — health dashboard, scope/workspace filters, BM25 search,
+ *    category chips, and a read-only paged list with soft-decay markers.
+ *    Configuration and content are different dimensions: the cards stay where
+ *    they are, the section says so in its intro line.
  *
- * Data access is purely the typed settings scope — no @Remote service and no
- * self-mount of a remote namespace. This file is the browser half; it runs in
- * the host's client build pipeline (TSX + React), not the plugin's tsc build.
- * Consumed via the `exports["./client"]` subpath and declared in `dsh.client`.
+ * The content surface calls the host's `memoryRemote` Typert namespace through
+ * the generic `/api` RPC channel (`memoryRemote/<method>`, `{ args }` payload).
+ * The host's TypertGateway claims every such endpoint via source-mode
+ * discovery — it reflects the `typertRemote` binding of the mounted
+ * MemoryRemoteService (cordis.patch.yml row `memory-remote`) and dispatches by
+ * method name — so NO client-side contribution mount is involved. That also
+ * sidesteps two gateway-client constraints on `$mount`ed contributions that a
+ * self-produced namespace cannot satisfy: descriptor method names may not
+ * collide with the namespace service's own members (`remove` does), and a
+ * fiber cannot declare an inject dependency on a service it mounts itself.
+ *
+ * This file runs in the host's client build pipeline (TSX + React), not the
+ * plugin's tsc build. Consumed via the `exports["./client"]` subpath and
+ * declared in `dsh.client`.
  *
  * @module @chenhw7/dsh-memory/client
  */
@@ -29,7 +35,7 @@
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the settings shell's SlotMap merge (the 'settings.section'
-// entry that hosts the Plugins tab) and the ctx.settingsScope Context merge.
+// entry that hosts this section) and the ctx.settingsScope Context merge.
 // Cross-plugin collaboration goes through the service, never a value import
 // (client bundle purity gate).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -38,14 +44,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type { ClientContext, SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryConfig, MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
+import { MemorySection } from './MemorySection.tsx'
+import type { MemorySectionInjected } from './MemorySection.tsx'
 import { namespaceCard } from './NamespaceCard.tsx'
 import type {
   ModelCatalogView, NamespaceCardInjected, NamespaceCardSpec,
 } from './NamespaceCard.tsx'
+import { MemorySectionController } from './memory-section-store.ts'
+import type { MemoryRemoteApi } from './memory-section-store.ts'
 import { modelOptions, providerOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
 export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
+export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
 
 /** The project-notes card: `notesEnabled` + its knobs, from the `memory` namespace. */
 const NOTES_SPEC: NamespaceCardSpec = {
@@ -106,10 +117,13 @@ const REVIEW_SPEC: NamespaceCardSpec = {
 }
 
 /** Required services (cordis fiber inject). */
-export const inject = ['slots', 'locale', 'settingsScope']
+export const inject = ['slots', 'locale', 'connection', 'settingsScope']
 
-/** The locale namespace for i18n strings, shared by all three cards. */
+/** The locale namespace for i18n strings, shared by the cards and the section. */
 const NS = 'settings.memory'
+
+/** Settings-section nav order — after Plugins (15) and Agent presets (20). */
+const SECTION_ORDER = 25
 
 /**
  * One `settings.plugin.item` registration. `namespace` is the settings
@@ -141,6 +155,60 @@ interface ConnectionFace {
       }>
     }
   }
+  /** Generic logical RPC channels (the Typert gateway rides `/api`). */
+  readonly rpc?: {
+    call(
+      channel: string,
+      endpoint: string,
+      payload: unknown,
+      signal?: AbortSignal,
+    ): Promise<{ ok: boolean; value?: unknown; error?: { message?: string } }>
+  }
+}
+
+/**
+ * Adapt the connection's generic RPC channel to the controller's
+ * `memoryRemote` face. Every call is one `/api` endpoint of the form
+ * `memoryRemote/<method>`; the SRC dispatch binds each method PARAMETER NAME
+ * to a wire field, so a single-`request` method carries
+ * `{ args: { request: {...} } }` and a parameterless method an empty args
+ * object — exactly what the gateway's own client projection would emit.
+ * @param connection - the optional client connection handle.
+ * @returns the face, or undefined when this connection cannot serve RPCs (the
+ * section then degrades to its error state instead of breaking settings).
+ */
+function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRemoteApi | undefined {
+  const call = connection?.rpc?.call
+  if (typeof call !== 'function') return undefined
+  const invoke = async <T>(method: string, request?: unknown): Promise<{
+    result: { ok: true; value: T } | { ok: false; error: { message: string } }
+  }> => {
+    try {
+      const response = await call('/api', `memoryRemote/${method}`, {
+        args: request === undefined ? {} : { request },
+      })
+      if (response.ok) return { result: { ok: true, value: response.value as T } }
+      return {
+        result: {
+          ok: false,
+          error: { message: response.error?.message ?? `memoryRemote/${method} failed` },
+        },
+      }
+    } catch (error) {
+      return {
+        result: {
+          ok: false,
+          error: { message: error instanceof Error ? error.message : String(error) },
+        },
+      }
+    }
+  }
+  return {
+    list: request => invoke('list', request),
+    search: request => invoke('search', request),
+    projects: () => invoke('projects'),
+    health: () => invoke('health'),
+  }
 }
 
 /**
@@ -160,11 +228,10 @@ function createCatalogLoader(connection: ConnectionFace | undefined): (() => Pro
 }
 
 /**
- * Mount the memory configuration cards inside Settings → Plugins → Plugin
- * configuration. Each card binds its namespace's settings scope through the
- * standard settings transport. The binder ties the scope's lifetime to this
- * plugin's fiber, so stop/update disposes it; the scope is a HostObservable
- * handed to the card as its hook, and `set`/`unset` pass through verbatim.
+ * Mount the memory surfaces.
+ *
+ * The configuration cards keep their Plugin-tab home untouched; the content
+ * section registers beside them under its own nav entry.
  * @param ctx - the browser plugin context.
  */
 export function apply(ctx: ClientContext): void {
@@ -173,7 +240,19 @@ export function apply(ctx: ClientContext): void {
 
   // Optional: the connection's llm face powers the extraction-model dropdowns.
   // Absent (headless / older deployment) the selects fall back to free text.
-  const loadCatalog = createCatalogLoader(ctx.get('connection') as ConnectionFace | undefined)
+  const connection = ctx.get('connection') as ConnectionFace | undefined
+  const loadCatalog = createCatalogLoader(connection)
+
+  // The content-management controller rides the generic /api RPC channel to
+  // the host's memoryRemote namespace; a deployment without the channel
+  // degrades the section to its error state instead of breaking settings.
+  const controller = new MemorySectionController(createMemoryRemoteApi(connection))
+
+  ctx.effect(() => {
+    return ctx.on('connection/reset', () => {
+      void controller.load()
+    })
+  }, 'dsh-memory: memory section reload on reconnect')
 
   ctx.slots.inject('settings.plugin.item', function* () {
     for (const card of CARDS) {
@@ -211,4 +290,23 @@ export function apply(ctx: ClientContext): void {
       }
     }
   })
+
+  const sectionInjected = (): MemorySectionInjected => ({
+    hooks: { memorySection: controller.store },
+    load: () => controller.load(),
+    setScope: (scope) => { controller.setScope(scope) },
+    setProject: (name) => { controller.setProject(name) },
+    commitQuery: (query) => { controller.commitQuery(query) },
+    toggleCategory: (category) => { controller.toggleCategory(category) },
+    setPage: (page) => { controller.setPage(page) },
+  })
+
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'memory',
+    order: SECTION_ORDER,
+    label: () => ctx.locale.bind(NS)('nav'),
+    locale: NS,
+    inject: sectionInjected,
+  }, MemorySection))
 }

@@ -1,8 +1,8 @@
 # 记忆管理中心（Memory Manager）实施规划
 
-> 状态：**规划已确认，待实施**（2026-08-24 与 chenhw7 确认：位置走 Settings 独立 section；范围分期，一期只读浏览）
+> 状态：**一期已实施并通过端到端验收**（2026-08-24，验收记录见 §12）。二期（CRUD + 审计）、三期（增强）待启动。
 >
-> 本文档是交互式记忆内容管理页面的实施蓝图。目标读者：实施者（人或 agent）。所有集成点均已对照宿主源码核实。
+> 本文档是交互式记忆内容管理页面的实施蓝图。目标读者：实施者（人或 agent）。所有集成点均已对照宿主源码核实；一期实测对 §5.1 的两处修正记录在 §12。
 
 ## 1. 背景与现状
 
@@ -194,17 +194,36 @@ MemorySection.tsx ──操作──▶ MemorySectionController（memory-section
 
 ## 11. 实施清单（开工时逐项勾选）
 
-- [ ] H1 `projects()` @Remote 方法 + 单测
-- [ ] H2 `staleSince` 透传 + 单测
-- [ ] H3 `stale` 计数透传 + 单测
-- [ ] H4 同步 `typert.remote-client.*` 镜像
-- [ ] H6 loopback / PRIVILEGED_METHODS 核实
-- [ ] client：`inject` 扩展 + async apply + `$mount`（web profile 先实测启动）
-- [ ] client：`memory-section-store.ts` Controller + 状态机
-- [ ] client：`MemorySection.tsx`（仪表盘 / 工具栏 / 列表）
-- [ ] client：locales（en + zh）+ 样式
-- [ ] `package.json` `dsh.client.inject` 核对
-- [ ] jsdom 测试
-- [ ] `pnpm build` → `http://127.0.0.1:10026` 端到端验收（§6 一期 5 条）
-- [ ] README + TECH_DESIGN 文档更新
-- [ ] 记忆沉淀：实施完成后把关键决策与坑写回 memory/notes
+- [x] H1 `projects()` @Remote 方法 + 单测（`tests/remote-service.spec.ts`）
+- [x] H2 `staleSince` 透传 + 单测
+- [x] H3 `stale` 计数透传 + 单测
+- [x] H4 同步 `typert.remote-client.*` 镜像
+- [x] H6 loopback / PRIVILEGED_METHODS 核实（结论：宿主无按方法注册表，信任门在传输层 `api-request-trust`；已写入 `src/remote/index.ts` 头注释）
+- [x] client：inject 扩展 + 挂载数据面（web profile 实测启动 ✓；**实测修正：放弃 `$mount`，改走 `/api` RPC 直呼，见 §12**）
+- [x] client：`memory-section-store.ts` Controller + 状态机
+- [x] client：`MemorySection.tsx`（仪表盘 / 工具栏 / 列表）
+- [x] client：locales（en + zh）+ 样式（`section-styles.ts`）
+- [x] `package.json` `dsh.client.inject` 核对（补 api-remotes / client-locale / client-runtime）
+- [x] jsdom 测试（`tests/memory-section.client.spec.tsx`，10 用例）
+- [x] `pnpm build` → `http://127.0.0.1:10026` 端到端验收（§6 一期 5 条全过，含双语 label 与断连重载实测）
+- [x] README + TECH_DESIGN 文档更新（中英双语四份）
+- [x] 记忆沉淀：实施完成后把关键决策与坑写回 memory/notes
+
+## 12. 一期实施记录（2026-08-24）
+
+### 12.1 交付
+
+- **Host：** H1–H6 全部落地；新增 `tests/remote-service.spec.ts`（10 用例）。服务方法共十个：原九个 + `projects`。
+- **Client：** `src/client/` 新增 `MemorySection.tsx` / `memory-section-store.ts` / `section-styles.ts`，`locales.ts` 增补 en+zh 词条；四张配置卡原样保留。新增 jsdom 套件 `tests/memory-section.client.spec.tsx`（10 用例），vitest 别名把浏览器 loader 形态的 `@deepseek-ai/dsh-client-runtime/client` 指到同契约 stub（`tests/stubs/client-runtime.ts`）。
+- **全量测试：** vitest 389 passed。
+
+### 12.2 与规划的偏差（均为浏览器实测驱动）
+
+1. **数据面不走 `$mount`，改走 `/api` RPC 直呼。** §5.1 的挂载方案在真机连续失败：
+   - gateway 客户端对贡献物方法名做命名空间服务成员的保留字校验，`memoryRemote/remove` 即撞名（报 *conflicts with its namespace service*）——服务方法已改名 **`removeEntry`**（§4 写路径语义不变，二期 UI 使用新名）；
+   - cordis 禁止 fiber 在 inject 里声明自己 apply 内才创建的服务，读 `remote.memoryRemote` accessor 报 *without inject*，「自产自销」式挂载不可行。
+   最终形态：`connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`——宿主 `TypertGatewayService` 对 `/api` 上所有 `<ns>/<method>` endpoint 做 source-mode discovery（反射带 `typertRemote` 绑定的服务按形参名分发 args 字段；无参方法发 `{ args: {} }`），host 端注册即自动可达。注意 `connection.api.*` 是另一套 apiproxy HTTP 面，与此无关。
+2. **apply 保持同步函数。** 不再需要 await 挂载，async 语义一并撤销。
+3. **H6 结论修正了规划假设：** 不存在按方法的 `PRIVILEGED_METHODS` 注册表，无需 pin 回环；传输层信任栅栏统一覆盖所有 `/api` 请求。
+
+细节见 `docs/TECH_DESIGN.*` §7.7–7.8。
