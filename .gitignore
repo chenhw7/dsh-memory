@@ -5,6 +5,9 @@ docs/agent-memory/
 # Dependencies
 node_modules/
 
+# Local npm cache (read-only $HOME in DSH sandbox sessions)
+.npm-cache/
+
 # Build output
 lib/
 *.tsbuildinfo
