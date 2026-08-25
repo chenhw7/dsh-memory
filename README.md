@@ -86,7 +86,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 To pin a specific version:
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.3.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.4.0
 ```
 
 ### From a local checkout
@@ -109,8 +109,8 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.3.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.3.0.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.4.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.4.0.tgz
 ```
 
 ## Update

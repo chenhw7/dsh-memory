@@ -84,7 +84,7 @@ pnpm dsh plugin add --profile web @chenhw7/dsh-memory
 需要锁定特定版本时：
 
 ```sh
-dsh plugin add --profile web @chenhw7/dsh-memory@0.3.0
+dsh plugin add --profile web @chenhw7/dsh-memory@0.4.0
 ```
 
 ### 从本地 checkout 安装
@@ -107,8 +107,8 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.3.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.3.0.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.4.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.4.0.tgz
 ```
 
 ## 更新
