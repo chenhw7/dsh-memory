@@ -36,6 +36,7 @@ const memoryEntrySchema = z.object({
   scope: z.enum(['global', 'project', 'user']),
   category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
   content: z.string(),
+  summary: z.string().optional(),
   projectName: z.string().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -167,6 +168,7 @@ export class DomainMemoryStore extends MemoryStore {
       scope: input.scope,
       category: input.category,
       content: input.content,
+      ...(input.summary !== undefined && input.summary.length > 0 ? { summary: input.summary } : {}),
       projectName: input.projectName,
       createdAt: now,
       updatedAt: now,
@@ -199,12 +201,19 @@ export class DomainMemoryStore extends MemoryStore {
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
     }
-    const updated: MemoryEntry = {
+    // summary semantics: `undefined` = keep existing; `''` = explicitly clear;
+    // a non-empty string = replace. Build the updated entry accordingly.
+    const base: MemoryEntry = {
       ...existing,
       content: newContent,
       category: input.category ?? existing.category,
       updatedAt: Date.now(),
     }
+    const updated: MemoryEntry = input.summary === ''
+      ? (() => { const { summary: _c, ...rest } = base; return rest as MemoryEntry })()
+      : input.summary !== undefined
+        ? { ...base, summary: input.summary }
+        : base
     await this.entries.put(id, updated)
     await this.appendAudit('update', id, updated, input.source, input.sessionId)
     return updated

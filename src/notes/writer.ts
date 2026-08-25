@@ -5,10 +5,18 @@
  * (and concurrent sessions rendering the same truth) from ever seeing a torn
  * file.
  *
+ * Drift guard (P0-5): before overwriting a managed notes file the writer
+ * re-reads the current on-disk content and compares it to the last content
+ * this process wrote. When the file has been externally modified (hand edit,
+ * merge conflict resolution, another tool), the write is refused and the
+ * externally modified file is preserved as `<file>.bak.<ts>` so the user can
+ * reconcile manually. The marker-based AGENTS.md pointer block is exempt:
+ * it is already drift-safe (content outside the markers is never touched).
+ *
  * @module @chenhw7/dsh-memory/notes/writer
  */
 
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 /**
@@ -27,6 +35,62 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
     await unlink(tmp).catch(() => {})
     throw error
   }
+}
+
+/** Thrown by {@link writeNotesFile} when the target file has drifted from the last write. */
+export class DriftError extends Error {
+  /** Absolute path of the backup copy holding the externally modified content. */
+  readonly backupPath: string
+
+  constructor(filePath: string, backupPath: string) {
+    super(`notes file drifted: external modification detected at ${filePath}; backup saved to ${backupPath}`)
+    this.name = 'DriftError'
+    this.backupPath = backupPath
+  }
+}
+
+/**
+ * Write a managed notes file atomically with drift guard. Re-reads the
+ * current on-disk content before writing; when the file differs from both
+ * the previous content this process wrote (`previousContent`) AND the new
+ * content (i.e. someone/something else modified the file), the write is
+ * refused: the drifted file is copied to `<filePath>.bak.<ts>` and a
+ * {@link DriftError} is thrown so the caller can decide what to do.
+ *
+ * The first write (file absent) is always allowed. A write that is a no-op
+ * (new content equals what's on disk) is skipped silently.
+ *
+ * @param filePath - absolute path of the target file.
+ * @param content - the full file content to write.
+ * @param previousContent - the content this process last wrote to the file,
+ *   or `undefined` when this is the first write in this process lifetime.
+ * @throws {DriftError} when the on-disk content matches neither
+ *   `previousContent` nor `content`.
+ */
+export async function writeNotesFile(
+  filePath: string,
+  content: string,
+  previousContent: string | undefined,
+): Promise<void> {
+  let onDisk: string | undefined
+  try {
+    onDisk = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (onDisk !== undefined) {
+    // No-op: content already on disk matches what we want to write.
+    if (onDisk === content) return
+    // Drift: the on-disk content does not match our last write — someone
+    // else (hand edit, merge tool, another process) modified the file.
+    const drifted = previousContent === undefined || onDisk !== previousContent
+    if (drifted) {
+      const backupPath = `${filePath}.bak.${Date.now()}`
+      await copyFile(filePath, backupPath)
+      throw new DriftError(filePath, backupPath)
+    }
+  }
+  await writeFileAtomic(filePath, content)
 }
 
 /** Marker opening the managed pointer block in AGENTS.md. */

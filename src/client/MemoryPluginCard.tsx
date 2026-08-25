@@ -35,6 +35,8 @@ export interface MemoryConfig {
   memoryMode?: 'full' | 'policy-only' | 'custom' | 'off' | 'index'
   memoryPolicyCustomText?: string
   memoryCharLimit?: number
+  /** Max entries injected into the memory snapshot regardless of character budget (P0-6); 0 = no limit. */
+  memoryMaxEntries?: number
   maxSearchResults?: number
   decayDays?: number
   notesEnabled?: boolean
@@ -75,6 +77,7 @@ const DEFAULTS: MemoryConfig = {
   memoryMode: 'policy-only',
   memoryPolicyCustomText: '',
   memoryCharLimit: 5000,
+  memoryMaxEntries: 20,
   maxSearchResults: 50,
   decayDays: 30,
   notesEnabled: true,
@@ -85,8 +88,8 @@ const DEFAULTS: MemoryConfig = {
 }
 
 /** Numeric fields validated by {@link numericInvalid}. */
-type NumericField = 'memoryCharLimit' | 'maxSearchResults' | 'decayDays' | 'notesCharLimit' | 'notesMaxEntriesPerFile'
-const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'maxSearchResults', 'decayDays', 'notesCharLimit', 'notesMaxEntriesPerFile']
+type NumericField = 'memoryCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays' | 'notesCharLimit' | 'notesMaxEntriesPerFile'
+const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays', 'notesCharLimit', 'notesMaxEntriesPerFile']
 
 /** A field is overridden when the user layer carries it (presence, not value). */
 function isOverridden(snap: SettingsScopeSnapshot<MemoryConfig>, field: keyof MemoryConfig): boolean {
@@ -220,6 +223,20 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             value={draft.memoryCharLimit ?? ''}
             onChange={(v) => edit('memoryCharLimit', v === '' ? undefined : Number(v))}
             onReset={() => { void props.unset('memoryCharLimit'); edit('memoryCharLimit', undefined) }}
+          />
+          <NumberField
+            id="dsh-memory-max-entries"
+            label={t('memoryMaxEntries')}
+            hint={t('memoryMaxEntriesHint')}
+            overridden={isOverridden(snap, 'memoryMaxEntries')}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={t('invalidNumber')}
+            invalid={numericInvalid('memoryMaxEntries')}
+            disabled={disabled}
+            value={draft.memoryMaxEntries ?? ''}
+            onChange={(v) => edit('memoryMaxEntries', v === '' ? undefined : Number(v))}
+            onReset={() => { void props.unset('memoryMaxEntries'); edit('memoryMaxEntries', undefined) }}
           />
           <NumberField
             id="dsh-memory-max-search"

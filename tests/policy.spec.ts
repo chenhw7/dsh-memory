@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMemorySectionText,
+  buildAutoRecallBlock,
   renderMemoryIndex,
+  AUTO_RECALL_NOTE,
   MEMORY_CONTEXT_NOTE,
+  MEMORY_INDEX_NOTE,
   MEMORY_POLICY_TEXT,
   type MemoryMode,
   type IndexEntry,
 } from '../src/context/policy.ts'
+import { estimateTokens, readMemorySnapshot } from '../src/context/index.ts'
+import type { MemoryEntry, MemoryStore } from '../src/index.ts'
+
+/** Minimal store stub for readMemorySnapshot tests. */
+function snapshotStore(entries: MemoryEntry[]): MemoryStore {
+  return { list: () => entries } as unknown as MemoryStore
+}
 
 describe('buildMemorySectionText', () => {
   const memoryContent = '## global\n- prefers tabs over spaces\n## user\n- likes concise answers'
@@ -105,8 +115,8 @@ describe('renderMemoryIndex (§3.12)', () => {
 
   it('collapses the tail into category roll-up lines when the budget is exhausted', () => {
     // Budget fits ~1-2 lines; the remaining entries roll up.
-    // The header overhead is ~246 chars (MEMORY_INDEX_NOTE + framing).
-    const text = renderMemoryIndex(entries, 320)
+    // The header overhead is ~386 chars (MEMORY_INDEX_NOTE + 40 framing).
+    const text = renderMemoryIndex(entries, 450)
     // The tail is summarized: either with category roll-up lines (×N) or a
     // count-only fallback when even the roll-up exceeds the budget.
     expect(text).toMatch(/\d+ more/)
@@ -115,8 +125,117 @@ describe('renderMemoryIndex (§3.12)', () => {
   })
 
   it('emits category roll-up lines (×N) when the budget fits the roll-up', () => {
-    // Budget fits 3 lines + the roll-up text, but not all 4 lines.
-    const text = renderMemoryIndex(entries, 380)
+    // Budget fits 2-3 lines + the roll-up text, but not all 4 lines.
+    const text = renderMemoryIndex(entries, 520)
     expect(text).toContain('×')
+  })
+
+  // P0-4: indexLine prefers a summary over truncated content.
+  it('prefers the summary field over content in index lines', () => {
+    const withSummary: IndexEntry[] = [
+      { id: 's1', scope: 'global', content: 'a'.repeat(200), summary: 'short summary', updatedAt: 1 },
+    ]
+    const text = renderMemoryIndex(withSummary, 5000)
+    expect(text).toContain('short summary')
+    // The long content prefix must not appear when a summary is set.
+    expect(text).not.toContain('a'.repeat(80))
+  })
+
+  it('falls back to content when summary is absent', () => {
+    const noSummary: IndexEntry[] = [
+      { id: 'n1', scope: 'user', content: 'plain content here', updatedAt: 1 },
+    ]
+    const text = renderMemoryIndex(noSummary, 5000)
+    expect(text).toContain('plain content here')
+  })
+})
+
+// P0-7: authority-frame / staleness-disclaimer text in all injection surfaces.
+describe('P0-7: temporal caveat in injection frame text', () => {
+  it('MEMORY_CONTEXT_NOTE carries the "written at a point in time" caveat', () => {
+    expect(MEMORY_CONTEXT_NOTE).toContain('at the time they were written')
+    expect(MEMORY_CONTEXT_NOTE).toContain('verify against the current repository')
+  })
+
+  it('MEMORY_INDEX_NOTE carries the same caveat', () => {
+    expect(MEMORY_INDEX_NOTE).toContain('at the time they were written')
+    expect(MEMORY_INDEX_NOTE).toContain('verify against the current repository')
+  })
+
+  it('AUTO_RECALL_NOTE carries the same caveat', () => {
+    expect(AUTO_RECALL_NOTE).toContain('at the time they were written')
+    expect(AUTO_RECALL_NOTE).toContain('verify against the current repository')
+  })
+})
+
+// P0-6: token estimates and entry-count cap.
+describe('P0-6: injection budget — token estimates and entry-count cap', () => {
+  const makeEntry = (scope: MemoryEntry['scope'], content: string, extra: Partial<MemoryEntry> = {}): MemoryEntry => ({
+    id: `id-${Math.random()}` as never,
+    scope,
+    content,
+    createdAt: 0,
+    updatedAt: 0,
+    ...extra,
+  })
+
+  it('estimateTokens returns a positive integer for non-empty text', () => {
+    expect(estimateTokens('hello world')).toBeGreaterThan(0)
+    expect(estimateTokens('')).toBe(0)
+  })
+
+  it('readMemorySnapshot appends a ≈token footer', () => {
+    const store = snapshotStore([makeEntry('global', 'use pnpm')])
+    const text = readMemorySnapshot(store, 5000)
+    expect(text).toContain('≈')
+    expect(text).toContain('tokens')
+  })
+
+  it('readMemorySnapshot respects the maxEntries cap and appends an overflow line', () => {
+    const entries = Array.from({ length: 10 }, (_, i) => makeEntry('global', `fact ${i}`))
+    const store = snapshotStore(entries)
+    const text = readMemorySnapshot(store, 5000, undefined, 3)
+    expect(text).toContain('more entries')
+    // Only 3 entry bullets rendered.
+    const bullets = text.split('\n').filter(l => l.startsWith('- '))
+    expect(bullets.length).toBeLessThanOrEqual(3)
+  })
+
+  it('readMemorySnapshot with maxEntries=0 renders all entries (no count cap)', () => {
+    const entries = Array.from({ length: 10 }, (_, i) => makeEntry('global', `uniquefact-${i}`))
+    const store = snapshotStore(entries)
+    const text = readMemorySnapshot(store, 5000, undefined, 0)
+    // Every entry content appears in the snapshot.
+    for (let i = 0; i < 10; i++) {
+      expect(text).toContain(`uniquefact-${i}`)
+    }
+  })
+
+  it('buildAutoRecallBlock appends a ≈token footer to the fence', () => {
+    const entries: MemoryEntry[] = [{
+      id: 'r1' as never,
+      scope: 'global',
+      content: 'remember to use pnpm',
+      createdAt: 0,
+      updatedAt: 0,
+    }]
+    const fence = buildAutoRecallBlock(entries)
+    expect(fence).toContain('<recalled-memory>')
+    expect(fence).toContain('≈')
+    expect(fence).toContain('tokens')
+  })
+
+  it('buildAutoRecallBlock prefers summary over content in fence lines (P0-4)', () => {
+    const entries: MemoryEntry[] = [{
+      id: 'r2' as never,
+      scope: 'user',
+      content: 'very long content '.repeat(30),
+      summary: 'concise summary',
+      createdAt: 0,
+      updatedAt: 0,
+    }]
+    const fence = buildAutoRecallBlock(entries)
+    expect(fence).toContain('concise summary')
+    expect(fence).not.toContain('very long content')
   })
 })

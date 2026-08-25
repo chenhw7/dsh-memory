@@ -49,7 +49,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
 import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, type MemoryMode, type IndexEntry } from './policy.ts'
 
-export { buildMemorySectionText, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE } from './policy.ts'
+export { buildMemorySectionText, buildAutoRecallBlock, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE, MEMORY_INDEX_NOTE, AUTO_RECALL_NOTE } from './policy.ts'
 export { buildNotesSectionText, PROJECT_NOTES_NOTE } from './policy.ts'
 export type { MemoryMode, IndexEntry } from './policy.ts'
 
@@ -68,6 +68,13 @@ const DEFAULT_MAX_SEARCH_RESULTS = 50
 const DEFAULT_DECAY_DAYS = 30
 /** Upper bound on any single generated notes file (defense-in-depth on top of the entry cap). */
 const MAX_NOTES_FILE_CHARS = 32_000
+/**
+ * Default maximum number of memory entries injected into the system-prompt
+ * snapshot, regardless of the character budget (P0-6). Prevents a large
+ * store from flooding the prompt even when the character budget allows it.
+ * `0` = no entry-count limit (character budget only).
+ */
+const DEFAULT_MEMORY_MAX_ENTRIES = 20
 
 /** Per-session frozen memory state: the content/index snapshots plus the project-notes snapshot. */
 interface FrozenSnapshot {
@@ -103,6 +110,12 @@ export interface MemoryConfig {
   memoryPolicyCustomText?: string
   /** Character budget for the frozen memory content snapshot; defaults to `5000`. */
   memoryCharLimit: number
+  /**
+   * Maximum number of entries injected into the memory snapshot regardless of
+   * the character budget (P0-6). Entries beyond this count are rolled up into
+   * a count-only summary line. `0` = no entry-count limit. Defaults to `20`.
+   */
+  memoryMaxEntries: number
   /** Max entries returned by `memory_search` / `memory_list` when the call omits `limit`; defaults to `50`. `0` = no limit. */
   maxSearchResults: number
   /** Days without recall before a project-scoped entry is decayed by the janitor. `0` = disabled. Defaults to `30`. */
@@ -130,6 +143,7 @@ export const Config: z<MemoryConfig> = z.object({
   memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index'] as const).default(DEFAULT_MEMORY_MODE),
   memoryPolicyCustomText: z.string(),
   memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
+  memoryMaxEntries: z.number().step(1).min(0).default(DEFAULT_MEMORY_MAX_ENTRIES),
   maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
   decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
@@ -172,44 +186,82 @@ function staleNote(count: number): string {
 }
 
 /**
+ * Rough estimate of the token count for a text blob (P0-6). Uses the
+ * commonly cited ~4-characters-per-token approximation for English; CJK
+ * text is typically 1–2 tokens per character, which this underestimates —
+ * the estimate is a coarse magnitude indicator, not a billing figure.
+ * @param text - the text to estimate.
+ * @returns the estimated token count.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
+/**
  * Read a frozen memory-content snapshot from the store across the global,
- * project, and user scopes, joined and truncated to the character budget.
+ * project, and user scopes, joined and truncated to the character budget and
+ * entry-count cap (P0-6).
  *
  * Folding rules applied before rendering:
  * - Soft-decayed entries (`staleSince` set) are hidden entirely and summarized
  *   in a trailing count line — they remain searchable via tools.
  * - Healthy entries are cross-checked against same-scope correction-category
  *   entries ({@link annotateConflicts}); contradicted topics get inline markers.
+ * - When `maxEntries > 0`, at most `maxEntries` entries are rendered; the
+ *   rest are folded into a trailing `(N more entries …)` line.
  * @param memory - the live memory store.
  * @param charLimit - character budget; `0` yields no content.
  * @param exclude - optional predicate: entries it accepts are omitted (used to
  *   keep notes-rendered entries out of the memory section — no double injection).
+ * @param maxEntries - maximum number of entries to render; `0` = no limit.
  * @returns the rendered snapshot text, possibly truncated.
  */
-export function readMemorySnapshot(memory: MemoryStore, charLimit: number, exclude?: (entry: MemoryEntry) => boolean): string {
+export function readMemorySnapshot(
+  memory: MemoryStore,
+  charLimit: number,
+  exclude?: (entry: MemoryEntry) => boolean,
+  maxEntries: number = 0,
+): string {
   if (charLimit <= 0) return ''
   const parts: string[] = []
   let hiddenStale = 0
+  let renderedCount = 0
+  let overflowCount = 0
   for (const scope of SNAPSHOT_SCOPES) {
     const all = memory.list(scope)
     hiddenStale += all.filter(entry => entry.staleSince !== undefined).length
     const visible = all.filter(entry => entry.staleSince === undefined)
     const filtered = exclude === undefined ? visible : visible.filter(entry => !exclude(entry))
     if (filtered.length === 0) continue
-    const conflicts = annotateConflicts(filtered)
-    const rendered = renderScope(scope, filtered, conflicts.size > 0 ? conflicts : undefined)
-    if (rendered.length > 0) parts.push(rendered)
+    const capped = maxEntries > 0
+      ? filtered.slice(0, Math.max(0, maxEntries - renderedCount))
+      : filtered
+    overflowCount += filtered.length - capped.length
+    if (capped.length === 0) continue
+    const conflicts = annotateConflicts(capped)
+    const rendered = renderScope(scope, capped, conflicts.size > 0 ? conflicts : undefined)
+    if (rendered.length > 0) {
+      parts.push(rendered)
+      renderedCount += capped.length
+    }
   }
   let text = parts.join('\n\n')
-  if (hiddenStale > 0) {
-    const note = staleNote(hiddenStale)
-    // Keep the whole view within budget even with the note attached.
-    text = text.length + note.length + 2 > charLimit && text.length > 0
+  const annotations: string[] = []
+  if (hiddenStale > 0) annotations.push(staleNote(hiddenStale))
+  if (overflowCount > 0) annotations.push(`(${overflowCount} more entries — use memory_search to recall them)`)
+  if (annotations.length > 0) {
+    const noteStr = annotations.join(' ')
+    text = text.length + noteStr.length + 2 > charLimit && text.length > 0
       ? text
-      : text.length === 0 ? note : `${text}\n\n${note}`
+      : text.length === 0 ? noteStr : `${text}\n\n${noteStr}`
   }
   if (text.length > charLimit) {
-    text = `${text.slice(0, charLimit)}\n…(memory truncated at ${charLimit} characters)`
+    const truncated = text.slice(0, charLimit)
+    text = `${truncated}\n…(memory truncated at ${charLimit} characters ≈${estimateTokens(truncated)} tokens)`
+  } else if (text.length > 0) {
+    // Append a ≈token footer so the model (and the user) can budget against
+    // a consistent unit alongside the character limit (P0-6).
+    text = `${text}\n\n[memory snapshot: ${text.length} characters ≈${estimateTokens(text)} tokens]`
   }
   return text
 }
@@ -236,6 +288,8 @@ export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     // Load-time guard: the index line shows a placeholder, never a payload.
     content: redactBlocked(entry.content),
+    // Prefer the explicit summary for the index line (P0-4 progressive disclosure).
+    ...entry.summary !== undefined ? { summary: redactBlocked(entry.summary) } : {},
     updatedAt: entry.updatedAt,
   }))
   let text = renderMemoryIndex(entries, charLimit)
@@ -295,13 +349,14 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       return
     }
     const charLimit = settings.memoryCharLimit
+    const maxEntries = settings.memoryMaxEntries ?? DEFAULT_MEMORY_MAX_ENTRIES
     // No double injection: entries rendered into the notes files are excluded
     // from the memory section's snapshot/index while notes are enabled.
     const exclude = settings.notesEnabled
       ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
       : undefined
     sessionMemory.set(session, {
-      content: readMemorySnapshot(memory, charLimit, exclude),
+      content: readMemorySnapshot(memory, charLimit, exclude, maxEntries),
       index: readMemoryIndex(memory, charLimit, exclude),
       notes,
     })

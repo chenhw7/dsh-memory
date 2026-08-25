@@ -21,12 +21,12 @@ import { scanContent } from '../scanner.ts'
 import type { MemoryStore } from '../index.ts'
 import { isRenderedEntry } from './scope.ts'
 import { renderConventions, renderPitfalls } from './render.ts'
-import { ensureAgentsPointer, writeFileAtomic } from './writer.ts'
+import { ensureAgentsPointer, writeFileAtomic, writeNotesFile, DriftError } from './writer.ts'
 import { resolveNotesSettings, type NotesSettings } from './settings.ts'
 
 export { isRenderedEntry } from './scope.ts'
 export { renderConventions, renderPitfalls } from './render.ts'
-export { ensureAgentsPointer, writeFileAtomic, agentsPointerBlock, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from './writer.ts'
+export { ensureAgentsPointer, writeFileAtomic, writeNotesFile, DriftError, agentsPointerBlock, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from './writer.ts'
 export { resolveNotesSettings, DEFAULT_NOTES_ENABLED, DEFAULT_NOTES_DIR, DEFAULT_NOTES_CHAR_LIMIT, DEFAULT_NOTES_AGENTS_POINTER, DEFAULT_NOTES_MAX_ENTRIES_PER_FILE } from './settings.ts'
 export type { NotesSettings } from './settings.ts'
 
@@ -97,8 +97,10 @@ function projectNameOf(cwd: string): string | undefined {
 class ProjectNotesServiceImpl extends ProjectNotesService {
   private readonly ctx: Context
   private readonly settings: () => NotesSettings
-  /** Last persisted file texts per notes dir, for skip-if-unchanged. */
+  /** Last persisted file texts per notes dir, for skip-if-unchanged and drift detection. */
   private readonly persisted = new Map<string, ProjectNotesSnapshot>()
+  /** Set to true when a drift error was already reported for this dir (log-once). */
+  private readonly driftReported = new Set<string>()
   /** Last store health timestamp already rendered, for the dirty check. */
   private renderedHealthTs: number | undefined
   /** Debounce timer for activity-triggered re-renders. */
@@ -172,15 +174,42 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
     if (previous !== undefined && previous.conventions === snapshot.conventions && previous.pitfalls === snapshot.pitfalls) {
       return
     }
-    this.persisted.set(dir, snapshot)
     void (async () => {
       try {
-        await writeFileAtomic(path.join(dir, 'CONVENTIONS.md'), snapshot.conventions)
-        await writeFileAtomic(path.join(dir, 'PITFALLS.md'), snapshot.pitfalls)
+        await writeNotesFile(path.join(dir, 'CONVENTIONS.md'), snapshot.conventions, previous?.conventions)
+        await writeNotesFile(path.join(dir, 'PITFALLS.md'), snapshot.pitfalls, previous?.pitfalls)
         if (settings.notesAgentsPointer) {
           await ensureAgentsPointer(path.join(cwd, 'AGENTS.md'), settings.notesDir)
         }
-      } catch {
+        // Only after a successful write: record this snapshot as the drift
+        // baseline so the next write can detect external modifications.
+        this.persisted.set(dir, snapshot)
+      } catch (error) {
+        if (error instanceof DriftError) {
+          // Drift: external modification was backed up to `.bak.<ts>`;
+          // the store remains the source of truth and the in-memory
+          // snapshot continues to be served. Update the baseline to the
+          // drifted on-disk content so the NEXT persist attempt can write
+          // fresh content (the drift has been "absorbed" as the new base).
+          try {
+            const { readFile } = await import('node:fs/promises')
+            const driftedConventions = await readFile(path.join(dir, 'CONVENTIONS.md'), 'utf8').catch(() => undefined)
+            const driftedPitfalls = await readFile(path.join(dir, 'PITFALLS.md'), 'utf8').catch(() => undefined)
+            if (driftedConventions !== undefined || driftedPitfalls !== undefined) {
+              this.persisted.set(dir, {
+                conventions: driftedConventions ?? previous?.conventions ?? '',
+                pitfalls: driftedPitfalls ?? previous?.pitfalls ?? '',
+              })
+            }
+          } catch { /* best-effort */ }
+          // Report once per notes dir so the log is not spammed on every
+          // reconcile cycle; the user should reconcile the .bak file.
+          if (!this.driftReported.has(dir)) {
+            this.driftReported.add(dir)
+            console.warn(`[dsh-memory] ${error.message}. The in-memory snapshot continues to be served; resolve the drift by reviewing the .bak file and re-saving via memory tools.`)
+          }
+          return
+        }
         // Best-effort: persistence failures never surface to the session.
       }
     })()

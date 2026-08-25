@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { MemoryEntry } from '../src/types.ts'
 import { isRenderedEntry } from '../src/notes/scope.ts'
 import { renderConventions, renderPitfalls, AUTO_HEADER } from '../src/notes/render.ts'
-import { writeFileAtomic, ensureAgentsPointer, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from '../src/notes/writer.ts'
+import { writeFileAtomic, writeNotesFile, DriftError, ensureAgentsPointer, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from '../src/notes/writer.ts'
 import { buildNotesSectionText, PROJECT_NOTES_NOTE } from '../src/context/policy.ts'
 import { readMemorySnapshot, readMemoryIndex } from '../src/context/index.ts'
 import { resolveNotesSettings, DEFAULT_NOTES_DIR } from '../src/notes/settings.ts'
@@ -129,6 +129,69 @@ describe('writer', () => {
     const text = await readFile(agents, 'utf8')
     expect(text.startsWith(userBlock)).toBe(true)
     expect(text).toContain(AGENTS_POINTER_BEGIN)
+  })
+
+  // P0-5: writeNotesFile drift guard tests.
+  describe('writeNotesFile — drift guard (P0-5)', () => {
+    it('writes a new file without any baseline', async () => {
+      const target = path.join(dir, 'CONVENTIONS.md')
+      await writeNotesFile(target, '# Conventions\n\nv1\n', undefined)
+      expect(await readFile(target, 'utf8')).toBe('# Conventions\n\nv1\n')
+    })
+
+    it('skips the write when the on-disk content already matches', async () => {
+      const target = path.join(dir, 'CONVENTIONS.md')
+      await writeNotesFile(target, 'v1', undefined)
+      // Second identical write is a silent no-op (no drift raised, file unchanged).
+      await writeNotesFile(target, 'v1', 'v1')
+      expect(await readFile(target, 'utf8')).toBe('v1')
+    })
+
+    it('overwrites when the on-disk content matches the baseline', async () => {
+      const target = path.join(dir, 'CONVENTIONS.md')
+      await writeNotesFile(target, 'v1', undefined)
+      // Baseline = what's on disk → safe to write new content.
+      await writeNotesFile(target, 'v2', 'v1')
+      expect(await readFile(target, 'utf8')).toBe('v2')
+    })
+
+    it('refuses and backs up when the file was externally modified', async () => {
+      const target = path.join(dir, 'CONVENTIONS.md')
+      // Initial write by us.
+      await writeNotesFile(target, 'v1', undefined)
+      // External edit (simulating a user hand-editing the file).
+      await writeFileAtomic(target, 'user-edit')
+      // Attempting to write v2: onDisk='user-edit', prev='v1' → drift.
+      const err = await writeNotesFile(target, 'v2', 'v1').catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(DriftError)
+      const driftErr = err as DriftError
+      // The drifted file is unchanged.
+      expect(await readFile(target, 'utf8')).toBe('user-edit')
+      // A backup was created alongside the original.
+      expect(driftErr.backupPath).toContain('.bak.')
+      const backup = await readFile(driftErr.backupPath, 'utf8')
+      expect(backup).toBe('user-edit')
+    })
+
+    it('allows the write after drift is absorbed (baseline updated)', async () => {
+      const target = path.join(dir, 'CONVENTIONS.md')
+      await writeNotesFile(target, 'v1', undefined)
+      await writeFileAtomic(target, 'user-edit')
+      // First write → drift error; the caller absorbs the drift.
+      await writeNotesFile(target, 'v2', 'v1').catch(() => {})
+      // Second write with the drifted baseline → now allowed (overwrite the drifted file).
+      await writeNotesFile(target, 'v2', 'user-edit')
+      expect(await readFile(target, 'utf8')).toBe('v2')
+    })
+
+    it('does not throw when previousContent is undefined and file exists (first write)', async () => {
+      // First write over an existing file (e.g. after process restart with no
+      // in-memory baseline): treated as an implicit drift and refused.
+      const target = path.join(dir, 'CONVENTIONS.md')
+      await writeFileAtomic(target, 'pre-existing')
+      const err = await writeNotesFile(target, 'new', undefined).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(DriftError)
+    })
   })
 })
 

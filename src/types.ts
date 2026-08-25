@@ -41,6 +41,13 @@ export interface MemoryEntry {
   readonly category?: MemoryCategory | undefined
   /** Human-readable memory content. */
   readonly content: string
+  /**
+   * Optional short summary for index/auto-recall rendering. Written via
+   * `[summary:…]` at add time. When present, index views and the auto-recall
+   * fence render this instead of a truncated content prefix, improving the
+   * signal-to-noise of the existence index (evolve-style progressive disclosure).
+   */
+  readonly summary?: string | undefined
   /** Project name for `project`-scoped entries; absent otherwise. */
   readonly projectName?: string | undefined
   /** Unix epoch milliseconds when this entry was created. */
@@ -68,6 +75,11 @@ export interface AddMemoryInput {
   readonly category?: MemoryCategory | undefined
   /** Human-readable memory content. */
   readonly content: string
+  /**
+   * Optional short summary for index/auto-recall rendering; mapped from the
+   * `[summary:…]` content tag when present, or supplied directly by tools/UI.
+   */
+  readonly summary?: string | undefined
   /** Project name; required when scope is `project`. */
   readonly projectName?: string | undefined
   /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
@@ -82,6 +94,8 @@ export interface UpdateMemoryInput {
   readonly content?: string
   /** New category; optional. */
   readonly category?: MemoryCategory | undefined
+  /** New summary; optional. Pass empty string to clear. */
+  readonly summary?: string | undefined
   /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
   readonly source?: AuditSource | undefined
   /** Session id for the audit trail; omitted by tool writes that lack a session handle. */

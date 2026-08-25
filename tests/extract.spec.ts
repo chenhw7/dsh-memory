@@ -19,6 +19,8 @@ import {
   extractMemories,
   storeMemories,
   stripContentTag,
+  stripModelDatePrefix,
+  stripSummaryTag,
   flattenFragment,
   runReviewExtraction,
   runFlushExtraction,
@@ -156,6 +158,102 @@ describe('stripContentTag', () => {
   })
   it('leaves untagged content untouched', () => {
     expect(stripContentTag('plain fact')).toEqual({ content: 'plain fact', category: undefined })
+  })
+})
+
+// P0-1: extraction prompts must carry the repo-derivable exclusion rule.
+describe('P0-1: repo-derivable exclusion in extraction prompts', () => {
+  it('REVIEW_SYSTEM_PROMPT carries the repo-derivable admission rule', () => {
+    expect(REVIEW_SYSTEM_PROMPT).toContain('repository already records')
+    expect(REVIEW_SYSTEM_PROMPT).toContain('git log')
+  })
+  it('FLUSH_SYSTEM_PROMPT carries the repo-derivable admission rule', () => {
+    expect(FLUSH_SYSTEM_PROMPT).toContain('repository already records')
+    expect(FLUSH_SYSTEM_PROMPT).toContain('git log')
+  })
+  it('PITFALL_SYSTEM_PROMPT carries the repo-derivable admission rule', () => {
+    expect(PITFALL_SYSTEM_PROMPT).toContain('repository')
+    expect(PITFALL_SYSTEM_PROMPT).toContain('already recorded')
+  })
+})
+
+// P0-2: model-authored date/git prefixes are stripped at the parse layer.
+describe('P0-2: stripModelDatePrefix', () => {
+  it('strips (YYYY-MM-DD) parenthetical prefix', () => {
+    expect(stripModelDatePrefix('(2026-08-25) use pnpm workspaces')).toBe('use pnpm workspaces')
+  })
+  it('strips [YYYY-MM-DD] bracketed prefix', () => {
+    expect(stripModelDatePrefix('[2026-08-25] prefers dark mode')).toBe('prefers dark mode')
+  })
+  it('strips bare YYYY-MM-DD colon prefix', () => {
+    expect(stripModelDatePrefix('2026-08-25: run pnpm install first')).toBe('run pnpm install first')
+  })
+  it('strips slash-date prefix', () => {
+    expect(stripModelDatePrefix('(2026/08/25) some fact')).toBe('some fact')
+  })
+  it('strips ISO datetime prefix', () => {
+    expect(stripModelDatePrefix('2026-08-25T10:30:00 always use pnpm')).toBe('always use pnpm')
+  })
+  it('strips [git branch] prefix', () => {
+    expect(stripModelDatePrefix('[git main] this project uses vitest')).toBe('this project uses vitest')
+  })
+  it('strips stacked date+git prefixes', () => {
+    expect(stripModelDatePrefix('(2026-08-25) [git main] the fact')).toBe('the fact')
+  })
+  it('leaves clean content untouched', () => {
+    expect(stripModelDatePrefix('use pnpm workspaces')).toBe('use pnpm workspaces')
+  })
+  it('does not strip a date in the middle of the content', () => {
+    const content = 'the migration on 2026-08-25 fixed the schema'
+    expect(stripModelDatePrefix(content)).toBe(content)
+  })
+  it('PITFALL_SYSTEM_PROMPT carries the date-prefix prohibition', () => {
+    expect(PITFALL_SYSTEM_PROMPT).toContain('NEVER write a date')
+    expect(PITFALL_SYSTEM_PROMPT).toContain('handwritten prefixes are stripped')
+  })
+  it('dates embedded in extracted content are removed at storeMemories level', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      { scope: 'global', content: '(2026-08-25) pnpm is the package manager' },
+      { scope: 'user', content: '[git main] prefers rebase over merge' },
+    ], undefined, 'review', 's1')
+    expect(added[0]!.content).toBe('pnpm is the package manager')
+    expect(added[1]!.content).toBe('prefers rebase over merge')
+  })
+})
+
+// P0-4: [summary:…] tag is parsed out of the scope colon and stored separately.
+describe('P0-4: stripSummaryTag and summary in extraction', () => {
+  it('extracts [summary:…] from content', () => {
+    const { summary, content } = stripSummaryTag('[summary:short desc] full details here')
+    expect(summary).toBe('short desc')
+    expect(content).toBe('full details here')
+  })
+  it('returns undefined summary when no tag is present', () => {
+    const { summary, content } = stripSummaryTag('plain content')
+    expect(summary).toBeUndefined()
+    expect(content).toBe('plain content')
+  })
+  it('parseExtractedMemories surfaces the summary tag as a separate field', () => {
+    const parsed = parseExtractedMemories('global: [summary:use pnpm] always install with pnpm, never npm')
+    expect(parsed[0]!.summary).toBe('use pnpm')
+    expect(parsed[0]!.content).toBe('always install with pnpm, never npm')
+  })
+  it('parseExtractedMemories with category tag + summary tag', () => {
+    const parsed = parseExtractedMemories('project: [convention] [summary:vitest] this repo uses vitest for tests')
+    expect(parsed[0]!.summary).toBe('vitest')
+    // parseExtractedMemories fully strips both tags.
+    expect(parsed[0]!.content).toBe('this repo uses vitest for tests')
+    expect(parsed[0]!.category).toBe('convention')
+  })
+  it('storeMemories passes summary through to add input', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      { scope: 'global', content: 'use pnpm workspaces', summary: 'pnpm' },
+    ], undefined, 'review', 's1')
+    expect(added[0]!.summary).toBe('pnpm')
   })
 })
 
