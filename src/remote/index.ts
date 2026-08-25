@@ -208,7 +208,10 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (store === undefined) return { entries: [], total: 0 }
     const scope = request.scope as MemoryEntry['scope'] | undefined
     const projectName = request.projectName
-    const all = store.list(scope, projectName)
+    // Newest first: the management UI is a recency-oriented inbox, and lazy
+    // loading must surface fresh memories in the first batch. Sorted here —
+    // not in the store — so other store.list consumers keep their contract.
+    const all = [...store.list(scope, projectName)].sort((a, b) => b.createdAt - a.createdAt)
     const total = all.length
     const offset = request.offset ?? 0
     const limit = request.limit ?? 100
@@ -221,6 +224,10 @@ export class MemoryRemoteService extends TypertRemoteService {
     const store = this.memory()
     if (store === undefined) return { entries: [], total: 0 }
     const query = buildSearchQuery(request)
+    // A management read is not a recall: without this flag every browse or
+    // filter in the UI would stamp lastRecalledAt across the whole match set
+    // and silently revive dormant entries.
+    ;(query as { recordRecall?: boolean }).recordRecall = false
     const result = store.search(query)
     return { entries: result.entries.map(toEntryJson), total: result.total }
   }

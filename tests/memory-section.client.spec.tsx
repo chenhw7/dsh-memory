@@ -3,9 +3,11 @@
  * jsdom tests for the Memory settings section (phase 1, read-only): real
  * client sources driven through @testing-library/react over a scripted
  * memoryRemote API face, wired exactly as src/client/index.ts wires it.
- * Covers the plan §7 phase-1 matrix: initial load rendering, scope switching,
- * workspace filtering, BM25 search with its 300ms debounce, category chips,
- * paging, stale markers, and the error/recover path — including CJK content.
+ * Covers the plan §7 phase-1 matrix: tab split (Overview dashboard vs Manage
+ * list), initial load rendering, scope switching, workspace filtering, BM25
+ * search with its 300ms debounce, category chips, lazy loading (remote batch
+ * append while browsing, local reveal while filtering), stale markers, and
+ * the error/recover path — including CJK content.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
@@ -13,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { MemorySection } from '../src/client/MemorySection.tsx'
 import type { MemorySectionInjected, MemorySectionProps } from '../src/client/MemorySection.tsx'
-import { MemorySectionController } from '../src/client/memory-section-store.ts'
+import { MEMORY_BATCH_SIZE, MemorySectionController } from '../src/client/memory-section-store.ts'
 import type { MemoryRemoteApi, MemorySectionState } from '../src/client/memory-section-store.ts'
 import { en } from '../src/client/locales.ts'
 import type { MemoryEntryJson, MemoryHealthResult } from '../src/typert.remote-client.js'
@@ -63,21 +65,33 @@ interface ApiScript {
   /** health() answer; absent → healthy. */
   health?: { ok?: boolean; message?: string }
   projects?: readonly string[]
-  list?: { entries: readonly MemoryEntryJson[]; total: number }
-  search?: { entries: readonly MemoryEntryJson[]; total: number }
+  /** Backing pool + advertised total for list(); defaults to ROWS. */
+  list?: { entries: readonly MemoryEntryJson[]; total?: number }
+  /** Full match set returned by every search(); defaults to none. */
+  search?: { entries: readonly MemoryEntryJson[]; total?: number }
 }
 
 /**
- * A scripted memoryRemote face; every method is a recorded vi.fn the tests
- * can re-route mid-flight (mockImplementationOnce) to simulate failures.
+ * A scripted memoryRemote face; every method is a recorded vi.fn. `list`
+ * honors limit/offset over its pool exactly like the wire service, so lazy
+ * loading can be exercised end to end.
  */
 function fakeApi(script: ApiScript = {}): MemoryRemoteApi {
   const unhealthy = script.health?.ok === false
+  const pool = script.list?.entries ?? ROWS
+  const poolTotal = script.list?.total ?? pool.length
   return {
     health: vi.fn(async () => unhealthy ? fail(script.health?.message ?? 'store unavailable') : ok(HEALTH)),
     projects: vi.fn(async () => ok({ projects: script.projects ?? ['web', 'cli-tools'] })),
-    list: vi.fn(async () => ok(script.list ?? { entries: ROWS, total: ROWS.length })),
-    search: vi.fn(async () => ok(script.search ?? { entries: [], total: 0 })),
+    list: vi.fn(async (request: { limit?: number; offset?: number } = {}) => {
+      const offset = request.offset ?? 0
+      const limit = request.limit ?? 100
+      return ok({ entries: pool.slice(offset, offset + limit), total: poolTotal })
+    }),
+    search: vi.fn(async () => ok({
+      entries: script.search?.entries ?? [],
+      total: script.search?.total ?? script.search?.entries.length ?? 0,
+    })),
   }
 }
 
@@ -111,7 +125,7 @@ function wire(api: MemoryRemoteApi): {
     setProject: (name: string | null) => { controller.setProject(name) },
     commitQuery: (query: string) => { controller.commitQuery(query) },
     toggleCategory: (category: string) => { controller.toggleCategory(category) },
-    setPage: (page: number) => { controller.setPage(page) },
+    loadMore: () => { void controller.loadMore() },
     t: (key: keyof typeof en) => en[key],
     close: () => {},
   } as unknown as MemorySectionProps
@@ -122,13 +136,38 @@ function wireHandles(props: MemorySectionProps) {
   return {
     actions: {
       setScope: props.setScope,
-      setPage: props.setPage,
+      loadMore: props.loadMore,
     },
   }
 }
 
+/** Land on the Manage tab and wait for the first rows. */
+async function openManage(script: ApiScript = {}, waitText: RegExp = /pin the CI runner/) {
+  const handles = renderSection(script)
+  fireEvent.click(await screen.findByRole('tab', { name: en.tabManage }))
+  await screen.findByText(waitText)
+  return handles
+}
+
+describe('tabs', () => {
+  it('shows only the health dashboard under Overview and only the list under Manage', async () => {
+    renderSection()
+
+    expect(await screen.findByText(en.dashTotal)).toBeTruthy()
+    expect(screen.getByText(en.tabManage)).toBeTruthy()
+    expect(screen.queryByLabelText(en.searchLabel)).toBeNull()
+    expect(screen.queryByText(/pin the CI runner/)).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: en.tabManage }))
+
+    expect(await screen.findByLabelText(en.searchLabel)).toBeTruthy()
+    expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
+    expect(screen.queryByText(en.dashTotal)).toBeNull()
+  })
+})
+
 describe('initial load', () => {
-  it('renders dashboard numbers, badges, and CJK content rows once loaded', async () => {
+  it('renders dashboard numbers once loaded', async () => {
     renderSection()
 
     // Dashboard mirrors health(): total and audit counters visible.
@@ -136,31 +175,33 @@ describe('initial load', () => {
     expect(screen.getByText(en.dashTotal)).toBeTruthy()
     expect(screen.getByText('9')).toBeTruthy()
     expect(screen.getByText(en.dashAudit)).toBeTruthy()
+  })
 
-    // Rows carry scope / category / workspace badges, pin and dormancy marks.
+  it('renders badges, pin/dormancy marks, and CJK content rows on the Manage tab', async () => {
+    await openManage()
+
     expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
     expect(screen.getByText(`📌 ${en.pinnedBadge}`)).toBeTruthy()
     expect(screen.getByText(/提交信息一律使用中文书写/)).toBeTruthy()
     // 'web' appears on the entry row AND in the workspace dropdown.
     expect(screen.getAllByText('web').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText(`😴 ${en.staleMark}`)).toBeTruthy()
-
-    // Default remote paging request: first page of 100, unfiltered.
-    await waitFor(() => {
-      expect(vi.mocked((screen.getByLabelText(en.searchLabel))), 'search box exists').toBeTruthy()
-    })
+    // Everything fits in the first batch: full count, no Load more button.
+    expect(screen.getByText(en.shownCount.replace('{shown}', '3').replace('{total}', '3'))).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.loadMore })).toBeNull()
   })
 
   it('shows the empty-state line for a fresh store', async () => {
     renderSection({ list: { entries: [], total: 0 }, projects: [] })
 
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabManage }))
     await waitFor(() => expect(screen.getByText(en.emptyAll)).toBeTruthy())
   })
 
   it('marks dormant rows grey with an explanatory hint', async () => {
-    renderSection()
+    await openManage()
 
-    const staleBadge = await screen.findByText(`😴 ${en.staleMark}`)
+    const staleBadge = screen.getByText(`😴 ${en.staleMark}`)
     expect(staleBadge.getAttribute('title')).toBe(en.staleHint)
     expect(staleBadge.closest('li')?.className).toContain('dsm-s-row-stale')
     // Healthy rows keep the plain class.
@@ -170,33 +211,31 @@ describe('initial load', () => {
 
 describe('filters', () => {
   it('switches scope remotely and disables the workspace selector on global/user', async () => {
-    const { api } = renderSection()
-    await screen.findByText(/pin the CI runner/)
+    const { api } = await openManage()
     vi.mocked(api.list).mockClear()
 
     fireEvent.click(screen.getByRole('button', { name: en.scopeGlobal }))
 
     await waitFor(() => expect(api.list).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'global', limit: 100, offset: 0 })))
+      expect.objectContaining({ scope: 'global', limit: MEMORY_BATCH_SIZE, offset: 0 })))
     const select = screen.getByLabelText(en.workspaceLabel) as HTMLSelectElement
     expect(select.disabled).toBe(true)
   })
 
   it('filters by workspace from the populated dropdown', async () => {
-    const { api } = renderSection()
-    const select = (await screen.findByLabelText(en.workspaceLabel)) as HTMLSelectElement
+    const { api } = await openManage()
+    const select = screen.getByLabelText(en.workspaceLabel) as HTMLSelectElement
     await waitFor(() => expect([...select.options].map(o => o.value)).toContain('cli-tools'))
     vi.mocked(api.list).mockClear()
 
     fireEvent.change(select, { target: { value: 'web' } })
 
     await waitFor(() => expect(api.list).toHaveBeenCalledWith(
-      expect.objectContaining({ projectName: 'web', limit: 100, offset: 0 })))
+      expect.objectContaining({ projectName: 'web', limit: MEMORY_BATCH_SIZE, offset: 0 })))
   })
 
   it('debounces typed searches into ONE remote query and shows its totals', async () => {
-    const { api } = renderSection({ search: { entries: [ROWS[0]!], total: 1 } })
-    await screen.findByText(/pin the CI runner/)
+    const { api } = await openManage({ search: { entries: [ROWS[0]!], total: 1 } })
     vi.mocked(api.search).mockClear()
 
     const box = screen.getByLabelText(en.searchLabel) as HTMLInputElement
@@ -207,13 +246,12 @@ describe('filters', () => {
 
     await waitFor(() => expect(api.search).toHaveBeenCalledTimes(1), { timeout: 2000 })
     expect(api.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'CI runner', limit: 0 }))
-    // …and the pager reports the searched total.
-    expect(screen.getByText(en.pageSingle.replace('{total}', '1'))).toBeTruthy()
+    // …and the footer reports the searched total.
+    expect(screen.getByText(en.shownCount.replace('{shown}', '1').replace('{total}', '1'))).toBeTruthy()
   })
 
   it('toggles category chips and unions them locally over one full fetch', async () => {
-    const { api } = renderSection()
-    await screen.findByText(/pin the CI runner/)
+    const { api } = await openManage()
     vi.mocked(api.search).mockClear()
 
     const failureChip = screen.getByRole('button', { name: en.catFailure })
@@ -231,20 +269,61 @@ describe('filters', () => {
       expect(call[0].query).toBeUndefined()
     }
   })
+})
 
-  it('pages forward through the total', async () => {
-    const many: MemoryEntryJson[] = Array.from({ length: 100 }, (_, i) => ({
-      id: `m${i}`, scope: 'global' as const, content: `row ${i}`,
-      createdAt: i, updatedAt: i,
-    }))
-    const { api } = renderSection({ list: { entries: many, total: 250 } })
+describe('lazy loading', () => {
+  const many = Array.from({ length: 120 }, (_, i) => ({
+    id: `m${String(i).padStart(3, '0')}`,
+    scope: 'global' as const,
+    content: `row ${i}`,
+    createdAt: i, updatedAt: i,
+  }))
 
-    await screen.findByText(en.pageInfo.replace('{from}', '1').replace('{to}', '100').replace('{total}', '250'))
-    expect(screen.getByText(en.pageInfo.replace('{from}', '1').replace('{to}', '100').replace('{total}', '250'))).toBeTruthy()
+  function countLine(shown: number, total: number): string {
+    return en.shownCount.replace('{shown}', String(shown)).replace('{total}', String(total))
+  }
 
-    fireEvent.click(screen.getByRole('button', { name: en.pageNext }))
-    await waitFor(() => expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ offset: 100 })))
-    await screen.findByText(en.pageInfo.replace('{from}', '101').replace('{to}', '200').replace('{total}', '250'))
+  it('appends remote batches while browsing until everything is shown', async () => {
+    const { api } = await openManage({ list: { entries: many } }, /row 0/)
+
+    // First batch only; later rows are not in the DOM yet.
+    expect(screen.queryByText('row 119')).toBeNull()
+    expect(screen.getByText(countLine(MEMORY_BATCH_SIZE, 120))).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: en.loadMore }))
+    await waitFor(() => expect(api.list).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: MEMORY_BATCH_SIZE, limit: MEMORY_BATCH_SIZE })))
+    await screen.findByText('row 99')
+    expect(screen.getByText(countLine(MEMORY_BATCH_SIZE * 2, 120))).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: en.loadMore }))
+    await screen.findByText('row 119')
+    expect(screen.getByText(countLine(120, 120))).toBeTruthy()
+    // Exhausted: the manual fallback disappears.
+    expect(screen.queryByRole('button', { name: en.loadMore })).toBeNull()
+  })
+
+  it('reveals further matches locally while filtering without extra searches', async () => {
+    const { api } = await openManage(
+      { list: { entries: [] }, search: { entries: many, total: many.length } },
+      en.emptyAll,
+    )
+
+    const box = screen.getByLabelText(en.searchLabel) as HTMLInputElement
+    fireEvent.change(box, { target: { value: 'row' } })
+    await screen.findByText(countLine(MEMORY_BATCH_SIZE, 120))
+    expect(api.search).toHaveBeenCalledTimes(1)
+
+    // Baseline after the filter commit; the reveal itself must ride the
+    // cached match set with no new RPC.
+    vi.mocked(api.search).mockClear()
+    vi.mocked(api.list).mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: en.loadMore }))
+    await screen.findByText('row 99')
+    expect(screen.getByText(countLine(MEMORY_BATCH_SIZE * 2, 120))).toBeTruthy()
+    expect(api.search).not.toHaveBeenCalled()
+    expect(vi.mocked(api.list)).not.toHaveBeenCalled()
   })
 })
 
@@ -258,12 +337,11 @@ describe('failure and recovery', () => {
     // Recovering the backend makes retry land back on the ready page.
     vi.mocked(api.health).mockImplementation(async () => ok(HEALTH))
     fireEvent.click(screen.getByRole('button', { name: en.retry }))
-    await screen.findByText(/pin the CI runner/)
+    await screen.findByText(en.dashTotal)
   })
 
   it('keeps the previous rows visible when a refresh fails mid-browsing', async () => {
-    const { api } = renderSection()
-    await screen.findByText(/pin the CI runner/)
+    const { api } = await openManage()
 
     vi.mocked(api.list).mockImplementationOnce(async () => fail('reset mid-flight'))
     fireEvent.click(screen.getByRole('button', { name: en.scopeUser }))

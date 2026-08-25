@@ -84,15 +84,17 @@ const RULES = `
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
-/* Segmented scope switch. */
-.dsm-s-seg {
+/* Segmented scope switch and section tabs share one visual language. */
+.dsm-s-seg,
+.dsm-s-tabs {
   display: inline-flex;
   padding: 2px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-3);
 }
-.dsm-s-seg-btn {
+.dsm-s-seg-btn,
+.dsm-s-tab-btn {
   appearance: none;
   border: 0;
   background: none;
@@ -104,15 +106,20 @@ const RULES = `
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
 }
-.dsm-s-seg-btn:hover:not([aria-pressed="true"]) {
+.dsm-s-seg-btn:hover:not([aria-pressed="true"]),
+.dsm-s-tab-btn:hover:not([aria-selected="true"]) {
   color: var(--dsw-alias-label-primary);
 }
-.dsm-s-seg-btn[aria-pressed="true"] {
+.dsm-s-seg-btn[aria-pressed="true"],
+.dsm-s-tab-btn[aria-selected="true"] {
   background: var(--dsw-alias-brand-primary);
   color: var(--dsw-alias-bg-layer-3);
+}
+.dsm-s-tab-btn[aria-selected="true"] {
   cursor: default;
 }
-.dsm-s-seg-btn:focus-visible {
+.dsm-s-seg-btn:focus-visible,
+.dsm-s-tab-btn:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: -2px;
 }
@@ -266,20 +273,24 @@ const RULES = `
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* ── Pager / empty / error ────────────────────────────────────────────────── */
-.dsm-s-pager {
+/* ── Lazy-load footer / empty / error ─────────────────────────────────────── */
+.dsm-s-more {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
-.dsm-s-pager-info {
+.dsm-s-count {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
-.dsm-s-page-btn {
+.dsm-s-sentinel {
+  width: 100%;
+  height: 1px;
+}
+.dsm-s-more-btn {
   appearance: none;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
@@ -291,11 +302,11 @@ const RULES = `
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
 }
-.dsm-s-page-btn:hover:not(:disabled) {
+.dsm-s-more-btn:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
   border-color: var(--dsw-alias-label-dimmed);
 }
-.dsm-s-page-btn:disabled {
+.dsm-s-more-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -329,6 +340,8 @@ const cls = {
   toolbarLabel: 'dsm-s-toolbar-label',
   seg: 'dsm-s-seg',
   segBtn: 'dsm-s-seg-btn',
+  tabs: 'dsm-s-tabs',
+  tabBtn: 'dsm-s-tab-btn',
   input: 'dsm-s-input',
   select: 'dsm-s-select',
   chip: 'dsm-s-chip',
@@ -343,9 +356,10 @@ const cls = {
   content: 'dsm-s-content',
   contentOpen: 'dsm-s-content-open',
   meta: 'dsm-s-meta',
-  pager: 'dsm-s-pager',
-  pagerInfo: 'dsm-s-pager-info',
-  pageBtn: 'dsm-s-page-btn',
+  more: 'dsm-s-more',
+  count: 'dsm-s-count',
+  sentinel: 'dsm-s-sentinel',
+  moreBtn: 'dsm-s-more-btn',
   empty: 'dsm-s-empty',
   error: 'dsm-s-error',
 } as const

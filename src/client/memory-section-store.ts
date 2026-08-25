@@ -3,14 +3,17 @@
  * Settings → Memory section (phase 1: read-only browsing).
  *
  * The host stays the single fact source. Every filter change re-queries the
- * store through the `memoryRemote` namespace mounted by the client entry, and
- * the page never edits anything in phase 1 — writes arrive via the model
- * tools and extraction, so a plain refresh is always a correct repaint.
+ * store through the injected controller store, and the page never edits
+ * anything in phase 1 — writes arrive via the model tools and extraction,
+ * so a plain refresh is always a correct repaint.
  *
- * Paging is remote (`list` limit/offset) for plain browsing. The moment a
- * search query or category chips are active the page fetches the full match
- * set once (`search` with no cap) and paginates locally, because the wire
- * search takes no offset; totals stay exact either way.
+ * The list lazily loads instead of paging. Plain browsing appends remote
+ * batches (`list` limit/offset, newest first) as the user scrolls; the
+ * moment a search query or category chips are active the controller pulls
+ * the full match set once (`search` has no offset on the wire, and the
+ * remote service stamps such reads `recordRecall: false` so browsing never
+ * rewrites recall metadata) and reveals further chunks locally. Totals stay
+ * exact either way.
  */
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
@@ -23,8 +26,8 @@ import type {
 /** Scope filter value; `'all'` means "no scope restriction on the wire". */
 export type MemoryScopeFilter = 'all' | 'global' | 'project' | 'user'
 
-/** Page size of the entry list (remote when browsing, local when filtering). */
-export const MEMORY_PAGE_SIZE = 100
+/** Rows fetched / revealed per lazy-loading step. */
+export const MEMORY_BATCH_SIZE = 50
 
 /** Categories offered as filter chips; mirrors the store's MemoryCategory set. */
 export const MEMORY_CATEGORIES = [
@@ -79,10 +82,12 @@ export interface MemorySectionState {
   health: MemoryHealthResult | null
   /** Every workspace known to the store (distinct project names). */
   projects: readonly string[]
-  /** Entries of the current page after the active filters. */
+  /** Entries visible so far under the active filters (grows via loadMore). */
   entries: readonly MemoryEntryJson[]
-  /** Total matches across all pages under the active filters. */
+  /** Total matches across the full result set under the active filters. */
   total: number
+  /** True while a remote batch append is in flight. */
+  loadingMore: boolean
   /** Active scope filter. */
   scope: MemoryScopeFilter
   /** Active workspace filter; null = every workspace. */
@@ -91,8 +96,6 @@ export interface MemorySectionState {
   query: string
   /** Selected category chips. */
   categories: readonly string[]
-  /** Zero-based page index. */
-  page: number
 }
 
 const INITIAL: MemorySectionState = {
@@ -102,11 +105,11 @@ const INITIAL: MemorySectionState = {
   projects: [],
   entries: [],
   total: 0,
+  loadingMore: false,
   scope: 'all',
   projectName: null,
   query: '',
   categories: [],
-  page: 0,
 }
 
 /**
@@ -129,6 +132,12 @@ export class MemorySectionController {
   private seq = 0
 
   /**
+   * Full match set behind the active query/chips, cached between local
+   * reveals; null whenever plain browsing applies. See {@link fetchFirstBatch}.
+   */
+  private matches: readonly MemoryEntryJson[] | null = null
+
+  /**
    * @param api - the mounted `memoryRemote` namespace face; undefined on a
    * deployment too old to serve it — loads then fail into the page's error
    * state instead of breaking the settings panel.
@@ -145,27 +154,38 @@ export class MemorySectionController {
     return scope === 'all' ? undefined : scope
   }
 
+  /**
+   * Shared wire filter fields (scope + workspace) from the current snapshot.
+   */
+  private wireFilters(): { scope?: 'global' | 'project' | 'user'; projectName?: string } {
+    const snapshot = this.store.getSnapshot()
+    const scope = this.wireScope()
+    return {
+      ...(scope !== undefined ? { scope } : {}),
+      ...(snapshot.projectName !== null && snapshot.projectName !== ''
+        ? { projectName: snapshot.projectName }
+        : {}),
+    }
+  }
+
   private requireApi(): MemoryRemoteApi {
     if (this.api === undefined) throw new Error('the memory remote namespace is not mounted on this connection')
     return this.api
   }
 
   /**
-   * Fetch one page of entries under the committed filters. Plain browsing
-   * pages remotely; an active query or chip set pulls the whole match set
-   * once (search has no offset on the wire) and pages locally.
+   * Fetch the first batch under the committed filters. Plain browsing pages
+   * remotely; an active query or chip set pulls the whole match set once
+   * (search has no offset on the wire), caches it for local reveals, and
+   * unions multi-chip selections client-side (the wire takes one category).
    */
-  private async fetchPage(): Promise<{ entries: readonly MemoryEntryJson[]; total: number }> {
+  private async fetchFirstBatch(): Promise<{ entries: readonly MemoryEntryJson[]; total: number }> {
     const snapshot = this.store.getSnapshot()
-    const offset = snapshot.page * MEMORY_PAGE_SIZE
     const trimmed = snapshot.query.trim()
 
     if (trimmed !== '' || snapshot.categories.length > 0) {
       const response = await this.requireApi().search({
-        ...this.wireScope() !== undefined ? { scope: this.wireScope() } : {},
-        ...snapshot.projectName !== null && snapshot.projectName !== ''
-          ? { projectName: snapshot.projectName }
-          : {},
+        ...this.wireFilters(),
         ...trimmed !== '' ? { query: trimmed } : {},
         limit: 0,
       })
@@ -175,19 +195,15 @@ export class MemorySectionController {
         ? [...response.result.value.entries]
         : response.result.value.entries.filter(
             entry => entry.category !== undefined && selected.includes(entry.category))
-      return {
-        entries: matches.slice(offset, offset + MEMORY_PAGE_SIZE),
-        total: matches.length,
-      }
+      this.matches = matches
+      return { entries: matches.slice(0, MEMORY_BATCH_SIZE), total: matches.length }
     }
 
+    this.matches = null
     const response = await this.requireApi().list({
-      ...this.wireScope() !== undefined ? { scope: this.wireScope() } : {},
-      ...snapshot.projectName !== null && snapshot.projectName !== ''
-        ? { projectName: snapshot.projectName }
-        : {},
-      limit: MEMORY_PAGE_SIZE,
-      offset,
+      ...this.wireFilters(),
+      limit: MEMORY_BATCH_SIZE,
+      offset: 0,
     })
     if (!response.result.ok) throw new Error(response.result.error.message)
     return { entries: response.result.value.entries, total: response.result.value.total }
@@ -203,10 +219,10 @@ export class MemorySectionController {
     if (this.store.getSnapshot().status === 'idle') this.set({ status: 'loading' })
     try {
       const api = this.requireApi()
-      const [health, projects, page] = await Promise.all([
+      const [health, projects, batch] = await Promise.all([
         api.health(),
         api.projects(),
-        this.fetchPage(),
+        this.fetchFirstBatch(),
       ])
       if (!health.result.ok) throw new Error(health.result.error.message)
       if (!projects.result.ok) throw new Error(projects.result.error.message)
@@ -216,8 +232,8 @@ export class MemorySectionController {
         error: null,
         health: health.result.value,
         projects: projects.result.value.projects,
-        entries: page.entries,
-        total: page.total,
+        entries: batch.entries,
+        total: batch.total,
       })
     } catch (error) {
       if (ticket !== this.seq) return
@@ -226,26 +242,26 @@ export class MemorySectionController {
   }
 
   /**
-   * Re-fetch just the entry page (filters changed). Keeps the dashboard and
-   * status untouched; a failure surfaces as page-level error text while the
-   * previous rows stay visible.
+   * Re-fetch the first batch (filters changed). Resets the accumulated list;
+   * keeps the dashboard and status untouched, and a failure surfaces as
+   * page-level error text while the previous rows stay visible.
    */
   async reload(): Promise<void> {
     const ticket = ++this.seq
     try {
-      const page = await this.fetchPage()
+      const batch = await this.fetchFirstBatch()
       if (ticket !== this.seq) return
-      this.set({ status: 'ready', error: null, entries: page.entries, total: page.total })
+      this.set({ status: 'ready', error: null, entries: batch.entries, total: batch.total, loadingMore: false })
     } catch (error) {
       if (ticket !== this.seq) return
-      this.set({ error: messageOf(error) })
+      this.set({ error: messageOf(error), loadingMore: false })
     }
   }
 
   /** Switch the scope filter; the workspace pick cannot outlive its scope. */
   setScope(scope: MemoryScopeFilter): void {
     if (this.store.getSnapshot().scope === scope) return
-    this.set({ scope, projectName: null, page: 0 })
+    this.set({ scope, projectName: null })
     void this.reload()
   }
 
@@ -257,14 +273,14 @@ export class MemorySectionController {
     if (!projectSelectable(this.store.getSnapshot().scope)) return
     const next = projectName === '' ? null : projectName
     if (this.store.getSnapshot().projectName === next) return
-    this.set({ projectName: next, page: 0 })
+    this.set({ projectName: next })
     void this.reload()
   }
 
   /** Commit a search text (already debounced upstream); empty clears it. */
   commitQuery(query: string): void {
     if (this.store.getSnapshot().query === query) return
-    this.set({ query, page: 0 })
+    this.set({ query })
     void this.reload()
   }
 
@@ -274,18 +290,54 @@ export class MemorySectionController {
     const next = selected.includes(category)
       ? selected.filter(c => c !== category)
       : [...selected, category]
-    this.set({ categories: next, page: 0 })
+    this.set({ categories: next })
     void this.reload()
   }
 
-  /** Jump to a zero-based page within range. */
-  setPage(page: number): void {
-    const total = this.store.getSnapshot().total
-    const maxPage = Math.max(0, Math.ceil(total / MEMORY_PAGE_SIZE) - 1)
-    const clamped = Math.min(Math.max(0, Math.floor(page)), maxPage)
-    if (this.store.getSnapshot().page === clamped) return
-    this.set({ page: clamped })
-    void this.reload()
+  /**
+   * Append the next chunk to the visible list. Plain browsing issues one
+   * remote batch; an active search reveals more of the cached full match
+   * set without touching the network. No-op while everything is already
+   * shown or another append is in flight.
+   */
+  async loadMore(): Promise<void> {
+    const snapshot = this.store.getSnapshot()
+    if (snapshot.status !== 'ready' || snapshot.loadingMore) return
+    if (snapshot.entries.length >= snapshot.total) return
+
+    if (snapshot.query.trim() === '' && snapshot.categories.length === 0) {
+      const ticket = ++this.seq
+      this.set({ loadingMore: true })
+      try {
+        const response = await this.requireApi().list({
+          ...this.wireFilters(),
+          limit: MEMORY_BATCH_SIZE,
+          offset: snapshot.entries.length,
+        })
+        if (!response.result.ok) throw new Error(response.result.error.message)
+        if (ticket !== this.seq) return
+        const current = this.store.getSnapshot()
+        // Append defensively by id so a stale batch can never duplicate rows.
+        const seen = new Set(current.entries.map(entry => entry.id))
+        const appended = response.result.value.entries.filter(entry => !seen.has(entry.id))
+        this.set({
+          entries: [...current.entries, ...appended],
+          total: response.result.value.total,
+          loadingMore: false,
+        })
+      } catch (error) {
+        if (ticket !== this.seq) return
+        this.set({ error: messageOf(error), loadingMore: false })
+      }
+      return
+    }
+
+    const matches = this.matches
+    if (matches === null) {
+      await this.reload() // cache lost (should not happen); refetch instead
+      return
+    }
+    this.set({ entries: matches.slice(0, snapshot.entries.length + MEMORY_BATCH_SIZE) })
   }
 }
 

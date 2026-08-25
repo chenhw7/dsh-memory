@@ -221,6 +221,16 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
       expect(result.total).toBe(5)
     })
 
+    it('recordRecall: false keeps a search free of recall side effects', async () => {
+      const store = makeStore()
+      // Read-side consumers (management UI) browse through this flag: it must
+      // never stamp lastRecalledAt or otherwise rewrite the matched entries.
+      const { entry } = await store.add({ scope: 'global', content: 'management browsing stays silent' })
+      store.search({ query: 'silent', recordRecall: false })
+      await new Promise(resolve => { setTimeout(resolve, 50) })
+      expect(store.get(entry.id)!.lastRecalledAt).toBeUndefined()
+    })
+
     it('pin and unpin toggle the pinned flag', async () => {
       const store = makeStore()
       const { entry } = await store.add({ scope: 'project', content: 'pinned fact', projectName: 'demo' })

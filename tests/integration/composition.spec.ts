@@ -8,7 +8,7 @@
  * log-hygiene guard.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as storageJson from '@deepseek-ai/dsh-storage-json'
@@ -96,6 +96,24 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
     const r4 = store.search({ query: '偏好' })
     expect(r4.total).toBe(1)
     expect(r4.entries[0]!.content).toContain('偏好')
+  })
+
+  it('search stamps recall metadata by default; recordRecall:false keeps reads silent', async () => {
+    // Default (the model-tool path): a search counts as recall — it stamps
+    // lastRecalledAt so the janitor can decay entries nobody looks at.
+    const { entry } = await store.add({ scope: 'global', content: 'recall stamping happens here' })
+    expect(store.get(entry.id)!.lastRecalledAt).toBeUndefined()
+    store.search({ query: 'stamping' })
+    await vi.waitFor(() => expect(store.get(entry.id)!.lastRecalledAt).toBeDefined())
+
+    // The management-UI path (memoryRemote.search forces this): browsing must
+    // not rewrite recall metadata or revive dormant entries.
+    await store.add({ scope: 'global', content: 'management browsing stays silent' })
+    const before = store.search({ query: 'silent', recordRecall: false }).entries[0]!
+    expect(before.lastRecalledAt).toBeUndefined()
+    await new Promise(resolve => { setTimeout(resolve, 50) })
+    const after = store.get(before.id)!
+    expect(after.lastRecalledAt).toBeUndefined()
   })
 
   it('persists to a real JSON file on disk', async () => {

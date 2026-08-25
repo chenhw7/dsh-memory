@@ -35,7 +35,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
 - **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
-- **Memory manager UI (read-only, phase 1)** — a dedicated "Memory" section in the dsh settings UI browses the entire web-profile store: health dashboard, scope and workspace filters, BM25 search, category chips, remote paging, and soft-decay markers — in English and Chinese.
+- **Memory manager UI (read-only, phase 1)** — a dedicated "Memory" section in the dsh settings UI browses the entire web-profile store: an Overview tab with the health dashboard, and a Manage tab with scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, and soft-decay markers — in English and Chinese.
 
 ## Install
 

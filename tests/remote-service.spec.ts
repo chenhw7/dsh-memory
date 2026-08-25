@@ -257,12 +257,20 @@ describe('memoryRemote.list pagination', () => {
   const many = Array.from({ length: 7 }, (_, i) =>
     entry({ scope: 'global', content: `row ${i}`, createdAt: BASE + i, updatedAt: BASE + i }))
 
-  it('pages with offset+limit and reports the unpaginated total', () => {
+  it('lists newest first so the UI first lazy batch surfaces fresh memories', () => {
+    const { service } = setup(many)
+
+    expect(service.list({}).entries.map(e => e.content)).toEqual([
+      'row 6', 'row 5', 'row 4', 'row 3', 'row 2', 'row 1', 'row 0',
+    ])
+  })
+
+  it('pages with offset+limit over the newest-first order and reports the unpaginated total', () => {
     const { service } = setup(many)
 
     expect(service.list({}).total).toBe(7)
-    expect(service.list({ limit: 3 }).entries.map(e => e.content)).toEqual(['row 0', 'row 1', 'row 2'])
-    expect(service.list({ limit: 3, offset: 6 }).entries.map(e => e.content)).toEqual(['row 6'])
+    expect(service.list({ limit: 3 }).entries.map(e => e.content)).toEqual(['row 6', 'row 5', 'row 4'])
+    expect(service.list({ limit: 3, offset: 6 }).entries.map(e => e.content)).toEqual(['row 0'])
     expect(service.list({ limit: 3, offset: 100 })).toEqual({ entries: [], total: 7 })
   })
 
@@ -280,6 +288,25 @@ describe('memoryRemote.list pagination', () => {
   it('treats a non-positive limit as "no cap beyond the offset"', () => {
     const { service } = setup(many)
 
-    expect(service.list({ limit: 0, offset: 5 }).entries.map(e => e.content)).toEqual(['row 5', 'row 6'])
+    expect(service.list({ limit: 0, offset: 5 }).entries.map(e => e.content)).toEqual(['row 1', 'row 0'])
+  })
+})
+
+describe('memoryRemote.search recall suppression', () => {
+  it('stamps management searches recordRecall:false so browsing never counts as recall', () => {
+    const { store, service } = setup([entry({ scope: 'global', content: 'needle in store' })])
+
+    const seen: MemorySearchQuery[] = []
+    const original = store.search.bind(store)
+    Object.defineProperty(store, 'search', {
+      value: (query: MemorySearchQuery) => {
+        seen.push(query)
+        return original(query)
+      },
+    })
+
+    const found = service.search({ query: 'needle' })
+    expect(found.total).toBe(1)
+    expect(seen[0]?.recordRecall).toBe(false)
   })
 })

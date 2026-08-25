@@ -9,8 +9,9 @@
  *    standard `ctx.settingsScope` transport and apply live.
  * 2. **Content management** (phase 1): a dedicated "Memory" settings section
  *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
- *    memory store — health dashboard, scope/workspace filters, BM25 search,
- *    category chips, and a read-only paged list with soft-decay markers.
+ *    memory store — an Overview tab with the health dashboard and a Manage tab
+ *    with scope/workspace filters, BM25 search, category chips, and a
+ *    read-only lazily loaded list with soft-decay markers.
  *    Configuration and content are different dimensions: the cards stay where
  *    they are, the section says so in its intro line.
  *
@@ -298,7 +299,7 @@ export function apply(ctx: ClientContext): void {
     setProject: (name) => { controller.setProject(name) },
     commitQuery: (query) => { controller.commitQuery(query) },
     toggleCategory: (category) => { controller.toggleCategory(category) },
-    setPage: (page) => { controller.setPage(page) },
+    loadMore: () => { void controller.loadMore() },
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

@@ -105,7 +105,9 @@ export abstract class MemoryStore {
 
   /**
    * Search entries by scope, category, project, and substring.
-   * @param query - The search parameters.
+   * @param query - The search parameters. When `query.recordRecall` is false
+   * the read must not count as a recall: no `lastRecalledAt` stamping and no
+   * dormant revival (the management UI browses through this flag).
    * @returns matching entries bounded by `query.limit`, plus the total match count.
    */
   abstract search(query: MemorySearchQuery): SearchMemoryResult

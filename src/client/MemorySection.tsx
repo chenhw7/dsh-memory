@@ -1,16 +1,18 @@
 /**
  * Memory content-management section — Settings → Memory. Phase 1: read-only
- * browsing of the whole web-profile store across every scope and workspace,
- * with a health dashboard, a BM25 search box (300 ms debounce), category
- * chips, remote paging, and soft-decay ("dormant") markers.
+ * browsing of the whole web-profile store across every scope and workspace.
+ * Two tabs keep the two jobs apart: Overview holds the health dashboard;
+ * Manage holds the filters and a lazily loaded entry list (auto-append near
+ * the bottom, plus a manual "Load more" fallback) with soft-decay ("dormant")
+ * markers.
  *
  * Data flows exclusively through the injected controller store — this file
  * holds no connection and issues no RPCs. Row actions (pin / edit / delete)
- * and the editor drawer arrive in phase 2; until then the page renders rows
- * without mutation affordances, matching the plan's phased rollout.
+ * and the editor drawer arrive in phase 2; until then the Manage tab renders
+ * rows without mutation affordances, matching the plan's phased rollout.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
@@ -18,7 +20,6 @@ import type { MemoryEntryJson } from '../typert.remote-client.js'
 import {
   CATEGORY_LABEL_KEYS,
   MEMORY_CATEGORIES,
-  MEMORY_PAGE_SIZE,
   type MemoryScopeFilter,
   type MemorySectionState,
 } from './memory-section-store.ts'
@@ -30,7 +31,7 @@ export interface MemorySectionInjected {
     /** Page snapshot bound by the renderer as useMemorySection. */
     memorySection: SnapshotStore<MemorySectionState>
   }
-  /** Full load (dashboard + workspaces + page); called once on first render. */
+  /** Full load (dashboard + workspaces + first batch); called once on open. */
   load: () => Promise<void>
   /** Switch the scope filter. */
   setScope: (scope: MemoryScopeFilter) => void
@@ -40,8 +41,8 @@ export interface MemorySectionInjected {
   commitQuery: (query: string) => void
   /** Flip one category chip. */
   toggleCategory: (category: string) => void
-  /** Jump to a zero-based page. */
-  setPage: (page: number) => void
+  /** Append the next chunk of rows (lazy loading). */
+  loadMore: () => void
 }
 
 /** Full component props. */
@@ -56,6 +57,9 @@ const SCOPES: readonly { value: MemoryScopeFilter; labelKey: 'scopeAll' | 'scope
   { value: 'project', labelKey: 'scopeProject' },
   { value: 'user', labelKey: 'scopeUser' },
 ]
+
+/** The section's two tabs: glanceable health vs. content management. */
+type SectionTab = 'overview' | 'manage'
 
 type LocaleKey = keyof typeof import('./locales.ts').en
 
@@ -155,6 +159,8 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
     void load()
   }, [load])
 
+  const [tab, setTab] = useState<SectionTab>('overview')
+
   // Local search text commits through the controller after a 300ms pause.
   // Only the text rides the dependency array: the action closure changes
   // identity per parent render and would reset the timer forever.
@@ -164,7 +170,8 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
     return () => { clearTimeout(timer) }
   }, [searchText])
 
-  // Rows whose content the user expanded (truncated by default).
+  // Rows whose content the user expanded (truncated by default). Held above
+  // the tab panels so switching tabs does not forget what was opened.
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set())
   const toggleExpanded = (id: string): void => {
     setExpandedIds(previous => {
@@ -182,16 +189,39 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
   }
   const workspaceEnabled = state.scope === 'all' || state.scope === 'project'
   const total = state.total
-  const pageCount = Math.max(1, Math.ceil(total / MEMORY_PAGE_SIZE))
-  const from = total === 0 ? 0 : state.page * MEMORY_PAGE_SIZE + 1
-  const to = Math.min(total, (state.page + 1) * MEMORY_PAGE_SIZE)
+  const shown = state.entries.length
+  const hasMore = shown < total
+
+  // Latest loader behind a stable ref: the scroll observer must not tear down
+  // and rebuild on every parent render.
+  const loadMoreRef = useRef(props.loadMore)
+  loadMoreRef.current = props.loadMore
+
+  // Auto-append when the sentinel scrolls into view. Re-running the effect
+  // after each append re-observes, so a still-visible sentinel cascades until
+  // the viewport is full or everything is shown. jsdom has no
+  // IntersectionObserver — the explicit button covers tests and keyboard use.
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const element = sentinelRef.current
+    if (element === null || tab !== 'manage') return
+    if (typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) loadMoreRef.current()
+      },
+      { rootMargin: '240px' },
+    )
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [tab, state.status, shown, total])
 
   if (state.status === 'error') {
     return (
       <div className={css.section}>
         <h2 className={css.title}>{t('nav')}</h2>
         <p className={css.error} role="alert">{`${t('loadFailed')} ${state.error ?? ''}`}</p>
-        <button type="button" className={css.pageBtn} onClick={() => { void load() }}>
+        <button type="button" className={css.moreBtn} onClick={() => { void load() }}>
           {t('retry')}
         </button>
       </div>
@@ -214,163 +244,182 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
       <h2 className={css.title}>{t('nav')}</h2>
       <p className={css.intro}>{t('sectionIntro')}</p>
 
-      {/* ① Health dashboard */}
-      {health === null
-        ? null
-        : (
-          <div className={css.dash}>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.totalEntries}</span>
-              <span className={css.statLabel}>{t('dashTotal')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.byScope.global}</span>
-              <span className={css.statLabel}>{t('scopeGlobal')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.byScope.user}</span>
-              <span className={css.statLabel}>{t('scopeUser')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.byScope.project}</span>
-              <span className={css.statLabel}>{t('scopeProject')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.pinned}</span>
-              <span className={css.statLabel}>{t('dashPinned')}</span>
-            </span>
-            <span className={`${css.stat} ${css.statStale}`} title={t('dashStaleHint')}>
-              <span className={`${css.statValue}${(health.stale ?? 0) > 0 ? '' : ` ${css.statValueMuted}`}`}>
-                {health.stale ?? 0}
-              </span>
-              <span className={css.statLabel}>{t('dashStale')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={css.statValue}>{health.auditRecords}</span>
-              <span className={css.statLabel}>{t('dashAudit')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={`${css.statValue} ${css.statValueMuted}`}>
-                {formatTs(health.lastActivityTs, t('dashLastActivityNever'))}
-              </span>
-              <span className={css.statLabel}>{t('dashLastActivity')}</span>
-            </span>
-            <span className={css.stat}>
-              <span className={`${css.statValue} ${css.statValueMuted}`}>
-                {formatTs(health.lastExtractionTs, t('dashLastActivityNever'))}
-              </span>
-              <span className={css.statLabel}>{t('dashLastExtraction')}</span>
-            </span>
-          </div>
-        )}
-
-      {/* ② Toolbar */}
-      <div className={css.toolbar}>
-        <div className={css.toolbarRow}>
-          <span className={css.toolbarLabel}>{t('searchLabel')}</span>
-          <div className={css.seg} role="group" aria-label={t('nav')}>
-            {SCOPES.map(({ value, labelKey }) => (
-              <button
-                key={value}
-                type="button"
-                className={css.segBtn}
-                aria-pressed={state.scope === value}
-                onClick={() => { props.setScope(value) }}
-              >
-                {t(labelKey)}
-              </button>
-            ))}
-          </div>
-          <select
-            className={css.select}
-            aria-label={t('workspaceLabel')}
-            disabled={!workspaceEnabled}
-            value={state.projectName ?? ''}
-            onChange={(event) => { props.setProject(event.target.value) }}
-          >
-            <option value="">{t('workspaceAll')}</option>
-            {state.projects.map(name => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          <input
-            type="search"
-            className={css.input}
-            aria-label={t('searchLabel')}
-            placeholder={t('searchPlaceholder')}
-            value={searchText}
-            onChange={(event) => { setSearchText(event.target.value) }}
-          />
-        </div>
-        <div className={css.toolbarRow}>
-          <span className={css.toolbarLabel}>{t('categoryLabel')}</span>
-          {MEMORY_CATEGORIES.map(category => (
-            <button
-              key={category}
-              type="button"
-              className={css.chip}
-              aria-pressed={state.categories.includes(category)}
-              onClick={() => { props.toggleCategory(category) }}
-            >
-              {translateCategory(category, t)}
-            </button>
-          ))}
-        </div>
+      {/* Tab bar: health glance vs. content management. */}
+      <div className={css.tabs} role="tablist" aria-label={t('nav')}>
+        <button
+          type="button"
+          role="tab"
+          className={css.tabBtn}
+          aria-selected={tab === 'overview'}
+          onClick={() => { setTab('overview') }}
+        >
+          {t('tabOverview')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={css.tabBtn}
+          aria-selected={tab === 'manage'}
+          onClick={() => { setTab('manage') }}
+        >
+          {t('tabManage')}
+        </button>
       </div>
 
-      {/* Inline failure of a background refresh: previous rows stay visible. */}
-      {state.error === null ? null : <p className={css.error} role="alert">{state.error}</p>}
-
-      {/* ③ Entry list */}
-      {total === 0
-        ? <p className={css.empty}>{t(emptyKeyOf(state))}</p>
+      {tab === 'overview'
+        ? (
+            health === null
+              ? null
+              : (
+                <div className={css.dash}>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.totalEntries}</span>
+                    <span className={css.statLabel}>{t('dashTotal')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.byScope.global}</span>
+                    <span className={css.statLabel}>{t('scopeGlobal')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.byScope.user}</span>
+                    <span className={css.statLabel}>{t('scopeUser')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.byScope.project}</span>
+                    <span className={css.statLabel}>{t('scopeProject')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.pinned}</span>
+                    <span className={css.statLabel}>{t('dashPinned')}</span>
+                  </span>
+                  <span className={`${css.stat} ${css.statStale}`} title={t('dashStaleHint')}>
+                    <span className={`${css.statValue}${(health.stale ?? 0) > 0 ? '' : ` ${css.statValueMuted}`}`}>
+                      {health.stale ?? 0}
+                    </span>
+                    <span className={css.statLabel}>{t('dashStale')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={css.statValue}>{health.auditRecords}</span>
+                    <span className={css.statLabel}>{t('dashAudit')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={`${css.statValue} ${css.statValueMuted}`}>
+                      {formatTs(health.lastActivityTs, t('dashLastActivityNever'))}
+                    </span>
+                    <span className={css.statLabel}>{t('dashLastActivity')}</span>
+                  </span>
+                  <span className={css.stat}>
+                    <span className={`${css.statValue} ${css.statValueMuted}`}>
+                      {formatTs(health.lastExtractionTs, t('dashLastActivityNever'))}
+                    </span>
+                    <span className={css.statLabel}>{t('dashLastExtraction')}</span>
+                  </span>
+                </div>
+              )
+          )
         : (
           <>
-            <ul className={css.list}>
-              {state.entries.map(entry => (
-                <EntryRow
-                  key={entry.id}
-                  entry={entry}
-                  expanded={expandedIds.has(entry.id)}
-                  staleLabel={t('staleMark')}
-                  staleHint={t('staleHint')}
-                  pinnedLabel={t('pinnedBadge')}
-                  neverRecalledLabel={t('neverRecalled')}
-                  scopeLabels={scopeLabels}
-                  translate={t}
-                  onToggle={() => { toggleExpanded(entry.id) }}
+            {/* Toolbar */}
+            <div className={css.toolbar}>
+              <div className={css.toolbarRow}>
+                <span className={css.toolbarLabel}>{t('searchLabel')}</span>
+                <div className={css.seg} role="group" aria-label={t('nav')}>
+                  {SCOPES.map(({ value, labelKey }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={css.segBtn}
+                      aria-pressed={state.scope === value}
+                      onClick={() => { props.setScope(value) }}
+                    >
+                      {t(labelKey)}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  className={css.select}
+                  aria-label={t('workspaceLabel')}
+                  disabled={!workspaceEnabled}
+                  value={state.projectName ?? ''}
+                  onChange={(event) => { props.setProject(event.target.value) }}
+                >
+                  <option value="">{t('workspaceAll')}</option>
+                  {state.projects.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+                <input
+                  type="search"
+                  className={css.input}
+                  aria-label={t('searchLabel')}
+                  placeholder={t('searchPlaceholder')}
+                  value={searchText}
+                  onChange={(event) => { setSearchText(event.target.value) }}
                 />
-              ))}
-            </ul>
-            {/* Pager */}
-            <div className={css.pager}>
-              <p className={css.pagerInfo}>
-                {pageCount <= 1
-                  ? t('pageSingle' as LocaleKey).replace('{total}', String(total))
-                  : t('pageInfo' as LocaleKey)
-                    .replace('{from}', String(from))
-                    .replace('{to}', String(to))
-                    .replace('{total}', String(total))}
-              </p>
-              <button
-                type="button"
-                className={css.pageBtn}
-                disabled={state.page <= 0}
-                aria-label={t('pagePrev')}
-                onClick={() => { props.setPage(state.page - 1) }}
-              >
-                ‹
-              </button>
-              <button
-                type="button"
-                className={css.pageBtn}
-                disabled={state.page >= pageCount - 1}
-                aria-label={t('pageNext')}
-                onClick={() => { props.setPage(state.page + 1) }}
-              >
-                ›
-              </button>
+              </div>
+              <div className={css.toolbarRow}>
+                <span className={css.toolbarLabel}>{t('categoryLabel')}</span>
+                {MEMORY_CATEGORIES.map(category => (
+                  <button
+                    key={category}
+                    type="button"
+                    className={css.chip}
+                    aria-pressed={state.categories.includes(category)}
+                    onClick={() => { props.toggleCategory(category) }}
+                  >
+                    {translateCategory(category, t)}
+                  </button>
+                ))}
+              </div>
             </div>
+
+            {/* Inline failure of a background refresh: previous rows stay visible. */}
+            {state.error === null ? null : <p className={css.error} role="alert">{state.error}</p>}
+
+            {/* Entry list */}
+            {total === 0
+              ? <p className={css.empty}>{t(emptyKeyOf(state))}</p>
+              : (
+                <>
+                  <ul className={css.list}>
+                    {state.entries.map(entry => (
+                      <EntryRow
+                        key={entry.id}
+                        entry={entry}
+                        expanded={expandedIds.has(entry.id)}
+                        staleLabel={t('staleMark')}
+                        staleHint={t('staleHint')}
+                        pinnedLabel={t('pinnedBadge')}
+                        neverRecalledLabel={t('neverRecalled')}
+                        scopeLabels={scopeLabels}
+                        translate={t}
+                        onToggle={() => { toggleExpanded(entry.id) }}
+                      />
+                    ))}
+                  </ul>
+                  {/* Lazy-load footer: progress line, scroll sentinel, manual fallback. */}
+                  <div className={css.more}>
+                    <p className={css.count}>
+                      {t('shownCount').replace('{shown}', String(shown)).replace('{total}', String(total))}
+                    </p>
+                    {hasMore
+                      ? (
+                        <>
+                          <div ref={sentinelRef} className={css.sentinel} aria-hidden="true" />
+                          <button
+                            type="button"
+                            className={css.moreBtn}
+                            disabled={state.loadingMore}
+                            onClick={() => { props.loadMore() }}
+                          >
+                            {state.loadingMore ? t('loading' as LocaleKey) : t('loadMore')}
+                          </button>
+                        </>
+                      )
+                      : null}
+                  </div>
+                </>
+              )}
           </>
         )}
     </div>

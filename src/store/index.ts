@@ -256,7 +256,9 @@ export class DomainMemoryStore extends MemoryStore {
     all = limit > 0 ? all.slice(0, limit) : all
     // Fire-and-forget: stamp the returned entries with a recall timestamp
     // so the janitor can decay entries that have not been recalled recently.
-    void this.stampRecalled(all)
+    // Read-only consumers (management UI) opt out via recordRecall: false —
+    // merely viewing entries must not rewrite their recall metadata.
+    if (query.recordRecall !== false) void this.stampRecalled(all)
     return { entries: all, total }
   }
 

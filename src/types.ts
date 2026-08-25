@@ -100,6 +100,13 @@ export interface MemorySearchQuery {
   readonly query?: string
   /** Maximum results to return. */
   readonly limit?: number
+  /**
+   * Whether matching counts as a recall (default true): stamps
+   * `lastRecalledAt` on the returned entries and revives dormant ones.
+   * Read-side consumers that merely display entries — like the management
+   * UI — must pass false so browsing never rewrites recall metadata.
+   */
+  readonly recordRecall?: boolean
 }
 
 /** Result of a content security scan. */
