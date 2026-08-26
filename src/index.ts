@@ -11,17 +11,20 @@
  * @module @chenhw7/dsh-memory
  */
 
-import { MemoryId, AuditId } from './brand.ts'
+import { MemoryId, AuditId, SuggestionId } from './brand.ts'
 import { scanContent } from './scanner.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
+  AddSuggestionInput,
+  AdoptSuggestionOverride,
   AuditEntry,
   AuditOp,
   AuditSource,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
+  MemorySuggestion,
   SearchMemoryResult,
   UpdateMemoryInput,
 } from './types.ts'
@@ -29,6 +32,8 @@ import type {
 export type {
   AddMemoryInput,
   AddMemoryResult,
+  AddSuggestionInput,
+  AdoptSuggestionOverride,
   AuditEntry,
   AuditOp,
   AuditSource,
@@ -37,11 +42,12 @@ export type {
   MemoryHealth,
   MemoryScope,
   MemorySearchQuery,
+  MemorySuggestion,
   ScanResult,
   SearchMemoryResult,
   UpdateMemoryInput,
 } from './types.ts'
-export { MemoryId, AuditId, scanContent }
+export { MemoryId, AuditId, SuggestionId, scanContent }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -125,6 +131,20 @@ export abstract class MemoryStore {
   abstract unpin(id: MemoryId): Promise<MemoryEntry | undefined>
 
   /**
+   * Archive one entry manually (P1-7): stamps `staleSince` so it drops out of
+   * injection surfaces while staying searchable — the human-driven counterpart
+   * of the janitor's soft decay. Returns the updated entry, or `undefined`
+   * when the id does not exist or the provider has no archive support.
+   */
+  archiveEntry(_id: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
+
+  /**
+   * Lift a manual archive stamp (P1-7). Returns the updated entry, or
+   * `undefined` when the id does not exist or the provider has no support.
+   */
+  unarchiveEntry(_id: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
+
+  /**
    * Record that the caller surfaced the given entries to the model through a
    * read path (`memory_get`, `memory_list`), stamping `lastRecalledAt` so the
    * janitor can track staleness. Fire-and-forget and best-effort: the default
@@ -133,6 +153,46 @@ export abstract class MemoryStore {
    * @param ids - The entry ids that were recalled.
    */
   markRecalled(ids: readonly string[]): void { /* default no-op */ }
+
+  // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────
+  //
+  // Default implementations follow the `markRecalled` precedent: providers
+  // without a review queue stay contract-conformant, and confirm-mode callers
+  // treat "unsupported" the same as an empty queue.
+
+  /**
+   * Record one model/extraction proposal in the pending-review queue.
+   * @param input - the proposal to record.
+   * @returns the stored suggestion.
+   * @throws when this provider has no suggestion queue or the content is rejected.
+   */
+  observeSuggestion(_input: AddSuggestionInput): Promise<MemorySuggestion> {
+    return Promise.reject(new Error('this memory provider has no suggestion queue'))
+  }
+
+  /**
+   * List pending suggestions for the review UI (highest signal first).
+   * @returns the queued suggestions; empty when unsupported.
+   */
+  listSuggestions(): readonly MemorySuggestion[] { return [] }
+
+  /** Read one pending suggestion by id. */
+  getSuggestion(_id: SuggestionId): MemorySuggestion | undefined { return undefined }
+
+  /**
+   * Adopt one pending suggestion (optionally with human edits), writing the
+   * entry through the full store contract and removing the queue row.
+   * @returns the written entry, or `undefined` when absent/unsupported.
+   */
+  adoptSuggestion(_id: SuggestionId, _override?: AdoptSuggestionOverride): Promise<MemoryEntry | undefined> {
+    return Promise.resolve(undefined)
+  }
+
+  /**
+   * Reject one pending suggestion without writing anything.
+   * @returns whether the suggestion existed and was removed.
+   */
+  rejectSuggestion(_id: SuggestionId): Promise<boolean> { return Promise.resolve(false) }
 
   /**
    * Run the janitor pass with the lifecycle's two-tier policy (§3.5):

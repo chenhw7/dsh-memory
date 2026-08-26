@@ -21,6 +21,7 @@ import type {
   MemoryEntryJson,
   MemoryHealthResult,
   MemoryProjectsResult,
+  MemorySuggestionJson,
 } from '../typert.remote-client.js'
 
 /** Scope filter value; `'all'` means "no scope restriction on the wire". */
@@ -71,6 +72,13 @@ export interface MemoryRemoteApi {
   }): Rpc<{ entries: readonly MemoryEntryJson[]; total: number }>
   projects(): Rpc<MemoryProjectsResult>
   health(): Rpc<MemoryHealthResult>
+  update(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  removeEntry(request: { id: string }): Rpc<{ removed: boolean }>
+  pin(request: { id: string; pinned: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  archive(request: { id: string; archived: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  suggestList(): Rpc<{ suggestions: readonly MemorySuggestionJson[] }>
+  suggestAdopt(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  suggestReject(request: { id: string }): Rpc<{ rejected: boolean }>
 }
 
 /** Page snapshot. */
@@ -96,6 +104,13 @@ export interface MemorySectionState {
   query: string
   /** Selected category chips. */
   categories: readonly string[]
+  /** Pending proposals awaiting a human decision (P1-1 review queue). */
+  pending: readonly MemorySuggestionJson[]
+  /**
+   * Failure of the last row action (edit/delete/pin/archive/adopt/reject).
+   * Surfaces inline above the list; the next successful action clears it.
+   */
+  actionError: string | null
 }
 
 const INITIAL: MemorySectionState = {
@@ -110,6 +125,8 @@ const INITIAL: MemorySectionState = {
   projectName: null,
   query: '',
   categories: [],
+  pending: [],
+  actionError: null,
 }
 
 /**
@@ -210,8 +227,9 @@ export class MemorySectionController {
   }
 
   /**
-   * Full load: health dashboard, workspace roster, and current page. Used on
-   * section open, manual retry, and connection recovery.
+   * Full load: health dashboard, workspace roster, current page, and the
+   * pending-review queue. Used on section open, manual retry, and connection
+   * recovery.
    * @returns once the snapshot reflects the host.
    */
   async load(): Promise<void> {
@@ -226,6 +244,15 @@ export class MemorySectionController {
       ])
       if (!health.result.ok) throw new Error(health.result.error.message)
       if (!projects.result.ok) throw new Error(projects.result.error.message)
+      // A deployment too old to serve the queue (no suggestList on its
+      // memoryRemote face) degrades to an empty list instead of failing the
+      // whole page.
+      const pendingRows = typeof api.suggestList !== 'function'
+        ? []
+        : await api.suggestList().then(
+            response => response.result.ok ? response.result.value.suggestions : [],
+            () => [],
+          )
       if (ticket !== this.seq) return // a newer load superseded this one
       this.set({
         status: 'ready',
@@ -234,6 +261,7 @@ export class MemorySectionController {
         projects: projects.result.value.projects,
         entries: batch.entries,
         total: batch.total,
+        pending: pendingRows,
       })
     } catch (error) {
       if (ticket !== this.seq) return
@@ -338,6 +366,135 @@ export class MemorySectionController {
       return
     }
     this.set({ entries: matches.slice(0, snapshot.entries.length + MEMORY_BATCH_SIZE) })
+  }
+
+  // ─── Write path (phase 2): edit / delete / pin / archive / review queue ───
+
+  /**
+   * Run one row action against the host, then refresh the affected surfaces.
+   * Failures land in `actionError` (inline, previous rows stay visible); a
+   * success clears any stale error and repaints from the host's answer.
+   */
+  private async act(
+    run: (api: MemoryRemoteApi) => Promise<{ ok: boolean; message?: string }>,
+  ): Promise<boolean> {
+    try {
+      const outcome = await run(this.requireApi())
+      if (!outcome.ok) {
+        this.set({ actionError: outcome.message ?? 'action failed' })
+        return false
+      }
+      this.set({ actionError: null })
+      return true
+    } catch (error) {
+      this.set({ actionError: messageOf(error) })
+      return false
+    }
+  }
+
+  /** Save human edits to one entry ("edit lands in KV", store single truth). */
+  async saveEntryEdits(id: string, edits: { content?: string; category?: string | null; summary?: string | null }): Promise<boolean> {
+    return this.act(async api => {
+      const response = await api.update({
+        id,
+        ...(edits.content !== undefined ? { content: edits.content } : {}),
+        ...(edits.category !== undefined ? { category: edits.category ?? '' } : {}),
+        ...(edits.summary !== undefined ? { summary: edits.summary ?? '' } : {}),
+      })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      if (!response.result.value.found) return { ok: false, message: 'entry vanished before it could be saved' }
+      await this.refreshAfterMutation()
+      return { ok: true }
+    })
+  }
+
+  /** Delete one entry after the component-level confirmation. */
+  async deleteEntry(id: string): Promise<boolean> {
+    return this.act(async api => {
+      const response = await api.removeEntry({ id })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      if (!response.result.value.removed) return { ok: false, message: 'entry was already gone' }
+      await this.refreshAfterMutation()
+      return { ok: true }
+    })
+  }
+
+  /** Toggle one entry's pin. */
+  async togglePin(entry: MemoryEntryJson): Promise<boolean> {
+    return this.act(async api => {
+      const response = await api.pin({ id: entry.id, pinned: entry.pinned !== true })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      if (!response.result.value.found) return { ok: false, message: 'entry was already gone' }
+      await this.refreshAfterMutation()
+      return { ok: true }
+    })
+  }
+
+  /** Toggle one entry's dormancy stamp (P1-7 archive semantics). */
+  async toggleArchive(entry: MemoryEntryJson): Promise<boolean> {
+    return this.act(async api => {
+      const response = await api.archive({ id: entry.id, archived: entry.staleSince === undefined })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      if (!response.result.value.found) return { ok: false, message: 'entry was already gone' }
+      await this.refreshAfterMutation()
+      return { ok: true }
+    })
+  }
+
+  /** Re-fetch the pending queue plus whatever list surfaces are live. */
+  async refreshPending(): Promise<void> {
+    try {
+      const response = await this.requireApi().suggestList()
+      if (response.result.ok) this.set({ pending: response.result.value.suggestions })
+    } catch {
+      // The queue stays as-is on failure; actionError already reports worse.
+    }
+  }
+
+  /**
+   * Adopt one pending proposal — optionally with "edit before adopt" tweaks.
+   * Refreshes the queue AND the entry list (adoption may create or rewrite an
+   * entry under the active filters).
+   */
+  async adoptSuggestion(id: string, edits?: { content?: string; category?: string }): Promise<boolean> {
+    const done = await this.act(async api => {
+      const response = await api.suggestAdopt({
+        id,
+        ...(edits?.content !== undefined && edits.content.trim() !== '' ? { content: edits.content } : {}),
+        ...(edits?.category !== undefined && edits.category !== '' ? { category: edits.category } : {}),
+      })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      if (!response.result.value.found) return { ok: false, message: 'proposal was already decided' }
+      return { ok: true }
+    })
+    if (done) {
+      this.set({ pending: this.store.getSnapshot().pending.filter(s => s.id !== id), actionError: null })
+      await this.reload()
+    }
+    return done
+  }
+
+  /** Reject one pending proposal. */
+  async rejectSuggestion(id: string): Promise<boolean> {
+    const done = await this.act(async api => {
+      const response = await api.suggestReject({ id })
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      return { ok: response.result.value.rejected, message: response.result.value.rejected ? undefined : 'proposal was already decided' }
+    })
+    if (done) this.set({ pending: this.store.getSnapshot().pending.filter(s => s.id !== id), actionError: null })
+    return done
+  }
+
+  /** Post-mutation repaint: health numbers + the visible list + the queue. */
+  private async refreshAfterMutation(): Promise<void> {
+    void this.refreshPending()
+    try {
+      const [health] = await Promise.all([this.requireApi().health()])
+      if (health.result.ok) this.set({ health: health.result.value })
+    } catch {
+      // Health is cosmetic here; the reload below carries the real data.
+    }
+    await this.reload()
   }
 }
 

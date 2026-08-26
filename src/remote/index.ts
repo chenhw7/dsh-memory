@@ -28,9 +28,11 @@ import type { MemoryId } from '../brand.ts'
 import type {
   AddMemoryInput,
   AuditEntry,
+  AuditSource,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
+  MemorySuggestion,
   SearchMemoryResult,
   UpdateMemoryInput,
 } from '../types.ts'
@@ -65,6 +67,7 @@ export interface MemoryEntryJson {
   readonly scope: 'global' | 'project' | 'user'
   readonly category?: string
   readonly content: string
+  readonly summary?: string
   readonly projectName?: string
   readonly createdAt: number
   readonly updatedAt: number
@@ -81,6 +84,7 @@ function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     ...entry.category !== undefined ? { category: entry.category } : {},
+    ...entry.summary !== undefined ? { summary: entry.summary } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.pinned !== undefined ? { pinned: entry.pinned } : {},
     ...entry.lastRecalledAt !== undefined ? { lastRecalledAt: entry.lastRecalledAt } : {},
@@ -93,6 +97,24 @@ export interface MemoryListRequest {
   readonly projectName?: string
   readonly limit?: number
   readonly offset?: number
+}
+
+/** Project one {@link MemorySuggestion} to the wire shape. */
+function toSuggestionJson(suggestion: MemorySuggestion): MemorySuggestionJson {
+  return {
+    id: suggestion.id as string,
+    scope: suggestion.scope,
+    content: suggestion.content,
+    hits: suggestion.hits,
+    firstSeenAt: suggestion.firstSeenAt,
+    lastSeenAt: suggestion.lastSeenAt,
+    source: suggestion.source,
+    ...suggestion.category !== undefined ? { category: suggestion.category } : {},
+    ...suggestion.summary !== undefined ? { summary: suggestion.summary } : {},
+    ...suggestion.projectName !== undefined ? { projectName: suggestion.projectName } : {},
+    ...suggestion.targetEntryId !== undefined ? { targetEntryId: suggestion.targetEntryId } : {},
+    ...suggestion.sessionId !== undefined ? { sessionId: suggestion.sessionId } : {},
+  }
 }
 
 export interface MemoryListResult {
@@ -133,6 +155,7 @@ export interface MemoryUpdateRequest {
   readonly id: string
   readonly content?: string
   readonly category?: string
+  readonly summary?: string
 }
 
 export interface MemoryUpdateResult {
@@ -180,6 +203,63 @@ export interface MemoryAuditRequest {
 
 export interface MemoryAuditResult {
   readonly entries: readonly AuditEntry[]
+}
+
+// ─── Suggestion-queue wire types (P1-1 review UI) ──────────────────────────
+
+/** Wire-safe suggestion projection for the pending-review list. */
+export interface MemorySuggestionJson {
+  readonly id: string
+  readonly scope: 'global' | 'project' | 'user'
+  readonly category?: string
+  readonly content: string
+  readonly summary?: string
+  readonly projectName?: string
+  /** Times this same proposal was re-observed; the list sorts highest first. */
+  readonly hits: number
+  readonly firstSeenAt: number
+  readonly lastSeenAt: number
+  /** When set, adoption rewrites this entry instead of creating a new one. */
+  readonly targetEntryId?: string
+  readonly source: AuditSource
+  readonly sessionId?: string
+}
+
+export interface MemorySuggestListResult {
+  readonly suggestions: readonly MemorySuggestionJson[]
+}
+
+export interface MemorySuggestAdoptRequest {
+  readonly id: string
+  /** "Edit before adopt" overrides applied on top of the proposal. */
+  readonly content?: string
+  readonly category?: string
+  readonly summary?: string
+}
+
+export interface MemorySuggestAdoptResult {
+  readonly entry?: MemoryEntryJson
+  readonly found: boolean
+  readonly error?: string
+}
+
+export interface MemorySuggestRejectRequest {
+  readonly id: string
+}
+
+export interface MemorySuggestRejectResult {
+  readonly rejected: boolean
+}
+
+/**
+ * Manual dormancy toggle (P1-7 archive semantics): setting `archived` stamps
+ * `staleSince`, hiding the entry from injection surfaces while keeping it
+ * searchable; clearing lifts the stamp. Same mechanism as soft decay — the
+ * human just drives it directly instead of waiting for the janitor.
+ */
+export interface MemoryArchiveRequest {
+  readonly id: string
+  readonly archived: boolean
 }
 
 // ─── Service class ──────────────────────────────────────────────────────────
@@ -269,6 +349,7 @@ export class MemoryRemoteService extends TypertRemoteService {
         source: 'ui',
         ...request.content !== undefined ? { content: request.content } : {},
         ...request.category !== undefined ? { category: request.category as MemoryEntry['category'] } : {},
+        ...request.summary !== undefined ? { summary: request.summary } : {},
       }
       const updated = await store.update(request.id as MemoryId, input)
       if (updated === undefined) return { found: false }
@@ -299,6 +380,65 @@ export class MemoryRemoteService extends TypertRemoteService {
     const entry = request.pinned
       ? await store.pin(request.id as MemoryId)
       : await store.unpin(request.id as MemoryId)
+    if (entry === undefined) return { found: false }
+    return { entry: toEntryJson(entry), found: true }
+  }
+
+  /**
+   * Pending-review queue for the Memory section's review tab (P1-1). Highest
+   * `hits` first — the store's ordering already encodes "frequency is signal".
+   */
+  @Remote('suggestList')
+  suggestList(): MemorySuggestListResult {
+    const store = this.memory()
+    if (store === undefined) return { suggestions: [] }
+    return { suggestions: store.listSuggestions().map(toSuggestionJson) }
+  }
+
+  /**
+   * Adopt one pending proposal, optionally with human edits. The write goes
+   * through the store contract (scanner, audit with source `'ui'`), so the
+   * human decision lands exactly like a hand-made edit.
+   */
+  @Remote('suggestAdopt')
+  async suggestAdopt(request: MemorySuggestAdoptRequest): Promise<MemorySuggestAdoptResult> {
+    const store = this.memory()
+    if (store === undefined) return { found: false, error: 'memory service not available' }
+    try {
+      const entry = await store.adoptSuggestion(request.id as never, {
+        ...(request.content !== undefined ? { content: request.content } : {}),
+        ...(request.category !== undefined ? { category: request.category as MemoryEntry['category'] } : {}),
+        ...(request.summary !== undefined ? { summary: request.summary } : {}),
+      })
+      if (entry === undefined) return { found: false }
+      return { entry: toEntryJson(entry), found: true }
+    } catch (e) {
+      return { found: false, error: e instanceof Error ? e.message : 'adopt failed' }
+    }
+  }
+
+  /** Reject one pending proposal: the row leaves the queue, nothing is written. */
+  @Remote('suggestReject')
+  async suggestReject(request: MemorySuggestRejectRequest): Promise<MemorySuggestRejectResult> {
+    const store = this.memory()
+    if (store === undefined) return { rejected: false }
+    const rejected = await store.rejectSuggestion(request.id as never)
+    return { rejected }
+  }
+
+  /**
+   * Manual dormancy toggle (P1-7 archive): `archived: true` stamps
+   * `staleSince` (hidden from injection, still searchable); false lifts it.
+   * Directly reuses the soft-decay representation so every existing surface
+   * (injection filters, stale badges, recall-revival) behaves consistently.
+   */
+  @Remote('archive')
+  async archive(request: MemoryArchiveRequest): Promise<MemoryPinResult> {
+    const store = this.memory()
+    if (store === undefined) return { found: false }
+    const entry = request.archived
+      ? await store.archiveEntry(request.id as MemoryId)
+      : await store.unarchiveEntry(request.id as MemoryId)
     if (entry === undefined) return { found: false }
     return { entry: toEntryJson(entry), found: true }
   }

@@ -430,6 +430,58 @@ async function judgeDuplicate(
 }
 
 /**
+ * Route parsed memory proposals into the human-review queue (P1-1 optional
+ * confirm mode). Mirrors {@link storeMemories}' gates exactly — tag stripping,
+ * date-prefix stripping, content scan — but instead of writing entries the
+ * proposal lands as a suggestion:
+ *
+ * - near-duplicate of a stored entry → a proposal AGAINST that entry
+ *   (`targetEntryId`, P1-2 update-re-review semantics);
+ * - otherwise a create-proposal, deduped against the queue itself by the
+ *   store (`observeSuggestion` accumulates `hits` on repeats).
+ *
+ * The LLM dedup judge does NOT run in this mode: a human is the judge here,
+ * and every judge call would only decide which queue row a proposal merges
+ * into. Each entry is independent; failures skip that entry without throwing.
+ */
+export async function suggestMemories(
+  ctx: Context,
+  parsed: readonly ParsedMemory[],
+  attachCategory?: MemoryCategory,
+  source?: AuditSource,
+  sessionId?: string,
+  inferredProjectName?: string,
+): Promise<void> {
+  const memory = ctx.get('memory')
+  if (memory === undefined) return
+  const existing = memory.list().map(toDedupCandidate)
+  for (const entry of parsed) {
+    let category = entry.category ?? attachCategory
+    const stripped = stripContentTag(entry.content)
+    if (stripped.category !== undefined) category = stripped.category
+    const content = stripModelDatePrefix(stripped.content)
+    if (content.length === 0) continue
+    const scan = scanContent(content)
+    if (!scan.allowed) continue
+    const targetEntryId = findDuplicate(content, entry.scope, existing)
+    try {
+      await memory.observeSuggestion({
+        scope: entry.scope,
+        content,
+        source: source ?? 'review',
+        ...(category !== undefined ? { category } : {}),
+        ...entry.summary !== undefined ? { summary: entry.summary } : {},
+        ...entry.scope === 'project' && inferredProjectName !== undefined ? { projectName: inferredProjectName } : {},
+        ...targetEntryId !== undefined ? { targetEntryId: targetEntryId as MemoryId } : {},
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      })
+    } catch (_suggestionError) {
+      // Best-effort: one rejected proposal never aborts the batch.
+    }
+  }
+}
+
+/**
  * Store parsed memory entries through the scanner and the memory store. Each
  * entry is independent: a scanner rejection or store failure skips that
  * entry without throwing. Does nothing when no memory store is mounted.
@@ -450,6 +502,9 @@ async function judgeDuplicate(
  * @param session - the live session, for routing the LLM judge call.
  * @param modelOverride - optional provider/model override for the judge (§3.6).
  * @param judgeEnabled - whether to run the LLM judge on prefilter hits (default true).
+ * @param confirmMode - when true, proposals land in the human-review queue
+ *   instead of the store (P1-1); the judge is skipped there (see
+ *   {@link suggestMemories}).
  */
 export async function storeMemories(
   ctx: Context,
@@ -461,7 +516,12 @@ export async function storeMemories(
   session?: Session,
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
+  confirmMode?: boolean,
 ): Promise<void> {
+  if (confirmMode === true) {
+    await suggestMemories(ctx, parsed, attachCategory, source, sessionId, inferredProjectName)
+    return
+  }
   const memory = ctx.get('memory')
   if (memory === undefined) return
   // Snapshot the current entries once for the dedup prefilter. This is cheap:
@@ -562,6 +622,7 @@ export async function runReviewExtraction(
   candidates: readonly MemoryCandidate[],
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
+  confirmMode?: boolean,
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
@@ -576,7 +637,7 @@ export async function runReviewExtraction(
   if (pitfallCandidates.length > 0) {
     const messages = buildPitfallMessages(snapshot, pitfallCandidates)
     const parsed = await extractMemories(ctx, agent.session, PITFALL_SYSTEM_PROMPT, messages, undefined, modelOverride)
-    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
+    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode)
     stored += parsed.length
   }
 
@@ -587,7 +648,7 @@ export async function runReviewExtraction(
     // A correction-only batch maps naturally to the `correction` category;
     // explicitly tagged entries override this default inside storeMemories.
     const correctionOnly = rest.every(c => c.signal === 'correction')
-    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled)
+    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode)
     stored += parsed.length
   }
   return stored
@@ -661,6 +722,9 @@ export function parseCuratedLines(text: string, allowedIds: readonly string[]): 
  * @param session - the session whose request header routes the call.
  * @param selected - the oversized entries to curate.
  * @param modelOverride - optional provider/model override.
+ * @param confirmMode - when true, rewrites land as proposals against the
+ *   targeted entries instead of direct updates (P1-2: the model never
+ *   silently rewrites a confirmed entry).
  * @returns the number of entries actually rewritten.
  */
 export async function runCuration(
@@ -668,6 +732,7 @@ export async function runCuration(
   session: Session,
   selected: readonly MemoryEntry[],
   modelOverride?: ExtractionModelOverride,
+  confirmMode?: boolean,
 ): Promise<number> {
   if (selected.length === 0) return 0
   const target = resolveTarget(session, modelOverride)
@@ -692,6 +757,19 @@ export async function runCuration(
     const scan = scanContent(line.content)
     if (!scan.allowed) continue
     try {
+      if (confirmMode === true) {
+        // Human-confirm mode: the rewrite is a proposal against the entry,
+        // applied only if a human adopts it (P1-2).
+        await memory.observeSuggestion({
+          scope: selected.find(entry => (entry.id as string) === line.id)!.scope,
+          content: line.content,
+          targetEntryId: line.id as MemoryId,
+          source: 'review',
+          sessionId: session.id,
+        })
+        rewritten++
+        continue
+      }
       const updated = await memory.update(line.id as MemoryId, {
         content: line.content,
         source: 'review',
@@ -731,10 +809,11 @@ export async function runFlushExtraction(
   signal?: AbortSignal,
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
+  confirmMode?: boolean,
 ): Promise<number> {
   const messages = buildFlushMessages(fragments)
   const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal, modelOverride)
   const projectName = inferProjectName(session)
-  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled)
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled, confirmMode)
   return parsed.length
 }

@@ -24,3 +24,18 @@ export type AuditId = Branded<'AuditId'>
 export function AuditId(id: string = randomUUID()): AuditId {
   return id as AuditId
 }
+
+/**
+ * Identifies one pending memory suggestion in the review queue (P1-1 optional
+ * human-confirm mode). Separate from {@link MemoryId}: a suggestion is a
+ * proposal, not yet a memory.
+ */
+export type SuggestionId = Branded<'SuggestionId'>
+
+/**
+ * Mint a new unique suggestion id.
+ * @returns a fresh branded id.
+ */
+export function SuggestionId(id: string = randomUUID()): SuggestionId {
+  return id as SuggestionId
+}

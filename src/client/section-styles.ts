@@ -323,6 +323,85 @@ const RULES = `
   line-height: 1.5;
   color: var(--dsw-alias-label-error);
 }
+
+/* ── Phase-2 write path: row actions / editor / review queue ─────────────── */
+.dsm-s-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dsm-s-action-btn {
+  appearance: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.dsm-s-action-btn:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+.dsm-s-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.dsm-s-action-btn:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+.dsm-s-action-btn-danger {
+  color: var(--dsw-alias-label-error);
+}
+.dsm-s-badge-hits {
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+.dsm-s-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dsm-s-textarea,
+.dsm-s-field {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+}
+.dsm-s-textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+.dsm-s-textarea:focus-visible,
+.dsm-s-field:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+.dsm-s-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dsm-s-review-head {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
 `
 
 const cls = {
@@ -362,6 +441,15 @@ const cls = {
   moreBtn: 'dsm-s-more-btn',
   empty: 'dsm-s-empty',
   error: 'dsm-s-error',
+  actions: 'dsm-s-actions',
+  actionBtn: 'dsm-s-action-btn',
+  actionBtnDanger: 'dsm-s-action-btn-danger',
+  badgeHits: 'dsm-s-badge-hits',
+  editForm: 'dsm-s-edit-form',
+  textarea: 'dsm-s-textarea',
+  field: 'dsm-s-field',
+  formRow: 'dsm-s-form-row',
+  reviewHead: 'dsm-s-review-head',
 } as const
 
 let injected = false

@@ -1,22 +1,22 @@
 /**
- * Memory content-management section — Settings → Memory. Phase 1: read-only
- * browsing of the whole web-profile store across every scope and workspace.
- * Two tabs keep the two jobs apart: Overview holds the health dashboard;
- * Manage holds the filters and a lazily loaded entry list (auto-append near
- * the bottom, plus a manual "Load more" fallback) with soft-decay ("dormant")
- * markers.
+ * Memory content-management section — Settings → Memory. Phase 2 closes the
+ * write loop on top of the phase-1 read-only browsing: three tabs keep the
+ * three jobs apart — Overview holds the health dashboard; **Review** holds
+ * the pending-proposal queue (adopt with edits / reject, P1-1); Manage holds
+ * the filters, the lazily loaded entry list, and per-row write actions
+ * (edit / delete / pin / archive — P1-7).
  *
  * Data flows exclusively through the injected controller store — this file
- * holds no connection and issues no RPCs. Row actions (pin / edit / delete)
- * and the editor drawer arrive in phase 2; until then the Manage tab renders
- * rows without mutation affordances, matching the plan's phased rollout.
+ * holds no connection and issues no RPCs. Every mutation repaints from the
+ * host's answer, so the page stays a thin projection of the single source of
+ * truth in the store.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { MemoryEntryJson } from '../typert.remote-client.js'
+import type { MemoryEntryJson, MemorySuggestionJson } from '../typert.remote-client.js'
 import {
   CATEGORY_LABEL_KEYS,
   MEMORY_CATEGORIES,
@@ -31,7 +31,7 @@ export interface MemorySectionInjected {
     /** Page snapshot bound by the renderer as useMemorySection. */
     memorySection: SnapshotStore<MemorySectionState>
   }
-  /** Full load (dashboard + workspaces + first batch); called once on open. */
+  /** Full load (dashboard + workspaces + first batch + queue); called once on open. */
   load: () => Promise<void>
   /** Switch the scope filter. */
   setScope: (scope: MemoryScopeFilter) => void
@@ -43,6 +43,18 @@ export interface MemorySectionInjected {
   toggleCategory: (category: string) => void
   /** Append the next chunk of rows (lazy loading). */
   loadMore: () => void
+  /** Save human edits to one entry (content/category/summary; null clears). */
+  saveEntryEdits: (id: string, edits: { content?: string; category?: string | null; summary?: string | null }) => Promise<boolean>
+  /** Delete one entry (the row owns its confirm step). */
+  deleteEntry: (id: string) => Promise<boolean>
+  /** Toggle one entry's decay immunity pin. */
+  togglePin: (entry: MemoryEntryJson) => Promise<boolean>
+  /** Toggle one entry's dormancy stamp (archive/unarchive). */
+  toggleArchive: (entry: MemoryEntryJson) => Promise<boolean>
+  /** Adopt one pending proposal, optionally with human edits. */
+  adoptSuggestion: (id: string, edits?: { content?: string; category?: string }) => Promise<boolean>
+  /** Reject one pending proposal without writing anything. */
+  rejectSuggestion: (id: string) => Promise<boolean>
 }
 
 /** Full component props. */
@@ -58,8 +70,8 @@ const SCOPES: readonly { value: MemoryScopeFilter; labelKey: 'scopeAll' | 'scope
   { value: 'user', labelKey: 'scopeUser' },
 ]
 
-/** The section's two tabs: glanceable health vs. content management. */
-type SectionTab = 'overview' | 'manage'
+/** The section's three tabs: health glance vs. review queue vs. management. */
+type SectionTab = 'overview' | 'review' | 'manage'
 
 type LocaleKey = keyof typeof import('./locales.ts').en
 
@@ -71,6 +83,9 @@ type LocaleKey = keyof typeof import('./locales.ts').en
 function formatTs(ts: number | undefined, fallback: string): string {
   return ts === undefined || ts === null ? fallback : new Date(ts).toLocaleString()
 }
+
+/** The empty-string option of the editor's category select ("none"). */
+const NO_CATEGORY = ''
 
 /**
  * Which empty-state copy fits the active filters.
@@ -86,7 +101,78 @@ function emptyKeyOf(state: MemorySectionState): 'emptyFiltered' | 'emptyAll' | '
 }
 
 /**
- * One list row: badges over expandable content over timestamps.
+ * One entry's inline editor: content textarea over category select over
+ * summary input, with Save/Cancel. Local draft state only — Save hands the
+ * edits to the controller and collapses.
+ */
+function EntryEditor(props: {
+  entry: MemoryEntryJson
+  translate: (key: LocaleKey) => string
+  onSave: (edits: { content?: string; category?: string | null; summary?: string | null }) => void
+  onCancel: () => void
+}): ReactNode {
+  const { entry, translate, onSave, onCancel } = props
+  const [draftContent, setDraftContent] = useState(entry.content)
+  const [draftCategory, setDraftCategory] = useState<string>(entry.category ?? NO_CATEGORY)
+  const [draftSummary, setDraftSummary] = useState<string>(entry.summary ?? '')
+  return (
+    <div className={css.editForm}>
+      <textarea
+        className={css.textarea}
+        aria-label={translate('editContent')}
+        value={draftContent}
+        onChange={event => { setDraftContent(event.target.value) }}
+      />
+      <div className={css.formRow}>
+        <select
+          className={css.select}
+          aria-label={translate('editCategory')}
+          value={draftCategory}
+          onChange={event => { setDraftCategory(event.target.value) }}
+        >
+          <option value={NO_CATEGORY}>{translate('noCategory')}</option>
+          {MEMORY_CATEGORIES.map(category => (
+            <option key={category} value={category}>{translate((CATEGORY_LABEL_KEYS[category] ?? category) as LocaleKey)}</option>
+          ))}
+        </select>
+        <input
+          className={css.field}
+          type="text"
+          aria-label={translate('editSummary')}
+          placeholder={translate('editSummaryPlaceholder')}
+          value={draftSummary}
+          onChange={event => { setDraftSummary(event.target.value) }}
+        />
+      </div>
+      <div className={css.actions}>
+        <button
+          type="button"
+          className={css.actionBtn}
+          disabled={draftContent.trim() === ''}
+          onClick={() => {
+            onSave({
+              content: draftContent,
+              // '' selects "none": pass null so the controller clears the field;
+              // an untouched pick passes the current value through.
+              category: draftCategory === NO_CATEGORY ? null : draftCategory,
+              summary: draftSummary,
+            })
+          }}
+        >
+          {translate('saveEdits')}
+        </button>
+        <button type="button" className={css.actionBtn} onClick={onCancel}>
+          {translate('cancelEdits')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One list row: badges over expandable content over timestamps over the
+ * phase-2 action bar (Edit / Pin / Archive / two-step Delete). Editing swaps
+ * the content block for the inline editor.
  */
 function EntryRow(props: {
   entry: MemoryEntryJson
@@ -98,14 +184,20 @@ function EntryRow(props: {
   scopeLabels: Readonly<Record<'global' | 'project' | 'user', string>>
   translate: (key: LocaleKey) => string
   onToggle: () => void
+  onSaveEdits: (edits: { content?: string; category?: string | null; summary?: string | null }) => void
+  onDelete: () => void
+  onTogglePin: () => void
+  onToggleArchive: () => void
 }): ReactNode {
-  const { entry, expanded, staleLabel, staleHint, pinnedLabel, neverRecalledLabel, scopeLabels, translate, onToggle } = props
+  const { entry, expanded, staleLabel, staleHint, pinnedLabel, neverRecalledLabel, scopeLabels, translate, onToggle, onSaveEdits, onDelete, onTogglePin, onToggleArchive } = props
   // Boolean-guard extraction: read each optional field ONCE into a constant
   // before branching (the double bare access crashed a card once).
   const category = entry.category
   const projectName = entry.projectName
   const isStale = entry.staleSince !== undefined
   const isPinned = entry.pinned === true
+  const [editing, setEditing] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   return (
     <li className={isStale ? `${css.row} ${css.rowStale}` : css.row}>
       <div className={css.badges}>
@@ -125,14 +217,25 @@ function EntryRow(props: {
           </span>
         ) : null}
       </div>
-      <button
-        type="button"
-        className={expanded ? `${css.content} ${css.contentOpen}` : css.content}
-        aria-expanded={expanded}
-        onClick={onToggle}
-      >
-        {entry.content}
-      </button>
+      {editing
+        ? (
+          <EntryEditor
+            entry={entry}
+            translate={translate}
+            onSave={(edits) => { setEditing(false); onSaveEdits(edits) }}
+            onCancel={() => { setEditing(false) }}
+          />
+        )
+        : (
+          <button
+            type="button"
+            className={expanded ? `${css.content} ${css.contentOpen}` : css.content}
+            aria-expanded={expanded}
+            onClick={onToggle}
+          >
+            {entry.content}
+          </button>
+        )}
       <p className={css.meta}>
         <span>{`${translate('metaCreated')} ${formatTs(entry.createdAt, '—')}`}</span>
         <span>{`${translate('metaUpdated')} ${formatTs(entry.updatedAt, '—')}`}</span>
@@ -142,6 +245,134 @@ function EntryRow(props: {
             : `${translate('metaRecalled')} ${formatTs(entry.lastRecalledAt, neverRecalledLabel)}`}
         </span>
       </p>
+      {/* Phase-2 write path: edit / pin / archive / two-step delete. */}
+      <div className={css.actions}>
+        <button
+          type="button"
+          className={css.actionBtn}
+          onClick={() => { setEditing(current => !current); setConfirmingDelete(false) }}
+        >
+          {editing ? translate('cancelEdits') : translate('editAction')}
+        </button>
+        <button type="button" className={css.actionBtn} onClick={onTogglePin}>
+          {isPinned ? translate('unpinAction') : translate('pinAction')}
+        </button>
+        <button type="button" className={css.actionBtn} onClick={onToggleArchive}>
+          {isStale ? translate('unarchiveAction') : translate('archiveAction')}
+        </button>
+        {confirmingDelete
+          ? (
+            <>
+              <button
+                type="button"
+                className={`${css.actionBtn} ${css.actionBtnDanger}`}
+                onClick={() => { setConfirmingDelete(false); onDelete() }}
+              >
+                {translate('confirmDelete')}
+              </button>
+              <button
+                type="button"
+                className={css.actionBtn}
+                onClick={() => { setConfirmingDelete(false) }}
+              >
+                {translate('cancelDelete')}
+              </button>
+            </>
+          )
+          : (
+            <button
+              type="button"
+              className={`${css.actionBtn} ${css.actionBtnDanger}`}
+              onClick={() => { setConfirmingDelete(true) }}
+            >
+              {translate('deleteAction')}
+            </button>
+          )}
+      </div>
+    </li>
+  )
+}
+
+/**
+ * One pending proposal card: signal badges (hits, update-target), the proposed
+ * content, an adopt-with-edits form, and Reject. Adoption applies the human's
+ * tweaks — the model never writes directly.
+ */
+function SuggestionRow(props: {
+  suggestion: MemorySuggestionJson
+  scopeLabels: Readonly<Record<'global' | 'project' | 'user', string>>
+  translate: (key: LocaleKey) => string
+  onAdopt: (edits?: { content?: string; category?: string }) => void
+  onReject: () => void
+}): ReactNode {
+  const { suggestion, scopeLabels, translate, onAdopt, onReject } = props
+  const [editing, setEditing] = useState(false)
+  const [draftContent, setDraftContent] = useState(suggestion.content)
+  const category = suggestion.category
+  const projectName = suggestion.projectName
+  return (
+    <li className={css.row}>
+      <div className={css.badges}>
+        <span className={css.badge}>{scopeLabels[suggestion.scope]}</span>
+        {category === undefined
+          ? null
+          : <span className={css.badge}>{translate((CATEGORY_LABEL_KEYS[category] ?? category) as LocaleKey)}</span>}
+        {projectName === undefined ? null : <span className={css.project}>{projectName}</span>}
+        {suggestion.hits > 1
+          ? <span className={`${css.badge} ${css.badgeHits}`}>{translate('hitsBadge').replace('{hits}', String(suggestion.hits))}</span>
+          : null}
+        {suggestion.targetEntryId !== undefined
+          ? <span className={css.badge}>{translate('updateProposalBadge')}</span>
+          : null}
+      </div>
+      {editing
+        ? (
+          <div className={css.editForm}>
+            <textarea
+              className={css.textarea}
+              aria-label={translate('editProposalContent')}
+              value={draftContent}
+              onChange={event => { setDraftContent(event.target.value) }}
+            />
+            <div className={css.actions}>
+              <button
+                type="button"
+                className={css.actionBtn}
+                disabled={draftContent.trim() === ''}
+                onClick={() => { onAdopt({ content: draftContent }) }}
+              >
+                {translate('saveAdopt')}
+              </button>
+              <button type="button" className={css.actionBtn} onClick={() => { onAdopt(undefined) }}>
+                {translate('adoptAsIs')}
+              </button>
+            </div>
+          </div>
+        )
+        : (
+          <button type="button" className={`${css.content} ${css.contentOpen}`} onClick={() => { setEditing(true) }}>
+            {suggestion.content}
+          </button>
+        )}
+      <p className={css.meta}>
+        <span>{`${translate('metaSeen')} ${formatTs(suggestion.lastSeenAt, '—')}`}</span>
+        <span>{`${translate('metaFirstSeen')} ${formatTs(suggestion.firstSeenAt, '—')}`}</span>
+      </p>
+      {!editing
+        ? (
+          <div className={css.actions}>
+            <button type="button" className={css.actionBtn} onClick={() => { setEditing(true) }}>
+              {translate('editAndAdopt')}
+            </button>
+            <button type="button" className={css.actionBtn} onClick={() => { onAdopt(undefined) }}>
+              {translate('adoptAction')}
+            </button>
+            <button type="button" className={`${css.actionBtn} ${css.actionBtnDanger}`} onClick={onReject}>
+              {translate('rejectAction')}
+            </button>
+          </div>
+        )
+        : null}
     </li>
   )
 }
@@ -244,7 +475,7 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
       <h2 className={css.title}>{t('nav')}</h2>
       <p className={css.intro}>{t('sectionIntro')}</p>
 
-      {/* Tab bar: health glance vs. content management. */}
+      {/* Tab bar: health glance vs. proposal queue vs. content management. */}
       <div className={css.tabs} role="tablist" aria-label={t('nav')}>
         <button
           type="button"
@@ -254,6 +485,17 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
           onClick={() => { setTab('overview') }}
         >
           {t('tabOverview')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={css.tabBtn}
+          aria-selected={tab === 'review'}
+          onClick={() => { setTab('review') }}
+        >
+          {state.pending.length > 0
+            ? t('tabReviewWithCount').replace('{count}', String(state.pending.length))
+            : t('tabReview')}
         </button>
         <button
           type="button"
@@ -317,7 +559,35 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
                 </div>
               )
           )
-        : (
+        : null}
+
+      {tab === 'review'
+        ? (
+          <>
+            <p className={css.reviewHead}>{t('reviewIntro')}</p>
+            {state.actionError === null ? null : <p className={css.error} role="alert">{state.actionError}</p>}
+            {state.pending.length === 0
+              ? <p className={css.empty}>{t('reviewEmpty')}</p>
+              : (
+                <ul className={css.list}>
+                  {state.pending.map(suggestion => (
+                    <SuggestionRow
+                      key={suggestion.id}
+                      suggestion={suggestion}
+                      scopeLabels={scopeLabels}
+                      translate={t}
+                      onAdopt={(edits) => { void props.adoptSuggestion(suggestion.id, edits) }}
+                      onReject={() => { void props.rejectSuggestion(suggestion.id) }}
+                    />
+                  ))}
+                </ul>
+              )}
+          </>
+        )
+        : null}
+
+      {tab === 'manage'
+        ? (
           <>
             {/* Toolbar */}
             <div className={css.toolbar}>
@@ -373,8 +643,10 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
               </div>
             </div>
 
-            {/* Inline failure of a background refresh: previous rows stay visible. */}
+            {/* Inline failure of a background refresh or row action: previous
+                rows stay visible either way. */}
             {state.error === null ? null : <p className={css.error} role="alert">{state.error}</p>}
+            {state.actionError === null ? null : <p className={css.error} role="alert">{state.actionError}</p>}
 
             {/* Entry list */}
             {total === 0
@@ -394,6 +666,10 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
                         scopeLabels={scopeLabels}
                         translate={t}
                         onToggle={() => { toggleExpanded(entry.id) }}
+                        onSaveEdits={(edits) => { void props.saveEntryEdits(entry.id, edits) }}
+                        onDelete={() => { void props.deleteEntry(entry.id) }}
+                        onTogglePin={() => { void props.togglePin(entry) }}
+                        onToggleArchive={() => { void props.toggleArchive(entry) }}
                       />
                     ))}
                   </ul>
@@ -421,7 +697,8 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
                 </>
               )}
           </>
-        )}
+        )
+        : null}
     </div>
   )
 }

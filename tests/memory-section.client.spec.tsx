@@ -9,7 +9,7 @@
  * append while browsing, local reveal while filtering), stale markers, and
  * the error/recover path — including CJK content.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
@@ -18,7 +18,7 @@ import type { MemorySectionInjected, MemorySectionProps } from '../src/client/Me
 import { MEMORY_BATCH_SIZE, MemorySectionController } from '../src/client/memory-section-store.ts'
 import type { MemoryRemoteApi, MemorySectionState } from '../src/client/memory-section-store.ts'
 import { en } from '../src/client/locales.ts'
-import type { MemoryEntryJson, MemoryHealthResult } from '../src/typert.remote-client.js'
+import type { MemoryEntryJson, MemoryHealthResult, MemorySuggestionJson } from '../src/typert.remote-client.js'
 
 afterEach(cleanup)
 
@@ -69,6 +69,8 @@ interface ApiScript {
   list?: { entries: readonly MemoryEntryJson[]; total?: number }
   /** Full match set returned by every search(); defaults to none. */
   search?: { entries: readonly MemoryEntryJson[]; total?: number }
+  /** Pending proposals served by suggestList(); defaults to none. */
+  pending?: readonly MemorySuggestionJson[]
 }
 
 /**
@@ -92,6 +94,13 @@ function fakeApi(script: ApiScript = {}): MemoryRemoteApi {
       entries: script.search?.entries ?? [],
       total: script.search?.total ?? script.search?.entries.length ?? 0,
     })),
+    update: vi.fn(async () => ok({ entry: ROWS[0]!, found: true })),
+    removeEntry: vi.fn(async () => ok({ removed: true })),
+    pin: vi.fn(async () => ok({ entry: ROWS[0]!, found: true })),
+    archive: vi.fn(async () => ok({ entry: ROWS[2]!, found: true })),
+    suggestList: vi.fn(async () => ok({ suggestions: script.pending ?? [] })),
+    suggestAdopt: vi.fn(async () => ok({ entry: ROWS[0]!, found: true })),
+    suggestReject: vi.fn(async () => ok({ rejected: true })),
   }
 }
 
@@ -126,6 +135,12 @@ function wire(api: MemoryRemoteApi): {
     commitQuery: (query: string) => { controller.commitQuery(query) },
     toggleCategory: (category: string) => { controller.toggleCategory(category) },
     loadMore: () => { void controller.loadMore() },
+    saveEntryEdits: (id: string, edits: { content?: string; category?: string | null; summary?: string | null }) => controller.saveEntryEdits(id, edits),
+    deleteEntry: (id: string) => controller.deleteEntry(id),
+    togglePin: (entry: MemoryEntryJson) => controller.togglePin(entry),
+    toggleArchive: (entry: MemoryEntryJson) => controller.toggleArchive(entry),
+    adoptSuggestion: (id: string, edits?: { content?: string; category?: string }) => controller.adoptSuggestion(id, edits),
+    rejectSuggestion: (id: string) => controller.rejectSuggestion(id),
     t: (key: keyof typeof en) => en[key],
     close: () => {},
   } as unknown as MemorySectionProps
@@ -349,6 +364,191 @@ describe('failure and recovery', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('reset mid-flight')
     // Last-known rows stay on screen instead of blanking the page.
+    expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
+  })
+})
+
+// ── Phase 2: review queue + write path ─────────────────────────────────────
+
+const PROPOSALS: MemorySuggestionJson[] = [
+  {
+    id: 'sg-1',
+    scope: 'global',
+    category: 'convention',
+    content: 'always run the typecheck before pushing',
+    hits: 3,
+    firstSeenAt: 1_700_000_000_000,
+    lastSeenAt: 1_700_000_500_000,
+    source: 'review',
+  },
+  {
+    id: 'sg-2',
+    scope: 'project',
+    projectName: 'web',
+    content: 'swap the build to vite here',
+    hits: 1,
+    firstSeenAt: 1_700_000_600_000,
+    lastSeenAt: 1_700_000_700_000,
+    targetEntryId: 'mem-1',
+    source: 'flush',
+  },
+]
+
+/** Land on the Review tab with a seeded queue. */
+async function openReview(script: ApiScript = {}) {
+  const handles = renderSection({ ...script, pending: script.pending ?? PROPOSALS })
+  fireEvent.click(await screen.findByRole('tab', { name: `${en.tabReview} (2)` }))
+  await screen.findByText(/typecheck before pushing/)
+  return handles
+}
+
+describe('review queue (P1-1)', () => {
+  it('shows pending proposals with hits badges and update-proposal marks', async () => {
+    await openReview()
+
+    // The tab label carries the live count.
+    expect(screen.getByRole('tab', { name: `${en.tabReview} (2)` })).toBeTruthy()
+    // Repeated signals surface their frequency.
+    expect(screen.getByText(en.hitsBadge.replace('{hits}', '3'))).toBeTruthy()
+    // A proposal against an existing entry is marked as an update proposal.
+    expect(screen.getByText(en.updateProposalBadge)).toBeTruthy()
+    expect(screen.getByText(/swap the build to vite/)).toBeTruthy()
+    // The Manage tab stays untouched by queue contents.
+    expect(screen.queryByText(/pin the CI runner/)).toBeNull()
+  })
+
+  it('an empty queue renders its guidance line without a count in the tab', async () => {
+    renderSection()
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabReview }))
+    expect(await screen.findByText(en.reviewEmpty)).toBeTruthy()
+    expect(screen.getByRole('tab', { name: en.tabReview })).toBeTruthy()
+  })
+
+  it('adopting calls suggestAdopt with no edits and drops the row from the tab', async () => {
+    const { api } = await openReview()
+
+    const adoptButtons = screen.getAllByRole('button', { name: en.adoptAction })
+    fireEvent.click(adoptButtons[0]!)
+
+    await waitFor(() => expect(api.suggestAdopt).toHaveBeenCalledTimes(1))
+    expect(api.suggestAdopt).toHaveBeenCalledWith(expect.objectContaining({ id: PROPOSALS[0]!.id }))
+    await waitFor(() => expect(screen.queryByText(/typecheck before pushing/)).toBeNull())
+    // One proposal remains, so the tab still carries its count.
+    expect(screen.getByRole('tab', { name: `${en.tabReview} (1)` })).toBeTruthy()
+  })
+
+  it('edit-and-adopt applies the edited content instead of the original', async () => {
+    const { api } = await openReview()
+
+    fireEvent.click(screen.getAllByRole('button', { name: en.editAndAdopt })[0]!)
+    const box = await screen.findByLabelText(en.editProposalContent) as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'human-edited convention' } })
+    fireEvent.click(screen.getByRole('button', { name: en.saveAdopt }))
+
+    await waitFor(() => expect(api.suggestAdopt).toHaveBeenCalledWith(
+      expect.objectContaining({ id: PROPOSALS[0]!.id, content: 'human-edited convention' })))
+  })
+
+  it('rejecting removes the proposal without any write', async () => {
+    const { api } = await openReview()
+
+    fireEvent.click(screen.getAllByRole('button', { name: en.rejectAction })[1]!)
+
+    await waitFor(() => expect(api.suggestReject).toHaveBeenCalledWith({ id: PROPOSALS[1]!.id }))
+    await waitFor(() => expect(screen.queryByText(/swap the build to vite/)).toBeNull())
+    expect(vi.mocked(api.update)).not.toHaveBeenCalled()
+  })
+
+  it('a failed adoption surfaces inline while keeping the remaining rows', async () => {
+    const { api } = await openReview()
+
+    vi.mocked(api.suggestAdopt).mockResolvedValueOnce(fail('store rejected the write'))
+    fireEvent.click(screen.getAllByRole('button', { name: en.adoptAction })[0]!)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('store rejected the write')
+    // Both rows stay visible for another decision round.
+    expect(screen.getByText(/typecheck before pushing/)).toBeTruthy()
+    expect(screen.getByText(/swap the build to vite/)).toBeTruthy()
+  })
+})
+
+describe('entry write actions (P1-7)', () => {
+  /** First row's element (the CI-runner entry) for row-scoped queries. */
+  async function firstRow(): Promise<HTMLElement> {
+    const list = await screen.findByRole('list')
+    return within(list).getAllByRole('listitem')[0]!
+  }
+
+  it('edits one entry through the inline form and repaints from the host', async () => {
+    const { api } = await openManage()
+    vi.mocked(api.update).mockClear()
+    const row = await firstRow()
+
+    fireEvent.click(within(row).getByRole('button', { name: en.editAction }))
+    const box = screen.getByLabelText(en.editContent) as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'edited content by hand' } })
+    fireEvent.click(screen.getByRole('button', { name: en.saveEdits }))
+
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1))
+    expect(api.update).toHaveBeenCalledWith(expect.objectContaining({
+      id: ROWS[0]!.id,
+      content: 'edited content by hand',
+      summary: '',
+    }))
+  })
+
+  it('deletes with a two-step confirm and drops the row after the host agrees', async () => {
+    const { api } = await openManage()
+    vi.mocked(api.removeEntry).mockClear()
+    const row = await firstRow()
+
+    // First click arms the confirm; nothing is sent yet.
+    fireEvent.click(within(row).getByRole('button', { name: en.deleteAction }))
+    expect(api.removeEntry).not.toHaveBeenCalled()
+
+    fireEvent.click(within(row).getByRole('button', { name: en.confirmDelete }))
+    await waitFor(() => expect(api.removeEntry).toHaveBeenCalledWith({ id: ROWS[0]!.id }))
+  })
+
+  it('cancel keeps the entry when the delete confirm is dismissed', async () => {
+    const { api } = await openManage()
+    vi.mocked(api.removeEntry).mockClear()
+    const row = await firstRow()
+
+    fireEvent.click(within(row).getByRole('button', { name: en.deleteAction }))
+    fireEvent.click(within(row).getByRole('button', { name: en.cancelDelete }))
+
+    expect(api.removeEntry).not.toHaveBeenCalled()
+    expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
+  })
+
+  it('archive toggles the dormancy stamp through the archive endpoint', async () => {
+    const { api } = await openManage()
+    vi.mocked(api.archive).mockClear()
+
+    // First row (mem-1) is not dormant → Archive; third row (mem-3) is → Unarchive.
+    const rows = screen.getAllByRole('listitem')
+    const archiveBtn = within(rows[0]!).getByRole('button', { name: en.archiveAction })
+    const unarchiveBtn = within(rows[2]!).getByRole('button', { name: en.unarchiveAction })
+    fireEvent.click(archiveBtn)
+    await waitFor(() => expect(api.archive).toHaveBeenCalledWith({ id: ROWS[0]!.id, archived: true }))
+    fireEvent.click(unarchiveBtn)
+    await waitFor(() => expect(api.archive).toHaveBeenCalledWith({ id: ROWS[2]!.id, archived: false }))
+  })
+
+  it('a failed row action reports inline without blanking the list', async () => {
+    const { api } = await openManage()
+    vi.mocked(api.update).mockResolvedValueOnce(fail('write rejected by scanner'))
+    const row = await firstRow()
+
+    fireEvent.click(within(row).getByRole('button', { name: en.editAction }))
+    const box = screen.getByLabelText(en.editContent) as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'bad content' } })
+    fireEvent.click(screen.getByRole('button', { name: en.saveEdits }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('write rejected by scanner')
     expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
   })
 })

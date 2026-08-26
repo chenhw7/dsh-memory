@@ -35,7 +35,9 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
 - **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
-- **Memory manager UI (read-only, phase 1)** — a dedicated "Memory" section in the dsh settings UI browses the entire web-profile store: an Overview tab with the health dashboard, and a Manage tab with scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, and soft-decay markers — in English and Chinese.
+- **Optional human review before write** — flip one setting and every extraction/tool write becomes a *proposal* in a pending queue (repeated signals accumulate hits and float up); adopting applies it (with your edits), rejecting discards it. The model never self-promotes: a proposed change to an existing entry rewrites nothing until you accept it.
+- **Memory manager UI** — a dedicated "Memory" section in the dsh settings UI with three tabs: Overview (health dashboard), Review (the pending-proposal queue), and Manage — scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, plus full write actions (edit / pin / archive / delete) — in English and Chinese.
+- **Time-window browsing** — `memory_list` accepts `since`/`until` epoch-ms bounds so "what did we learn last week" pages within the window.
 
 ## Install
 

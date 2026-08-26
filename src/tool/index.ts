@@ -28,6 +28,8 @@ export const inject = ['tools']
 
 /** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
 const MEMORY_NS = settingsNamespace('memory')
+/** The `memory-review` settings namespace — read cross-namespace (owned by memory-review). */
+const REVIEW_NS = settingsNamespace('memory-review')
 
 /** Default for the search-result cap when the namespace value is absent. */
 const DEFAULT_MAX_SEARCH_RESULTS = 50
@@ -111,20 +113,26 @@ const ADD_DESCRIPTION =
   + 'durable facts worth recalling later: a user preference, a project convention, '
   + 'a prior decision, a known failure, a correction, an insight, or a tool quirk. '
   + 'Content is scanned for secrets and injection patterns before it is stored; '
-  + 'rejected content returns an error instead of an entry.'
+  + 'rejected content returns an error instead of an entry. On deployments with '
+  + 'human-review enabled the proposal is queued for confirmation instead of being '
+  + 'stored immediately; the response then reports `pending: true`.'
 
 const REPLACE_DESCRIPTION =
   'Update an existing persistent memory entry by id. Provide new `content` '
   + 'and/or a new `category`. New content is scanned for secrets and injection '
   + 'patterns before it is stored. Returns the updated entry, or an error when '
-  + 'the id does not exist.'
+  + 'the id does not exist. On deployments with human-review enabled the change is '
+  + 'queued as a proposal against the entry instead of applying directly; the '
+  + 'response then reports `pending: true`, and the entry keeps its old content '
+  + 'until a human adopts the proposal.'
 
 const REMOVE_DESCRIPTION =
   'Remove one persistent memory entry by id. Returns `removed: true` when the '
   + 'entry existed and was deleted, `removed: false` when the id was already absent.'
 
 const LIST_DESCRIPTION =
-  'List persistent memory entries, optionally filtered by scope and/or project. '
+  'List persistent memory entries, optionally filtered by scope, project, and '
+  + 'creation-time window (`since`/`until`, Unix epoch ms). '
   + 'By default returns the most recent entries (up to the deployment cap) with '
   + 'metadata (total, earliest, latest, stale count). Use `offset`/`limit` to page. '
   + "When the result is empty but stale entries exist, a hint suggests removing "
@@ -198,6 +206,11 @@ export function apply(ctx: Context, config: Config): void {
   // service is mounted. Same cross-namespace pattern as memory-notes.
   const compositionCap = config.maxSearchResults
   let fromSettings = (): number => compositionCap
+  // Human-confirm mode (P1-1): when the memory-review namespace enables it,
+  // model writes land in the pending-review queue instead of the store. Read
+  // live per call so flipping the setting applies to the very next tool call;
+  // a deployment without memory-review composed keeps automatic writes.
+  let confirmMode = (): boolean => false
   ctx.inject(['settings'], (sctx) => {
     fromSettings = (): number => {
       try {
@@ -206,6 +219,13 @@ export function apply(ctx: Context, config: Config): void {
         if (typeof v === 'number' && v >= 0) return v
       } catch { /* namespace not registered yet — fall through */ }
       return compositionCap
+    }
+    confirmMode = (): boolean => {
+      try {
+        const ns = sctx.settings.get(REVIEW_NS) as { confirmBeforeWrite?: boolean } | undefined
+        return ns?.confirmBeforeWrite === true
+      } catch { /* namespace not registered yet — confirm mode stays off */ }
+      return false
     }
   })
   const defaultLimit = (): number => fromSettings()
@@ -334,19 +354,23 @@ export function apply(ctx: Context, config: Config): void {
               stale: { type: 'boolean' },
             },
           },
+          pending: { type: 'boolean' },
+          suggestionId: { type: 'string' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
         text: value.entry !== undefined
           ? `Memory added (${value.entry.scope}): ${value.entry.content}`
-          : 'Memory add failed.',
+          : value.pending === true
+            ? 'Proposal queued for human review — it becomes a memory only after a person adopts it in the Memory settings section.'
+            : 'Memory add failed.',
       }],
       presentationMeta: (_args, value) => value.entry !== undefined ? {
         id: value.entry.id,
         scope: value.entry.scope,
         content: value.entry.content.slice(0, 80),
-      } : null,
+      } : value.pending === true ? { pending: true } : null,
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -369,6 +393,18 @@ export function apply(ctx: Context, config: Config): void {
       const scan = scanContent(input.content)
       if (!scan.allowed) {
         throw new Error(`content rejected: ${scan.reasons.join('; ')}`)
+      }
+      // Human-confirm mode (P1-1): the model's proposal waits for a human yes.
+      if (confirmMode()) {
+        const suggestion = await store.observeSuggestion({
+          scope: input.scope,
+          content: input.content,
+          source: 'tool',
+          ...(input.category !== undefined ? { category: input.category } : {}),
+          ...(input.summary !== undefined ? { summary: input.summary } : {}),
+          ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+        })
+        return { pending: true, suggestionId: suggestion.id as string }
       }
       const { entry } = await store.add(input)
       return { entry: toEntryJson(entry) }
@@ -419,19 +455,27 @@ export function apply(ctx: Context, config: Config): void {
             },
           },
           found: { type: 'boolean', required: true },
+          pending: { type: 'boolean' },
+          suggestionId: { type: 'string' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.found && value.entry !== undefined
-          ? `Memory updated: ${value.entry.content}`
-          : 'Memory entry not found.',
+        text: value.pending === true
+          ? 'Change queued for human review — the entry keeps its current content until a person adopts the proposal in the Memory settings section.'
+          : value.found && value.entry !== undefined
+            ? `Memory updated: ${value.entry.content}`
+            : 'Memory entry not found.',
       }],
-      presentationMeta: (_args, value) => value.found && value.entry !== undefined ? {
-        id: value.entry.id,
-        scope: value.entry.scope,
-        content: value.entry.content.slice(0, 80),
-      } : { found: false },
+      presentationMeta: (_args, value) => value.pending === true
+        ? { found: true, pending: true }
+        : value.found && value.entry !== undefined
+          ? {
+              id: value.entry.id,
+              scope: value.entry.scope,
+              content: value.entry.content.slice(0, 80),
+            }
+          : { found: false },
     },
     async execute(args) {
       const store = requireMemory(ctx)
@@ -448,6 +492,24 @@ export function apply(ctx: Context, config: Config): void {
         if (!scan.allowed) {
           throw new Error(`content rejected: ${scan.reasons.join('; ')}`)
         }
+      }
+      // Human-confirm mode (P1-2): a model proposing a change to an existing
+      // entry queues the proposal against it; the entry is rewritten only when
+      // a human adopts. Category/summary-only tweaks ride along on the proposal.
+      if (confirmMode()) {
+        const target = store.get(args.id as MemoryId)
+        if (target === undefined) return { found: false }
+        const content = args.content ?? target.content
+        const suggestion = await store.observeSuggestion({
+          scope: target.scope,
+          content,
+          source: 'tool',
+          ...(args.category !== undefined ? { category: args.category as MemoryCategory } : {}),
+          ...(args.summary !== undefined && args.summary.length > 0 ? { summary: args.summary } : {}),
+          ...(target.projectName !== undefined ? { projectName: target.projectName } : {}),
+          targetEntryId: target.id,
+        })
+        return { found: true, pending: true, suggestionId: suggestion.id as string }
       }
       const updated = await store.update(args.id as MemoryId, {
         ...args.content !== undefined ? { content: args.content } : {},
@@ -524,6 +586,8 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {
       scope: { type: 'string', enum: [...SCOPES], description: 'Restrict to entries matching this scope.' },
       projectName: { type: 'string', description: 'Restrict project-scoped entries to this project name.' },
+      since: { type: 'integer', description: 'Only entries created at or after this Unix epoch millisecond (browse by time window).' },
+      until: { type: 'integer', description: 'Only entries created at or before this Unix epoch millisecond (browse by time window).' },
       limit: { type: 'integer', description: 'Maximum results to return; defaults to the deployment cap.' },
       offset: { type: 'integer', description: 'Number of entries to skip before returning results; defaults to 0.' },
     },
@@ -586,7 +650,15 @@ export function apply(ctx: Context, config: Config): void {
       const store = requireMemory(ctx)
       const scope = args.scope !== undefined ? args.scope as MemoryScope : undefined
       const projectName = args.projectName !== undefined ? args.projectName : undefined
-      const all = store.list(scope, projectName)
+      const listed = store.list(scope, projectName)
+      // P1-5 time-window browse: filter on creation time before paging, so a
+      // "what did we learn last week" query pages within the window instead of
+      // walking the whole store newest-first.
+      const all = (args.since !== undefined || args.until !== undefined)
+        ? listed.filter(entry =>
+            (args.since === undefined || entry.createdAt >= args.since!) &&
+            (args.until === undefined || entry.createdAt <= args.until!))
+        : listed
       const total = all.length
       const offset = args.offset ?? 0
       const limit = args.limit ?? defaultLimit()
@@ -605,7 +677,8 @@ export function apply(ctx: Context, config: Config): void {
       const hasStale = all.some(e => e.staleSince !== undefined)
       // When 0 entries were returned but the store is non-empty, the filter
       // may be too narrow — suggest widening the query.
-      const totalInStore = all.length === 0 && (scope !== undefined || projectName !== undefined)
+      const filtered = scope !== undefined || projectName !== undefined || args.since !== undefined || args.until !== undefined
+      const totalInStore = all.length === 0 && filtered
         ? store.list().length
         : all.length
       const noMatchHint = all.length === 0 && totalInStore > 0

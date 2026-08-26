@@ -89,6 +89,12 @@ export interface Config {
   curatorMaxEntries?: number
   /** Only entries at least this long (chars) are selected for re-summarization. Defaults to `400`. */
   curatorMinChars?: number
+  /**
+   * Human-confirm mode (P1-1): extraction/tool proposals land in the
+   * pending-review queue instead of the store until adopted in the Memory
+   * settings section. Defaults to `false` (the original fully-automatic behavior).
+   */
+  confirmBeforeWrite?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -105,6 +111,7 @@ export const Config: z<Config> = z.object({
   curatorEveryNSessions: z.number().step(1).min(1).default(20),
   curatorMaxEntries: z.number().step(1).min(1).default(5),
   curatorMinChars: z.number().step(1).min(1).default(400),
+  confirmBeforeWrite: z.boolean().default(false),
 })
 
 /** Resolved config with every default materialized. */
@@ -121,6 +128,7 @@ interface ResolvedConfig {
   readonly curatorEveryNSessions: number
   readonly curatorMaxEntries: number
   readonly curatorMinChars: number
+  readonly confirmBeforeWrite: boolean
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -145,6 +153,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     curatorEveryNSessions: config.curatorEveryNSessions ?? 20,
     curatorMaxEntries: config.curatorMaxEntries ?? 5,
     curatorMinChars: config.curatorMinChars ?? 400,
+    confirmBeforeWrite: config.confirmBeforeWrite ?? false,
   }
 }
 
@@ -188,15 +197,15 @@ function findCompactionSummary(session: Session, compactionId: SessionEvent<'com
 }
 
 /** Fire-and-forget flush on `compaction/end`: extract the shadowed fragments. */
-async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean): Promise<void> {
+async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean): Promise<void> {
   const summary = findCompactionSummary(session, compactionId)
   if (summary === undefined) return
   const fragments = collectShadowedFragments(session, summary.data.shadowedSeqs)
-  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled)
+  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode)
 }
 
 /** Fire-and-forget flush on `session/disposed`: extract recent derived messages. */
-async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean): Promise<void> {
+async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean): Promise<void> {
   const messages = session.deriveMessages()
   const fragments: string[] = []
   for (const message of messages) {
@@ -204,7 +213,7 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
     if (fragment !== undefined) fragments.push(fragment)
   }
   const signal = AbortSignal.timeout(DISPOSE_FLUSH_TIMEOUT_MS)
-  await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled)
+  await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled, confirmMode)
 }
 
 /**
@@ -270,7 +279,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!signal.aborted && cfg.reviewEnabled) {
       try {
-        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled)
+        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite)
       } catch (_reviewError) {
         // Best-effort: a review failure must never block the step.
       }
@@ -285,7 +294,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnCompaction) return
     if (!checkBudget(session)) return
-    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled).catch(() => {
+    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch(() => {
       // Best-effort: a flush failure is logged by the runtime, not thrown here.
     })
   })
@@ -295,7 +304,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnDispose) return
     if (!checkBudget(session)) return
-    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled).catch(() => {
+    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch(() => {
       // Best-effort: dispose must not block on memory extraction.
     })
   })
@@ -332,7 +341,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       .slice(0, cfg.curatorMaxEntries)
     if (selected.length < 2) return
     if (!checkBudget(session)) return
-    void runCuration(ctx, session, selected, cfg.extractionModel).catch(() => {
+    void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).catch(() => {
       // Best-effort: curation failures never surface into session creation.
     })
   }, { global: true })
@@ -355,6 +364,7 @@ async function maybeRunReview(
   modelOverride: ExtractionModelOverride | undefined,
   checkBudget: (session: Session) => boolean,
   judgeEnabled: boolean,
+  confirmMode: boolean,
 ): Promise<void> {
   const projections = ctx.get('sessionProjections')
   if (projections === undefined) return
@@ -366,7 +376,7 @@ async function maybeRunReview(
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)
   if (unprocessed.length < threshold) return
   if (!checkBudget(session)) return
-  await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled)
+  await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled, confirmMode)
   const nextMark = unprocessed.reduce((max, candidate) => Math.max(max, candidate.seq), mark)
   highWaterMarks.set(session, nextMark)
 }

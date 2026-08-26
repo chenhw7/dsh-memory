@@ -15,17 +15,21 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
-import { MemoryStore, MemoryId, AuditId, scanContent, validateProjectScope, validateContent } from '../index.ts'
+import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch } from './bm25.ts'
+import { jaccardSimilarity, tokenize } from '../review/dedup.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
+  AddSuggestionInput,
+  AdoptSuggestionOverride,
   AuditEntry,
   AuditOp,
   AuditSource,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
+  MemorySuggestion,
   SearchMemoryResult,
   UpdateMemoryInput,
 } from '../types.ts'
@@ -59,12 +63,28 @@ const auditEntrySchema = z.object({
   contentPreview: z.string(),
 })
 
+/** Zod schema for one pending suggestion in the human-review queue (P1-1). */
+const suggestionSchema = z.object({
+  id: z.string().min(1),
+  scope: z.enum(['global', 'project', 'user']),
+  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
+  content: z.string(),
+  summary: z.string().optional(),
+  projectName: z.string().optional(),
+  hits: z.number(),
+  firstSeenAt: z.number(),
+  lastSeenAt: z.number(),
+  targetEntryId: z.string().optional(),
+  source: z.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
+  sessionId: z.string().optional(),
+})
+
 /**
  * The memory domain spec: `entries` (memory records keyed by id) plus `audit`
- * (mutation audit trail). Domain version stays at 0 — the `audit` table is a
- * forward-compatible addition: storage-json reads only declared tables and
- * initializes any absent table as an empty map, so existing v0 media reopen
- * without migration.
+ * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue).
+ * Domain version stays at 0 — both later tables are forward-compatible
+ * additions: storage-json reads only declared tables and initializes any
+ * absent table as an empty map, so existing v0 media reopen without migration.
  */
 const memoryDomainSpec = defineDomain({
   name: 'memory',
@@ -72,6 +92,7 @@ const memoryDomainSpec = defineDomain({
   tables: {
     entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as z.ZodType<MemoryEntry>),
     audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as z.ZodType<AuditEntry>),
+    suggestions: domainTable<SuggestionId, MemorySuggestion>(suggestionSchema as unknown as z.ZodType<MemorySuggestion>),
   },
 })
 
@@ -84,8 +105,25 @@ type EntriesTable = KvTable<MemoryId, MemoryEntry>
 /** The audit table from the opened domain. */
 type AuditTable = KvTable<AuditId, AuditEntry>
 
+/** The suggestions table from the opened domain (P1-1 review queue). */
+type SuggestionsTable = KvTable<SuggestionId, MemorySuggestion>
+
 /** Maximum audit records retained; oldest are trimmed on overflow. */
 const DEFAULT_AUDIT_CAP = 200
+
+/**
+ * Maximum pending suggestions retained (P1-1). Overflow evicts the
+ * lowest-signal rows first: fewest hits, then oldest `lastSeenAt`.
+ */
+const DEFAULT_SUGGESTION_CAP = 200
+
+/**
+ * Jaccard similarity above which two same-scope proposals count as the same
+ * suggestion (re-observation, not a new row). Matches the entry-dedup
+ * prefilter threshold so "the model keeps proposing X" and "X is already
+ * stored" draw the same near-duplicate line.
+ */
+const SUGGESTION_DUP_THRESHOLD = 0.15
 
 /**
  * Deterministic audit ordering: newest/oldest by `ts`, ties broken by the
@@ -117,10 +155,11 @@ export async function apply(ctx: Context): Promise<void> {
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
+  const suggestions: SuggestionsTable = domain.table('suggestions')
 
   ctx.effect(() => async () => { await domain.close() })
 
-  ctx.provide('memory', new DomainMemoryStore(entries, audit))
+  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions))
 }
 
 /**
@@ -132,15 +171,25 @@ export async function apply(ctx: Context): Promise<void> {
 export class DomainMemoryStore extends MemoryStore {
   private readonly entries: EntriesTable
   private readonly audit: AuditTable
+  private readonly suggestions: SuggestionsTable
   private readonly auditCap: number
+  private readonly suggestionCap: number
   /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
   private auditSeq: number | undefined
 
-  constructor(entries: EntriesTable, audit: AuditTable, auditCap: number = DEFAULT_AUDIT_CAP) {
+  constructor(
+    entries: EntriesTable,
+    audit: AuditTable,
+    suggestions: SuggestionsTable,
+    auditCap: number = DEFAULT_AUDIT_CAP,
+    suggestionCap: number = DEFAULT_SUGGESTION_CAP,
+  ) {
     super()
     this.entries = entries
     this.audit = audit
+    this.suggestions = suggestions
     this.auditCap = auditCap
+    this.suggestionCap = suggestionCap
   }
 
   /** Next monotonic audit sequence number (survives reopen via the medium). */
@@ -298,6 +347,158 @@ export class DomainMemoryStore extends MemoryStore {
     void this.stampRecalled(ids.map(id => this.entries.get(id as MemoryId)).filter((e): e is MemoryEntry => e !== undefined))
   }
 
+  // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────
+
+  /**
+   * Record one extraction/model proposal in the pending-review queue.
+   *
+   * Dedup semantics ("frequency is signal", evolve-style): when a similar
+   * proposal already exists in the same scope — or one targeting the same
+   * entry — the observation bumps its `hits` and refreshes `lastSeenAt`
+   * instead of creating a row; missing metadata (category/summary) is filled
+   * from the newer proposal, and strictly more informative content (a
+   * superset) replaces the original. Otherwise the proposal joins with
+   * `hits: 1`.
+   * @param input - the proposal to record.
+   * @returns the stored suggestion (existing row updated, or newly created).
+   * @throws when the proposed content fails validation or the scanner.
+   */
+  override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    validateProjectScope({ ...input, projectName: input.projectName ?? (input.targetEntryId !== undefined ? this.entries.get(input.targetEntryId)?.projectName : undefined) })
+    validateContent(input.content)
+    const scan = scanContent(input.content)
+    if (!scan.allowed) {
+      throw new Error(`suggestion content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const now = Date.now()
+    // Match against existing proposals: same target entry wins outright;
+    // otherwise nearest-content in the same scope above the dedup threshold.
+    let matched: MemorySuggestion | undefined
+    for (const [, suggestion] of this.suggestions.entries()) {
+      if (input.targetEntryId !== undefined) {
+        if (suggestion.targetEntryId === input.targetEntryId) { matched = suggestion; break }
+        continue
+      }
+      if (suggestion.scope !== input.scope) continue
+      const similarity = jaccardSimilarity(tokenize(input.content), tokenize(suggestion.content))
+      if (similarity > SUGGESTION_DUP_THRESHOLD) { matched = suggestion; break }
+    }
+    if (matched !== undefined) {
+      const improved = input.content.length > matched.content.length && input.content.includes(matched.content)
+      const updated: MemorySuggestion = {
+        ...matched,
+        content: improved ? input.content : matched.content,
+        category: matched.category ?? input.category,
+        summary: matched.summary ?? input.summary,
+        projectName: matched.projectName ?? input.projectName,
+        hits: matched.hits + 1,
+        lastSeenAt: now,
+      }
+      await this.suggestions.put(matched.id, updated)
+      return updated
+    }
+    const suggestion: MemorySuggestion = {
+      id: SuggestionId(),
+      scope: input.scope,
+      content: input.content,
+      hits: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      source: input.source,
+      ...input.category !== undefined ? { category: input.category } : {},
+      ...input.summary !== undefined ? { summary: input.summary } : {},
+      ...input.projectName !== undefined ? { projectName: input.projectName } : {},
+      ...input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {},
+      ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+    }
+    await this.suggestions.put(suggestion.id, suggestion)
+    await this.trimSuggestions()
+    return suggestion
+  }
+
+  /**
+   * List pending suggestions for the review UI: highest `hits` first (the
+   * repeatedly-re-proposed signals float up), then most recently seen.
+   */
+  override listSuggestions(): readonly MemorySuggestion[] {
+    const all: MemorySuggestion[] = []
+    for (const [, suggestion] of this.suggestions.entries()) all.push(suggestion)
+    return all.sort((a, b) => b.hits - a.hits || b.lastSeenAt - a.lastSeenAt || (a.id < b.id ? -1 : 1))
+  }
+
+  override getSuggestion(id: SuggestionId): MemorySuggestion | undefined {
+    return this.suggestions.get(id)
+  }
+
+  /**
+   * Adopt one pending suggestion — the human yes that turns a proposal into
+   * memory. With `targetEntryId` set, the (possibly edited) content updates
+   * the targeted entry (P1-2: the model's change applies only here);
+   * otherwise a new entry is created. The override carries the "edit before
+   * adopt" tweaks made in the review UI. The adopted write goes through the
+   * full store contract (scanner included) and the audit trail with source
+   * `'ui'`; the suggestion row is removed afterwards.
+   * @param id - the suggestion id.
+   * @param override - optional human edits applied on top of the proposal.
+   * @returns the written entry, or `undefined` when the suggestion is gone.
+   */
+  override async adoptSuggestion(id: SuggestionId, override?: AdoptSuggestionOverride): Promise<MemoryEntry | undefined> {
+    const suggestion = this.suggestions.get(id)
+    if (suggestion === undefined) return undefined
+    const content = override?.content ?? suggestion.content
+    validateContent(content)
+    const scan = scanContent(content)
+    if (!scan.allowed) {
+      throw new Error(`adopted content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const category = override?.category !== undefined
+      ? (override.category.length > 0 ? override.category : undefined)
+      : suggestion.category
+    const summary = override?.summary !== undefined
+      ? (override.summary.length > 0 ? override.summary : undefined)
+      : suggestion.summary
+    let entry: MemoryEntry | undefined
+    if (suggestion.targetEntryId !== undefined && this.entries.get(suggestion.targetEntryId) !== undefined) {
+      entry = await this.update(suggestion.targetEntryId, {
+        content,
+        ...(category !== undefined ? { category } : {}),
+        ...(summary !== undefined ? { summary } : { summary: '' }),
+        source: 'ui',
+      })
+    } else {
+      const result = await this.add({
+        scope: suggestion.scope,
+        content,
+        source: 'ui',
+        ...(category !== undefined ? { category } : {}),
+        ...(summary !== undefined ? { summary } : {}),
+        ...(suggestion.projectName !== undefined ? { projectName: suggestion.projectName } : {}),
+      })
+      entry = result.entry
+    }
+    await this.suggestions.delete(id)
+    return entry
+  }
+
+  /**
+   * Reject one pending suggestion: the row leaves the queue and nothing is
+   * written. @returns whether a suggestion was actually removed.
+   */
+  override async rejectSuggestion(id: SuggestionId): Promise<boolean> {
+    return this.suggestions.delete(id)
+  }
+
+  /** Trim the suggestion queue to its cap, evicting the lowest-signal rows. */
+  private async trimSuggestions(): Promise<void> {
+    if (this.suggestions.size <= this.suggestionCap) return
+    const all = [...this.suggestions.entries()].map(([, s]) => s)
+    all.sort((a, b) => a.hits - b.hits || a.lastSeenAt - b.lastSeenAt)
+    const excess = all.length - this.suggestionCap
+    for (let i = 0; i < excess; i++) {
+      await this.suggestions.delete(all[i]!.id)
+    }
+  }
+
   override async pin(id: MemoryId): Promise<MemoryEntry | undefined> {
     const existing = this.entries.get(id)
     if (existing === undefined) return undefined
@@ -311,6 +512,32 @@ export class DomainMemoryStore extends MemoryStore {
     if (existing === undefined) return undefined
     const updated: MemoryEntry = { ...existing, pinned: false }
     await this.entries.put(id, updated)
+    return updated
+  }
+
+  /**
+   * Archive one entry manually (P1-7): stamp `staleSince` (idempotent — an
+   * already-stale entry is returned unchanged) and record a `'ui'`-sourced
+   * audit update. Hidden from injection; still searchable; recall revives.
+   */
+  override async archiveEntry(id: MemoryId): Promise<MemoryEntry | undefined> {
+    const existing = this.entries.get(id)
+    if (existing === undefined) return undefined
+    if (existing.staleSince !== undefined) return existing
+    const updated: MemoryEntry = { ...existing, staleSince: Date.now() }
+    await this.entries.put(id, updated)
+    await this.appendAudit('update', id, updated, 'ui', undefined)
+    return updated
+  }
+
+  /** Lift a manual or janitor dormancy stamp without counting it as a recall. */
+  override async unarchiveEntry(id: MemoryId): Promise<MemoryEntry | undefined> {
+    const existing = this.entries.get(id)
+    if (existing === undefined || existing.staleSince === undefined) return existing
+    const { staleSince: _cleared, ...rest } = existing
+    const updated: MemoryEntry = rest as MemoryEntry
+    await this.entries.put(id, updated)
+    await this.appendAudit('update', id, updated, 'ui', undefined)
     return updated
   }
 

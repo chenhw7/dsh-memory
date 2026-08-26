@@ -110,6 +110,12 @@ const REVIEW_SPEC: NamespaceCardSpec = {
     { key: 'extractionBudget', kind: 'number' },
     { key: 'judgeEnabled', kind: 'checkbox' },
     { key: 'pitfallStreakThreshold', kind: 'number', minValue: 1 },
+    {
+      key: 'confirmBeforeWrite',
+      kind: 'checkbox',
+      labelKey: 'confirmBeforeWrite',
+      hintKey: 'confirmBeforeWriteHint',
+    },
     { key: 'curatorEnabled', kind: 'checkbox' },
     { key: 'curatorEveryNSessions', kind: 'number', minValue: 1 },
     { key: 'curatorMaxEntries', kind: 'number', minValue: 1 },
@@ -209,6 +215,13 @@ function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRe
     search: request => invoke('search', request),
     projects: () => invoke('projects'),
     health: () => invoke('health'),
+    update: request => invoke('update', request),
+    removeEntry: request => invoke('removeEntry', request),
+    pin: request => invoke('pin', request),
+    archive: request => invoke('archive', request),
+    suggestList: () => invoke('suggestList'),
+    suggestAdopt: request => invoke('suggestAdopt', request),
+    suggestReject: request => invoke('suggestReject', request),
   }
 }
 
@@ -300,6 +313,12 @@ export function apply(ctx: ClientContext): void {
     commitQuery: (query) => { controller.commitQuery(query) },
     toggleCategory: (category) => { controller.toggleCategory(category) },
     loadMore: () => { void controller.loadMore() },
+    saveEntryEdits: (id, edits) => controller.saveEntryEdits(id, edits),
+    deleteEntry: (id) => controller.deleteEntry(id),
+    togglePin: (entry) => controller.togglePin(entry),
+    toggleArchive: (entry) => controller.toggleArchive(entry),
+    adoptSuggestion: (id, edits) => controller.adoptSuggestion(id, edits),
+    rejectSuggestion: (id) => controller.rejectSuggestion(id),
   })
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({

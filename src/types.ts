@@ -8,9 +8,9 @@
  */
 
 /** MemoryId and AuditId are imported from ./brand.ts for use in type positions below. */
-import type { MemoryId, AuditId } from './brand.ts'
+import type { MemoryId, AuditId, SuggestionId } from './brand.ts'
 /** Re-exported so the tool and review modules can import the full vocabulary from this module. */
-export type { MemoryId, AuditId }
+export type { MemoryId, AuditId, SuggestionId }
 
 /** The scope a memory entry belongs to. */
 export type MemoryScope = 'global' | 'project' | 'user'
@@ -172,6 +172,69 @@ export interface AuditEntry {
   readonly seq?: number | undefined
   /** First ~100 chars of the mutated content, scanner-clean. */
   readonly contentPreview: string
+}
+
+/**
+ * One pending proposal in the human-review queue (P1-1 optional confirm mode).
+ * A suggestion is NOT a memory: it never injects, never searches, and never
+ * decays — it waits for a human decision (adopt → becomes/updates an entry,
+ * reject → deleted). Repeated extraction of the same proposal accumulates
+ * `hits` ("frequency is signal"), which sorts the queue.
+ */
+export interface MemorySuggestion {
+  /** Stable identity of this suggestion. */
+  readonly id: SuggestionId
+  /** Which scope the proposed memory belongs to. */
+  readonly scope: MemoryScope
+  /** Proposed category; absent for plain facts. */
+  readonly category?: MemoryCategory | undefined
+  /** Proposed memory content. */
+  readonly content: string
+  /** Proposed short summary for index/auto-recall rendering. */
+  readonly summary?: string | undefined
+  /** Project name for `project`-scoped proposals; absent otherwise. */
+  readonly projectName?: string | undefined
+  /**
+   * How many times this same proposal has been (re-)observed by extraction.
+   * Creation sets 1; each repeat observation bumps it and refreshes
+   * `lastSeenAt`. The queue renders highest-hits first.
+   */
+  readonly hits: number
+  /** Unix epoch ms when this proposal was first observed. */
+  readonly firstSeenAt: number
+  /** Unix epoch ms when this proposal was last re-observed. */
+  readonly lastSeenAt: number
+  /**
+   * When set, adopting applies `content` as an UPDATE to this existing entry
+   * instead of creating a new one (P1-2 update-re-review semantics: a model
+   * proposing a change to an already-confirmed entry never writes it directly;
+   * the entry is touched only when a human adopts the proposal).
+   */
+  readonly targetEntryId?: MemoryId | undefined
+  /** Provenance of the proposal (`review`, `flush`, or `tool`). */
+  readonly source: AuditSource
+  /** Session id when the proposal came from an extraction path. */
+  readonly sessionId?: string | undefined
+}
+
+/** Input for creating or re-observing a suggestion. */
+export interface AddSuggestionInput {
+  readonly scope: MemoryScope
+  readonly category?: MemoryCategory | undefined
+  readonly content: string
+  readonly summary?: string | undefined
+  readonly projectName?: string | undefined
+  /** Set when the proposal is a change to an existing entry (P1-2). */
+  readonly targetEntryId?: MemoryId | undefined
+  readonly source: AuditSource
+  readonly sessionId?: string | undefined
+}
+
+/** Human edits applied at adoption time ("edit before adopt", evolve-style). */
+export interface AdoptSuggestionOverride {
+  readonly content?: string
+  readonly category?: MemoryCategory | undefined
+  readonly summary?: string | undefined
 }
 
 /** Health snapshot of the memory store (§3.7 observability). */

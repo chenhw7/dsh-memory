@@ -9,12 +9,28 @@ export interface MemoryEntryJson {
   scope: 'global' | 'project' | 'user'
   category?: string
   content: string
+  summary?: string
   projectName?: string
   createdAt: number
   updatedAt: number
   pinned?: boolean
   lastRecalledAt?: number
   staleSince?: number
+}
+export type AuditSourceJson = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
+export interface MemorySuggestionJson {
+  id: string
+  scope: 'global' | 'project' | 'user'
+  category?: string
+  content: string
+  summary?: string
+  projectName?: string
+  hits: number
+  firstSeenAt: number
+  lastSeenAt: number
+  targetEntryId?: string
+  source: AuditSourceJson
+  sessionId?: string
 }
 export interface MemoryListResult { entries: readonly MemoryEntryJson[]; total: number }
 export interface MemorySearchResult { entries: readonly MemoryEntryJson[]; total: number }
@@ -23,6 +39,10 @@ export interface MemoryAddResult { entry?: MemoryEntryJson; error?: string }
 export interface MemoryUpdateResult { entry?: MemoryEntryJson; found: boolean; error?: string }
 export interface MemoryRemoveResult { removed: boolean }
 export interface MemoryPinResult { entry?: MemoryEntryJson; found: boolean }
+export interface MemorySuggestListResult { suggestions: readonly MemorySuggestionJson[] }
+export interface MemorySuggestAdoptRequest { id: string; content?: string; category?: string; summary?: string }
+export interface MemorySuggestAdoptResult { entry?: MemoryEntryJson; found: boolean; error?: string }
+export interface MemorySuggestRejectResult { rejected: boolean }
 export interface MemoryHealthResult {
   totalEntries: number
   byScope: { global: number; project: number; user: number }
@@ -39,7 +59,7 @@ export interface AuditEntryJson {
   entryId: string
   scope: 'global' | 'project' | 'user'
   category?: string
-  source: 'tool' | 'review' | 'flush' | 'ui'
+  source: AuditSourceJson
   sessionId?: string
   ts: number
   contentPreview: string
@@ -52,9 +72,13 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     search: (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     get: (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     add: (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
-    update: (request: { id: string; content?: string; category?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
+    update: (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     removeEntry: (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     pin: (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
+    archive: (request: { id: string; archived: boolean }) => Promise<RemoteResult<MemoryPinResult>>
+    suggestList: () => Promise<RemoteResult<MemorySuggestListResult>>
+    suggestAdopt: (request: MemorySuggestAdoptRequest) => Promise<RemoteResult<MemorySuggestAdoptResult>>
+    suggestReject: (request: { id: string }) => Promise<RemoteResult<MemorySuggestRejectResult>>
     health: () => Promise<RemoteResult<MemoryHealthResult>>
     projects: () => Promise<RemoteResult<MemoryProjectsResult>>
     auditLog: (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
@@ -64,9 +88,13 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/search': (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     'memoryRemote/get': (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     'memoryRemote/add': (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
-    'memoryRemote/update': (request: { id: string; content?: string; category?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
+    'memoryRemote/update': (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     'memoryRemote/removeEntry': (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     'memoryRemote/pin': (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
+    'memoryRemote/archive': (request: { id: string; archived: boolean }) => Promise<RemoteResult<MemoryPinResult>>
+    'memoryRemote/suggestList': () => Promise<RemoteResult<MemorySuggestListResult>>
+    'memoryRemote/suggestAdopt': (request: MemorySuggestAdoptRequest) => Promise<RemoteResult<MemorySuggestAdoptResult>>
+    'memoryRemote/suggestReject': (request: { id: string }) => Promise<RemoteResult<MemorySuggestRejectResult>>
     'memoryRemote/health': () => Promise<RemoteResult<MemoryHealthResult>>
     'memoryRemote/projects': () => Promise<RemoteResult<MemoryProjectsResult>>
     'memoryRemote/auditLog': (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
