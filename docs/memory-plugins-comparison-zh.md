@@ -156,18 +156,26 @@ suggest 队列（`SUGGESTIONS.jsonl`，同内容重复建议只累计 hits 并�
    > **已完成**：`MEMORY_CONTEXT_NOTE`（full 快照）、`MEMORY_INDEX_NOTE`（index 快照）、`AUTO_RECALL_NOTE`（auto recall fence）三处均已补充"`Entries reflect what was known at the time they were written — verify against the current repository and tool output before acting on them.`"。
 
 **P1（中等改动、治理增强——本次复审重排了顺序）**
-1. **可选人审模式（suggest 队列 + hits 累计，自原 P1-5 提为首项）**：review 产出去重后落待确认队列（重复信号累计次数并置顶），由 Memory section UI 呈现"待确认/采纳/归档/拒绝"；默认关闭保持现有全自动行为（借鉴 evolve rules.md §4 + @max-null 的 status 轴）。**提档理由**：全自动捕获的错误条目会随库增长持续固化，捕获率越高治理缺口越大；且 Memory section UI 通道现成，落实成本远低于从 P1 继续等待的代价（坐标系标准 4）。
-2. **update 重新审核语义**：若启用审核模式，模型 update 已确认条目后应重新进入待确认（借鉴 @max-null engine.ts update 重置 status——其 :373-376 注释"内容被模型改动后必须重新人工审核"与铁律"模型永不自我提升"逐字可引）。
-3. **真宿主集成测试补层（自原 P2-10 提档）**：在现有 stub 单测之外，加 10 条左右真 Context+真 JSON storage 的集成用例，断言到物理文件与组装后的 system prompt（借鉴 @max-null 测试策略）。**提档理由**：宿主升级 API 漂移是本插件的真实死法，355 个 stub 用例拦不住它；与 P1-6 契约文档成对落地。
-4. **召回评测基线（复审新增）**：构造固定 fixture 记忆库 + "查询→预期命中表"的 golden set，度量 recall precision/recall 与注入 token 成本，作为一切检索改进（分词、权重、预算）先后对照的地基；同时把"检索质量谁更强"从口水变成数字（坐标系标准 8）。
-5. **browse/时间维度检索入口**：`memory_list` 增加按时间分桶浏览或 since/until 过滤（借鉴 agent-memory memory_browse + evolve since/until）。
-6. **IMPLEMENTATION 契约文档**：记录本插件依赖的宿主 API 契约，每条附 harness 源码 文件:行号 出处（借鉴 agent-memory 取证回写纪律），降低 harness 升级时的回归成本。
-7. **记忆的可编辑性闭环（复审新增，坐标系标准 7）**：Memory section 二期把"只读浏览"补成"写路径闭环"——条目编辑/删除/归档操作（采纳前可编辑，借鉴 evolve 审阅面板的"编辑后采纳"）；编辑直接落 KV、notes 由渲染层重建，保持 store 单一真源。与 P1-1 待确认队列共用同一 UI 分区，是同一轮 UI 迭代的自然范围。
-8. **index 模式转正评估（复审新增，坐标系标准 1）**：P0-4 summary tag 与 P0-6 条数上限/token 口径就位后，用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档——让"两级结构"从配置面里的一项变成可辩护的默认行为，而不是拍脑袋换默认值。
+1. ✅ **可选人审模式（suggest 队列 + hits 累计，自原 P1-5 提为首项）**：review 产出去重后落待确认队列（重复信号累计次数并置顶），由 Memory section UI 呈现"待确认/采纳/归档/拒绝"；默认关闭保持现有全自动行为（借鉴 evolve rules.md §4 + @max-null 的 status 轴）。**提档理由**：全自动捕获的错误条目会随库增长持续固化，捕获率越高治理缺口越大；且 Memory section UI 通道现成，落实成本远低于从 P1 继续等待的代价（坐标系标准 4）。
+   > **已完成（2026-08-26）**：store 新增 `suggestions` 表与 `observeSuggestion`/`listSuggestions`/`adoptSuggestion`/`rejectSuggestion` 契约（同 scope Jaccard 判重 → hits+1 并刷新 lastSeenAt，严格超集内容才替换原文；队列容量 200，低信号先逐出）。review/flush/工具三条写路径在 `confirmBeforeWrite` 开启时统一改道队列，确认模式下 LLM 去重裁决跳过（人即裁决者）；UI 三标签页的「待确认」页支持编辑后采纳/按原文采纳/拒绝。
+2. ✅ **update 重新审核语义**：若启用审核模式，模型 update 已确认条目后应重新进入待确认（借鉴 @max-null engine.ts update 重置 status——其 :373-376 注释"内容被模型改动后必须重新人工审核"与铁律"模型永不自我提升"逐字可引）。
+   > **已完成（2026-08-26）**：确认模式下，提取去重命中既有条目时不再合并/改写，而是落一条带 `targetEntryId` 的更新提议（curator 改写同理），条目原文在人工采纳前分毫不动；采纳时以 source `'ui'` 走完整 store 契约（扫描 + 审计）。
+3. ✅ **真宿主集成测试补层（自原 P2-10 提档）**：在现有 stub 单测之外，加 10 条左右真 Context+真 JSON storage 的集成用例，断言到物理文件与组装后的 system prompt（借鉴 @max-null 测试策略）。**提档理由**：宿主升级 API 漂移是本插件的真实死法，355 个 stub 用例拦不住它；与 P1-6 契约文档成对落地。
+   > **已完成（2026-08-26）**：新增 `tests/integration/host.spec.ts` 13 条用例——真实 cordis 组合（Storage hub + storage-json + storage-domain + 真实 SystemPrompt 注册表 + ToolRuntime + Typert remote service）跑通 full/policy-only/index 三档组装断言、memory_add/search/update/remove/janitor/archive 到 memory.json 物理文件的落盘断言、remote 服务 add→list→update→removeEntry 往返落盘、建议队列 observe→adopt/reject 全链路落盘。全套测试现为 ~490 用例 / 27 文件。
+4. ✅ **召回评测基线（复审新增）**：构造固定 fixture 记忆库 + "查询→预期命中表"的 golden set，度量 recall precision/recall 与注入 token 成本，作为一切检索改进（分词、权重、预算）先后对照的地基；同时把"检索质量谁更强"从口水变成数字（坐标系标准 8）。
+   > **已完成（2026-08-26）**：新增 `src/benchmark`（24 条目 fixture × 24 条 en/zh golden 查询）与 `tests/recall-golden.spec.ts`。真实 BM25 首轮基线：success@5 = **100%**（zh/en 切片均 100%）、P@1 = 91.7%、MRR = 0.958；回归护栏写入 spec（success@5 ≥85%、MRR ≥0.75、P@1 ≥60%、zh ≥80%）。已知局限如实记录：零词法重叠的跨语言查询不承诺命中（需语义向量层，另立项）。
+5. ✅ **browse/时间维度检索入口**：`memory_list` 增加按时间分桶浏览或 since/until 过滤（借鉴 agent-memory memory_browse + evolve since/until）。
+   > **已完成（2026-08-26）**：`memory_list` 新增 `since`/`until` 参数（createdAt 毫秒边界、含端点），窗口内 newest-first 分页，`earliest/latest` 元数据随窗口收窄，空窗且库非空时提示放宽过滤；与 scope/projectName 过滤可组合。
+6. ✅ **IMPLEMENTATION 契约文档**：记录本插件依赖的宿主 API 契约，每条附 harness 源码 文件:行号 出处（借鉴 agent-memory 取证回写纪律），降低 harness 升级时的回归成本。
+   > **已完成（2026-08-26）**：`docs/HOST_CONTRACT.zh-CN.md`——存储域、settings 热更、system-prompt 注入、会话事件面（compaction/end 数据形状、agent/pre-step waterfall）、session-projection、LLM 调用纪律、Typert 远程服务与 /api 信任围栏、客户端 slot 八个板块逐条附出处，末尾附 harness bump 时的八项核对清单。
+7. ✅ **记忆的可编辑性闭环（复审新增，坐标系标准 7）**：Memory section 二期把"只读浏览"补成"写路径闭环"——条目编辑/删除/归档操作（采纳前可编辑，借鉴 evolve 审阅面板的"编辑后采纳"）；编辑直接落 KV、notes 由渲染层重建，保持 store 单一真源。与 P1-1 待确认队列共用同一 UI 分区，是同一轮 UI 迭代的自然范围。
+   > **已完成（2026-08-26）**：Manage 页每行新增 编辑（行内表单：content/category/summary）/置顶/归档（手动盖 staleSince 戳，与软衰减同一表示，注入隐藏但可搜索可复活）/两段式删除；remote 服务相应新增 `archive` 方法并给 `update` 补 summary 字段；全部操作失败行内报错且不清空列表；client jsdom 测试扩至 24 条覆盖各交互。
+8. ✅ **index 模式转正评估（复审新增，坐标系标准 1）**：P0-4 summary tag 与 P0-6 条数上限/token 口径就位后，用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档——让"两级结构"从配置面里的一项变成可辩护的默认行为，而不是拍脑袋换默认值。
+   > **已完成（2026-08-26）**：`docs/INDEX_MODE_EVALUATION.zh-CN.md`。实测（24 条库存）：policy-only ≈344 token 恒定零条目；index ≈955 token 全覆盖 24/24 存在行；full ≈809 token 但已触发 20 条上限折叠至 20/24。**裁决：不改出厂默认**——golden set 只证明"能搜到"（success@5=100%），不能证明"会去搜"；policy-only 保持默认克制姿态，index 定位为文档中的推荐进阶档（库存大或观察到漏搜时升级），并附实测成本数字。
 
 **P2（大工程、按真实需求立项）**
 1. **project 记忆的 git 同步/团队共享**：条目身份证（内容确定性 ID）+ 三方合并 + 专属分支。先做"项目级导出导入 + ID 对齐"这一步可以拿到 80% 价值；完整 sync 对账请参考 evolve `lib/sync/`（repo/merge/entryid/identity 四件套共 ~2100 行，复杂度集中在身份与冲突 GUI）。**立项前置评估**：记忆离开本机进共享仓库后威胁模型改变（跨设备长历史、协作者可读），现有写入口密钥扫描必须扩展到共享路径，否则共享等于放大泄漏面。
-2. ~~真宿主集成测试补层~~（已提档至 P1-3）。
+2. ~~真宿主集成测试补层~~（已提档至 P1-3，✅ 已于 2026-08-26 落地）。
 
 **明确不建议引入的**：advisor 旁挂评审员（投入产出差）；CoI 外部 CLI 调度（超出一个记忆插件的职责）；纯文本五轨存储全量替换现有 KV（收益不抵迁移成本）；提示词驱动的每回合强写（可靠性回归）。
 
@@ -175,19 +183,21 @@ suggest 队列（`SUGGESTIONS.jsonl`，同内容重复建议只累计 hits 并�
 
 | 衡量坐标系标准 | 当前项目现状 | 对应行动项 |
 |---|---|---|
-| 1. 索引/正文两级，懒加载 | 骨架已备（policy-only 默认零注入；index 档存在且 summary 链已补齐；无转正裁决） | ~~P0-4~~ ✅ ~~P0-6~~ ✅；P1-8 |
+| 1. 索引/正文两级，懒加载 | 骨架已备（policy-only 默认零注入；index 档存在且 summary 链已补齐；无转正裁决） | ~~P0-4~~ ✅ ~~P0-6~~ ✅ ~~P1-8~~ ✅（裁决：默认不改，index 定位推荐进阶档） |
 | 2. 负向写入准则 | ✅ 已补齐（三提示词均有 repo 可推导排除 + 负向准则） | ~~**P0-1**~~ ✅（去重管线已有，可承接） |
 | 3. 类型化语义 | 已具备（scope×category 枚举） | —（达标，无需新项） |
-| 4. 捕获 ≠ 正确 / 人审纠偏 | **缺失**（全自动落库，无门路） | P1-1、P1-2（UI 通道现成） |
+| 4. 捕获 ≠ 正确 / 人审纠偏 | ✅ 已补齐（confirmBeforeWrite 待确认队列 + hits 累计 + 更新提议重审，UI「待确认」页闭环） | ~~P1-1、P1-2~~ ✅（UI 通道现成已兑现） |
 | 5. 注入经济学 | 冻结快照/固定缓存纪律已具备；预算已补 ≈token 估算与条数上限 | ~~P0-6~~ ✅；冻结机制保持 |
 | 6. 权威性与陈旧性框架 | ✅ full 快照/fence/index 三处均有权威+时点真文案 | ~~P0-7~~ ✅ |
-| 7. 人可读改删 | notes 可随 git 读、settings UI 只读浏览；编辑/删除无路径 | P1-7 |
-| 8. 行为度量 | **空白** | P1-4 |
+| 7. 人可读改删 | ✅ 已补齐（Manage 页编辑/置顶/归档/删除写路径 + 待确认队列同区闭环） | ~~P1-7~~ ✅ |
+| 8. 行为度量 | ✅ 基线落地（golden set：success@5=100%、MRR=0.958 入 CI 护栏；注入 token 成本三档实测）；线上"是否去搜"观测仍空缺 | ~~P1-4~~ ✅（漏搜触发率统计留待真实使用数据） |
 
-→ 结论：八条标准里 **2 已补齐**、**4/8 是纯缺口**、**1/5/6/7 是半完成态**，全部已有对应行动项；后续每次迭代清单时先过这张表，防止再出现"标准写了、清单没写"的漂移。（P0-1/2/3/4/5/6/7 已于 2026-08-25 全部落地，对应 commit `ff8df27`。）
+→ 结论：八条标准里 **2/4/6/7 已补齐、8 的离线基线已落地**（线上触发率观测是唯一遗留，需真实使用数据），**1/5 达成且有实验背书**，全部行动项关闭。（P0-1…7 已于 2026-08-25 落地，commit `ff8df27`；P1-1…8 已于 2026-08-26 落地，commit `bf8ffdd`。）
 
 ---
 
 ## 五、一句话总结
 
 当前项目的事实底座没有问题——事件驱动提取、检索结构、安全治理是真实长板，而默认 policy-only（零条目注入、条目全靠工具检索）恰好是四者中最接近成熟系统"索引常驻、内容按需"的克制姿态；但以衡量坐标系对照，距离优秀记忆系统的缺口不在更多结构，而在四道治理：**负向写入准则**（别把 repo 已有的东西记进记忆）、**人审纠偏闭环**（捕获可靠 ≠ 内容正确）、**召回内容的权威性与陈旧性框架**、以及**一套能回答"有没有用、值多少 token"的行为度量**。前三道在参考项目里有现成范式可直接借鉴，第四道四家是空白、谁先补上谁先拿到裁决权。按本次修订后的 P0→P2 清单执行即可——原结论的壳仍成立：无需架构级改动；但"当前项目已经领先"这句话，在度量落地之前只能当假设，不能当结论。
+
+> **执行状态（2026-08-26 更新）**：P0 七项与 P1 八项已全部落地。四道治理中的三道（负向准则、人审闭环、权威性框架）已从"缺口"变为代码；第四道（行为度量）的离线基线也已建立——golden set 上 success@5 = 100%、MRR = 0.958，注入成本三档实测入册。"已经领先"如今有了第一批数字背书，但"会去搜"（线上 recall 触发率）仍待真实使用观测；下一站是 P2 共享同步，按需立项。
