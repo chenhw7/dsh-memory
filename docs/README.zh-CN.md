@@ -1,6 +1,6 @@
 # 文档索引
 
-`@chenhw7/dsh-memory` 的文档索引。
+`@chenhw7/dsh-memory` 的文档索引。English: [README.md](./README.md).
 
 文档按生命周期分两层：本层的**当前基线**（活文档），以及 [`archive/`](./archive/) 中的**历史决策记录**。
 
@@ -30,6 +30,6 @@
 
 ## 约定
 
-- **语言**：仅仓库根 `README`、`TECH_DESIGN`、`SEQUENCE_DIAGRAMS` 三组维持中英双语（面向外部用户与插件生态）；其余文档只维护中文版，避免双语同步开销。
+- **语言**：仅本索引（`docs/README`）、仓库根 `README`、`TECH_DESIGN`、`SEQUENCE_DIAGRAMS` 四组维持中英双语（面向外部用户与插件生态）；其余文档只维护中文版，避免双语同步开销。
 - **新写的规划/分析文档**放在 `docs/` 顶层；对应任务完成、内容被代码与基线文档吸收后，移入 `docs/archive/`，并在文首加一行"已归档"状态。
 - **`docs/agent-memory/`** 是本插件自动生成的文件（CONVENTIONS.md / PITFALLS.md），已 gitignore（每机一份）——不要在此放手工文档。
