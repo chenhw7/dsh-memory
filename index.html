@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
 <title>Cairn — long-term memory for DeepSeek Harness</title>
 <meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.">
 <link rel="canonical" href="https://chenhw7.github.io/dsh-memory/">
@@ -55,6 +56,7 @@ a.gh-corner:hover{border-color:var(--amber);color:var(--amber-hi);box-shadow:0 0
 /* ── hero ─── */
 header#hero{padding:140px 0 70px;text-align:center;position:relative}
 header#hero::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse 600px 320px at 50% 30%,rgba(232,168,62,.07),transparent);pointer-events:none}
+.hero-logo{width:clamp(110px,16vw,170px);height:auto;display:block;margin:0 auto 36px;filter:drop-shadow(0 14px 30px rgba(0,0,0,.5))}
 .hero-kick{font-family:var(--mono);font-size:12px;letter-spacing:.32em;color:var(--amber);text-transform:uppercase;margin-bottom:22px}
 h1.wordmark{font-family:var(--serif);font-weight:900;font-size:clamp(72px,13vw,156px);line-height:.95;letter-spacing:-.02em;color:var(--ink);position:relative}
 h1.wordmark em{font-style:normal;color:var(--amber);font-weight:700}
@@ -115,6 +117,7 @@ footer .f-links a:hover{color:var(--amber)}
 <!-- ═══════════ HERO ═══════════ -->
 <header id="hero">
   <div class="wrap">
+    <img class="hero-logo" src="assets/logo-512.webp" width="512" height="512" alt="Cairn" decoding="async">
     <div class="hero-kick">Long-term memory for DeepSeek Harness</div>
     <h1 class="wordmark">Cairn<em>.</em></h1>
     <p class="hero-tag">Leave durable markers; the next session finds its way.</p>
