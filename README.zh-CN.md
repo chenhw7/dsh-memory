@@ -10,9 +10,9 @@
 
 单文件、零依赖的图解技术深潜——完整拆解从信号捕获到存储、检索、注入、衰减的全流水线。图不是静态的：提取循环、写入路径安全闸、从 `src/store/bm25.ts` 移植的 BM25 内核、衰减模拟器，全部在你的浏览器里实时运行。页面由本仓库通过 GitHub Pages 托管：
 
-[![首页预览](assets/memory-architecture-hero.png)](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)
+[![首页预览](assets/memory-architecture-hero-zh-CN.png)](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)
 
-→ **打开在线页面：[memory-architecture.zh-CN.html](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)**
+→ **打开在线页面：[memory-architecture.zh-CN.html](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)** · [English version](https://chenhw7.github.io/dsh-memory/memory-architecture.html)
 
 ## 目录
 
