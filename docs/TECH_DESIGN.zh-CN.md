@@ -65,7 +65,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G11 — 写路径上的人类治理。** 可选的人审模式（`confirmBeforeWrite`）把每次自动提取*以及*模型发起的写入都路由进待确认提议队列（重复信号累计 `hits`）；采纳（可带修改）是提议变成记忆的唯一途径，因此模型永远无法自我提升（self-promote）。
 - **G12 — 可度量的检索与注入经济性。** 固定 golden set 把召回质量变成 CI 守护的指标（success@k / P@1 / MRR，含 zh/en 切片），把各模式的常驻注入成本变成数字；prompt 预算在字符旁边报告 `≈tokens`。
 
-客户端 UI 开发经验——包括阻断 CSS 注入的 esbuild CJS var 提升 bug、宿主不导出组件的约束等——记录在 [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）。
+客户端 UI 开发经验——包括阻断 CSS 注入的 esbuild CJS var 提升 bug、宿主不导出组件的约束等——记录在 [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md)。
 
 ---
 
@@ -885,4 +885,4 @@ src/
 
 ---
 
-*配套文档：[README.zh-CN.md](../README.zh-CN.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh-CN.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）、[Index 模式评估](./INDEX_MODE_EVALUATION.zh-CN.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*
+*配套文档：[README.zh-CN.md](../README.zh-CN.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh-CN.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md)、[Index 模式评估](./INDEX_MODE_EVALUATION.zh-CN.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*

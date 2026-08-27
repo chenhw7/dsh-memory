@@ -5,7 +5,6 @@
 | Package | `@chenhw7/dsh-memory` |
 | 状态 | **已实现（v0.2.0）** |
 | 范围 | 在现有 bundle 上新增一个 `memory-notes` 组合行；`memory-review`、`memory-context` 小幅扩展 |
-| 英文版 | [PROJECT_NOTES.md](./PROJECT_NOTES.md) |
 
 ---
 

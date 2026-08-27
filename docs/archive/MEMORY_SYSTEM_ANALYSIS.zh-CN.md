@@ -112,7 +112,7 @@ MemoryEntry = { id, scope, category?, content: string, projectName?,
 
 **现象**：会话开始时经 AGENTS.md 注入的只有指针块（`<!-- dsh-memory:begin --> … notes live in docs/agent-memory/ …`），模型并不会因此去读文件。容易误判为"notes 根本没进上下文"。
 
-**实际机制**：内容走的是另一条通道——`memory-context` 在 order 91 注册的 `<project-notes>` 段，`session/created` 时调用 `projectNotes.snapshotFor(cwd)` 从 KV 存储同步渲染并冻结进会话快照（不经过磁盘文件，与持久化共用同一次渲染，PROJECT_NOTES.md §8）。两条通道各司其职：
+**实际机制**：内容走的是另一条通道——`memory-context` 在 order 91 注册的 `<project-notes>` 段，`session/created` 时调用 `projectNotes.snapshotFor(cwd)` 从 KV 存储同步渲染并冻结进会话快照（不经过磁盘文件，与持久化共用同一次渲染，PROJECT_NOTES.zh-CN.md §8）。两条通道各司其职：
 
 | 通道 | 载体 | 受众 | 携带内容 |
 |---|---|---|---|

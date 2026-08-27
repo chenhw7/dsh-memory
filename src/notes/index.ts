@@ -1,5 +1,5 @@
 /**
- * `@chenhw7/dsh-memory/notes`: the project-notes exporter (docs/PROJECT_NOTES.md).
+ * `@chenhw7/dsh-memory/notes`: the project-notes exporter (docs/PROJECT_NOTES.zh-CN.md).
  * A function plugin that renders habit/convention/pitfall entries from the
  * memory store into in-repo markdown files (`docs/agent-memory/` by default)
  * and maintains an AGENTS.md pointer block.

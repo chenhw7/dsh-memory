@@ -65,7 +65,7 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 - **G11 — Human governance on the write path.** An optional confirm mode routes every automatic extraction *and* model-initiated write through a pending-proposal queue (repeated signals accumulate `hits`); adoption (with edits) is the only way a proposal becomes a memory, so the model can never self-promote.
 - **G12 — Measurable retrieval & injection economics.** A fixed golden set turns recall quality into CI-guarded metrics (success@k / P@1 / MRR, zh/en slices) and per-mode standing-injection cost into numbers; prompt budgets report `≈tokens` next to characters.
 
-Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [CLIENT_UI_LESSONS.md](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)).
+Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md) (zh-CN).
 
 ---
 
@@ -885,4 +885,4 @@ src/
 
 ---
 
-*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh-CN.md)), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh-CN.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*
+*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh-CN.md)), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md) (zh-CN), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh-CN.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*

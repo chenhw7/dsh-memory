@@ -1,6 +1,6 @@
 # 文档索引
 
-`@chenhw7/dsh-memory` 的文档索引。English: [README.md](./README.md).
+`@chenhw7/dsh-memory` 的文档索引。
 
 文档按生命周期分两层：本层的**当前基线**（活文档），以及 [`archive/`](./archive/) 中的**历史决策记录**。
 
@@ -12,8 +12,8 @@
 |---|---|
 | [TECH_DESIGN](./TECH_DESIGN.zh-CN.md) · [EN](./TECH_DESIGN.md) | 完整技术方案与实现参考（v0.5.0）：架构、数据模型、各子系统、配置、安全、测试。 |
 | [SEQUENCE_DIAGRAMS](./SEQUENCE_DIAGRAMS.zh-CN.md) · [EN](./SEQUENCE_DIAGRAMS.md) | 所有主要路径的时序图 + 模块依赖与服务调用图。 |
-| [PROJECT_NOTES](./PROJECT_NOTES.zh-CN.md) · [EN](./PROJECT_NOTES.md) | 项目笔记子系统（仓库内 CONVENTIONS.md / PITFALLS.md 导出）的设计与 ADR。 |
-| [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh-CN.md) · [EN](./CLIENT_UI_LESSONS.md) | 开发 dsh 插件客户端 UI 的踩坑教训——对任何贡献设置卡或浏览器 UI 的插件都有用。 |
+| [PROJECT_NOTES](./PROJECT_NOTES.zh-CN.md) | 项目笔记子系统（仓库内 CONVENTIONS.md / PITFALLS.md 导出）的设计与 ADR。 |
+| [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh-CN.md) | 开发 dsh 插件客户端 UI 的踩坑教训——对任何贡献设置卡或浏览器 UI 的插件都有用。 |
 | [HOST_CONTRACT](./HOST_CONTRACT.zh-CN.md) | 宿主（harness）API 工程契约，每条结论附源码出处；§9 是 harness 升级时的核对清单。（仅中文版） |
 | [INDEX_MODE_EVALUATION](./INDEX_MODE_EVALUATION.zh-CN.md) | 三档注入模式（policy-only / index / full）的实测对照与"保持 policy-only 为默认"的裁决；可用 `tests/recall-golden.spec.ts` 复现。（仅中文版） |
 
@@ -30,5 +30,6 @@
 
 ## 约定
 
+- **语言**：仅仓库根 `README`、`TECH_DESIGN`、`SEQUENCE_DIAGRAMS` 三组维持中英双语（面向外部用户与插件生态）；其余文档只维护中文版，避免双语同步开销。
 - **新写的规划/分析文档**放在 `docs/` 顶层；对应任务完成、内容被代码与基线文档吸收后，移入 `docs/archive/`，并在文首加一行"已归档"状态。
 - **`docs/agent-memory/`** 是本插件自动生成的文件（CONVENTIONS.md / PITFALLS.md），已 gitignore（每机一份）——不要在此放手工文档。
