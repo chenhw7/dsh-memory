@@ -26,18 +26,19 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Persistent memory** — facts, preferences, and conventions stored in a durable KV backend with audit logging.
 - **Three-layer scoping** — `global` (cross-project), `project` (per-repo, auto-detected), and `user` (cross-project profile).
 - **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
-- **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches.
-- **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate.
-- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer.
+- **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches. Retrieval quality is not vibes: a fixed golden set (24 entries × 24 queries, English + Chinese) is evaluated in CI — success@5 = 100%, MRR = 0.958 — with injection-cost numbers per prompt mode (see [docs/INDEX_MODE_EVALUATION.zh-CN.md](docs/INDEX_MODE_EVALUATION.zh-CN.md)).
+- **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate. Admission rules exclude anything the repository already records (code structure, git history, fixed-bug narratives), and model-handwritten date prefixes are stripped so timestamps always come from the program.
+- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer. A drift guard backs up externally edited notes files instead of silently overwriting them.
 - **Dedup pipeline** — two-stage deduplication (stop-word-filtered Jaccard prefilter + optional LLM judge with bounded merges) prevents near-duplicate accumulation; a low-frequency curator pass re-summarizes oversized entries.
-- **Two-tier memory lifecycle** — pin important memories; overdue project-scoped entries are removed while overdue `global`/`user` entries are soft-decayed (hidden from standing injections, still searchable, un-stamped on recall); every write is audited.
+- **Two-tier memory lifecycle** — pin important memories; overdue project-scoped entries are removed while overdue `global`/`user` entries are soft-decayed (hidden from standing injections, still searchable, un-stamped on recall); entries can also be manually archived from the UI; every write is audited.
 - **Step-level auto recall (opt-in)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
 - **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
-- **Optional human review before write** — flip one setting and every extraction/tool write becomes a *proposal* in a pending queue (repeated signals accumulate hits and float up); adopting applies it (with your edits), rejecting discards it. The model never self-promotes: a proposed change to an existing entry rewrites nothing until you accept it.
+- **Optional human review before write** — flip one setting (`confirmBeforeWrite`) and every extraction *and* tool write becomes a *proposal* in a pending queue (repeated signals accumulate hits and float up); adopting applies it (with your edits), rejecting discards it. The model never self-promotes: a proposed change to an existing entry rewrites nothing until you accept it.
 - **Memory manager UI** — a dedicated "Memory" section in the dsh settings UI with three tabs: Overview (health dashboard), Review (the pending-proposal queue), and Manage — scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, plus full write actions (edit / pin / archive / delete) — in English and Chinese.
-- **Time-window browsing** — `memory_list` accepts `since`/`until` epoch-ms bounds so "what did we learn last week" pages within the window.
+- **Time-window browsing + smart list view** — `memory_list` returns newest-first with `earliest`/`latest`/`hasStale` metadata, accepts `since`/`until` epoch-ms bounds so "what did we learn last week" pages within the window, and suggests widening the filter when a narrowed query comes back empty over a non-empty store.
+- **Optional summaries for progressive disclosure** — `memory_add`/`memory_replace` accept a `summary`, and extraction can emit a `[summary:…]` tag; index mode and auto-recall render summaries instead of truncated content.
 
 ## Install
 
@@ -111,8 +112,8 @@ If you'd rather not install from the npm registry, pack a tarball from a checkou
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # produces chenhw7-dsh-memory-0.4.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.4.0.tgz
+npm pack                    # produces chenhw7-dsh-memory-0.5.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.5.0.tgz
 ```
 
 ## Update
@@ -205,6 +206,7 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
 | `memoryCharLimit` | `5000` | Character budget for the frozen per-session memory snapshot injected in `full` mode (`0` = no content). |
+| `memoryMaxEntries` | `20` | Entry-count cap for the same frozen snapshot (`0` = no limit). The snapshot ends with a `≈N tokens` estimate so injection cost stays visible. |
 | `maxSearchResults` | `50` | Default cap for `memory_search` / `memory_list` when the call omits `limit`; read live by the tool plugin. `0` = no limit. |
 | `decayDays` | `30` | Lifecycle window for entries not recalled within N days; read live by the review plugin's janitor. `0` = disabled. Overdue `project` entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
 | `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. Entries rendered into the notes files are excluded from the memory section to avoid double injection. |
@@ -233,6 +235,7 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `curatorEveryNSessions` | `20` | Run the curator pass every N session creations. |
 | `curatorMaxEntries` | `5` | Max entries selected per curation pass (longest first). |
 | `curatorMinChars` | `400` | Only entries at least this long are selected for re-summarization. |
+| `confirmBeforeWrite` | `false` | Human-review mode: every extraction (review/flush/curator) *and* every `memory_add`/`memory_replace` call lands as a proposal in the pending queue instead of the store, until a human adopts it in the Memory settings section (Review tab). Repeated observations of the same proposal accumulate `hits` and float it to the top; a proposed change to an existing entry carries its id and rewrites nothing until adopted. |
 
 > There is deliberately **no separate `tool-memory` settings namespace**: the tool plugin reads `maxSearchResults` live from the `memory` namespace above. Its composition `config.maxSearchResults` only serves as the fallback base when no settings service is mounted.
 
@@ -262,6 +265,7 @@ memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
+  memoryMaxEntries: 20
   maxSearchResults: 50
   decayDays: 30
   notesEnabled: true
@@ -286,6 +290,7 @@ memory-review:
   curatorEveryNSessions: 20
   curatorMaxEntries: 5
   curatorMinChars: 400
+  confirmBeforeWrite: false
 ```
 
 `memoryPolicyCustomText` is optional and only used when `memoryMode` is `custom`.
@@ -319,10 +324,10 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | Row | Export | Role |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain, registers `ctx.memory` (BM25 search + two-tier decay) |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools |
-| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator) and the `memory-review` settings namespace |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write + AGENTS.md pointer), registers `ctx.projectNotes` |
+| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue tables), registers `ctx.memory` (BM25 search + two-tier decay) |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (confirm-mode writes queue as proposals) |
+| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write with drift guard + AGENTS.md pointer), registers `ctx.projectNotes` |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (consumed over the `/api` channel) |
 
