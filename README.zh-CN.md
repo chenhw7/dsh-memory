@@ -6,8 +6,17 @@
 
 这是一个**自包含的单一包**（不是多包 workspace）。它依赖 dsh 核心服务作为 **peer dependencies**（由你已经安装的 dsh 提供），并通过自带的 `cordis.patch.yml` 让 `dsh plugin add` 将其激活为一个 profile 层。
 
+## 交互式技术解析
+
+单文件、零依赖的图解技术深潜——完整拆解从信号捕获到存储、检索、注入、衰减的全流水线。图不是静态的：提取循环、写入路径安全闸、从 `src/store/bm25.ts` 移植的 BM25 内核、衰减模拟器，全部在你的浏览器里实时运行。页面由本仓库通过 GitHub Pages 托管：
+
+[![首页预览](assets/memory-architecture-hero.png)](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)
+
+→ **打开在线页面：[memory-architecture.zh-CN.html](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)**
+
 ## 目录
 
+- [交互式技术解析](#交互式技术解析)
 - [功能特性](#功能特性)
 - [安装](#安装)
 - [更新](#更新)

@@ -6,8 +6,17 @@ This is a **self-contained single package** (not a multi-package workspace). It 
 
 **English** | [简体中文](README.zh-CN.md)
 
+## Interactive Deep-Dive
+
+A single-file, zero-dependency illustrated walkthrough of the whole pipeline — signal capture, storage, retrieval, injection, and decay. The figures are not static: the extraction loop, the write-path security gates, the BM25 kernel ported from `src/store/bm25.ts`, and a decay simulator all run live in your browser. It is served from this repo via GitHub Pages:
+
+[![Hero preview](assets/memory-architecture-hero.png)](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)
+
+→ **Open the live page (zh-CN): [memory-architecture.zh-CN.html](https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html)**
+
 ## Table of Contents
 
+- [Interactive Deep-Dive](#interactive-deep-dive)
 - [Features](#features)
 - [Install](#install)
 - [Update](#update)
