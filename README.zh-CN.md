@@ -23,18 +23,19 @@
 - **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
 - **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
-- **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。
-- **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。
-- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现。
+- **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（24 条 × 24 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.958——并附各注入模式的成本数字（见 [docs/INDEX_MODE_EVALUATION.zh-CN.md](docs/INDEX_MODE_EVALUATION.zh-CN.md)）。
+- **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。准入规则排除一切"仓库已记录的内容"（代码结构、git 历史、已修复 bug 的经过），模型手写的日期前缀会被剥离，时间戳永远由程序盖戳。
+- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现。漂移守卫保证被外部手改过的笔记文件会被备份而非静默覆盖。
 - **去重管线** — 两阶段去重（停用词过滤的 Jaccard 预过滤 + 可选 LLM 裁决，合并长度有上限），防止近似重复条目累积；低频 curator pass 会将过长条目改写为简洁单行。
-- **两层记忆生命周期** — 固定重要记忆；过期的 project 作用域条目被移除，而过期的 `global`/`user` 条目做软衰减（从常驻注入面隐藏但仍可搜索，再次召回即解除）；每次写入都有审计。
+- **两层记忆生命周期** — 固定重要记忆；过期的 project 作用域条目被移除，而过期的 `global`/`user` 条目做软衰减（从常驻注入面隐藏但仍可搜索，再次召回即解除）；条目也可以从界面手动归档；每次写入都有审计。
 - **步级自动召回（可选）** — 每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息；不触碰 system prompt，保持 KV-cache 前缀稳定。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
 - **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
 - **前端可配置** — 所有设置通过 dsh 设置界面的四张卡片暴露，实时生效。
-- **可选的写入前人工确认** — 打开一个开关后，自动提取与工具产生的写入一律先进入待确认队列（同一提议反复出现会累计次数并置顶）；采纳才落库（可先编辑），拒绝即丢弃。模型永不自我提升：对既有条目的修改提议在你采纳前不会改动原文。
-- **记忆管理中心** — dsh 设置界面新增独立「记忆」区，三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、远程分页列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
-- **时间窗浏览** — `memory_list` 支持 `since`/`until` 毫秒时间戳边界，「上周学了什么」这类查询直接在窗口内分页。
+- **可选的写入前人工确认** — 打开一个开关（`confirmBeforeWrite`）后，自动提取*与*工具调用产生的写入一律先进入待确认队列（同一提议反复出现会累计次数并置顶）；采纳才落库（可先编辑），拒绝即丢弃。模型永不自我提升：对既有条目的修改提议在你采纳前不会改动原文。
+- **记忆管理中心** — dsh 设置界面新增独立「记忆」区，三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、懒加载条目列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
+- **时间窗浏览 + 智能列表视图** — `memory_list` 默认按最新在前返回，附带 `earliest`/`latest`/`hasStale` 元数据，支持 `since`/`until` 毫秒时间戳边界（「上周学了什么」这类查询直接在窗口内分页）；过滤条件命中 0 条但库非空时，会提示放宽过滤条件。
+- **可选摘要（渐进式披露）** — `memory_add`/`memory_replace` 接受 `summary`，提取也可以输出 `[summary:…]` 标签；index 模式与自动召回优先渲染摘要而非截断正文。
 
 ## 安装
 
@@ -109,8 +110,8 @@ pnpm 不会为 `file:` 依赖运行构建脚本，所以不需要 `allowBuilds` 
 ```sh
 cd dsh-memory
 npm install && npm run build
-npm pack                    # 生成 chenhw7-dsh-memory-0.4.0.tgz
-dsh plugin add --profile web ./chenhw7-dsh-memory-0.4.0.tgz
+npm pack                    # 生成 chenhw7-dsh-memory-0.5.0.tgz
+dsh plugin add --profile web ./chenhw7-dsh-memory-0.5.0.tgz
 ```
 
 ## 更新
@@ -203,6 +204,7 @@ dsh web
 | `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
 | `memoryPolicyCustomText` | — | 当 `memoryMode` 为 `custom` 时使用的自定义策略文本。 |
 | `memoryCharLimit` | `5000` | 会话内冻结记忆快照注入 `full` 模式时的字符预算（`0` = 不注入内容）。 |
+| `memoryMaxEntries` | `20` | 同一冻结快照的条目数上限（`0` = 无限制）。快照尾部附 `≈N tokens` 估算，注入成本始终可见。 |
 | `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限，由工具插件实时读取。`0` = 无限制。 |
 | `decayDays` | `30` | N 天内未召回条目的生命周期窗口，由 review 插件的 janitor 实时读取。`0` = 禁用。过期的 `project` 条目被**移除**（硬衰减）；过期的 `global`/`user` 条目改为**软衰减**——打上 `stale` 戳，从注入面和笔记文件中隐藏但仍可搜索，再次召回即自动解除。固定（pin）条目始终豁免。 |
 | `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。已渲染进笔记文件的条目会从 memory 段落中排除，避免重复注入。 |
@@ -231,6 +233,7 @@ dsh web
 | `curatorEveryNSessions` | `20` | 每 N 次会话创建运行一次 curator pass。 |
 | `curatorMaxEntries` | `5` | 每次 curation 最多选中的条目数（最长优先）。 |
 | `curatorMinChars` | `400` | 只有长度不小于该值的条目才会被选中改写。 |
+| `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在设置「记忆」区（待确认页）采纳。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
 
 > 特意**没有独立的 `tool-memory` 设置命名空间**：工具插件从上面的 `memory` 命名空间实时读取 `maxSearchResults`。其组合配置 `config.maxSearchResults` 仅作为无 settings 服务挂载时的回退 base。
 
@@ -260,6 +263,7 @@ memory:
   memoryMode: policy-only
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
+  memoryMaxEntries: 20
   maxSearchResults: 50
   decayDays: 30
   notesEnabled: true
@@ -284,6 +288,7 @@ memory-review:
   curatorEveryNSessions: 20
   curatorMaxEntries: 5
   curatorMinChars: 400
+  confirmBeforeWrite: false
 ```
 
 `memoryPolicyCustomText` 是可选的，仅在 `memoryMode` 为 `custom` 时使用。
@@ -317,10 +322,10 @@ memory:
 | 行 | 导出 | 作用 |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
-| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域，注册 `ctx.memory`（BM25 检索 + 两层衰减） |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具 |
-| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator），持有 `memory-review` 设置命名空间 |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 原子写 + AGENTS.md 指针），注册 `ctx.projectNotes` |
+| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列三张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（人审模式下写入改为入队） |
+| `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator + 人审队列），持有 `memory-review` 设置命名空间 |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 带漂移守卫的原子写 + AGENTS.md 指针），注册 `ctx.projectNotes` |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @90 + `project-notes` @91）、步级自动召回，持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（设置「记忆」区经 `/api` 通道消费） |
 
