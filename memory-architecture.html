@@ -3,10 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Engineering of Memory — dsh-memory Technical Deep-Dive</title>
+<title>Cairn — The Engineering of Memory · dsh-memory deep-dive</title>
+<meta name="description" content="Interactive technical deep-dive into Cairn — the dsh-memory engine. Live in-browser demos of the extraction loop, write-path security gates, BM25 kernel, and decay simulator.">
+<link rel="canonical" href="https://chenhw7.github.io/dsh-memory/memory-architecture.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Cairn">
+<meta property="og:title" content="Cairn — The Engineering of Memory · dsh-memory deep-dive">
+<meta property="og:description" content="Interactive technical deep-dive into Cairn — the dsh-memory engine. Live in-browser demos of the extraction loop, write-path security gates, BM25 kernel, and decay simulator.">
+<meta property="og:url" content="https://chenhw7.github.io/dsh-memory/memory-architecture.html">
+<meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Cairn — The Engineering of Memory · dsh-memory deep-dive">
+<meta name="twitter:description" content="Interactive technical deep-dive into Cairn — the dsh-memory engine. Live in-browser demos of the extraction loop, write-path security gates, BM25 kernel, and decay simulator.">
+<meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Cairn — The Engineering of Memory","description":"Interactive technical deep-dive into Cairn — the dsh-memory engine. Live in-browser demos of the extraction loop, write-path security gates, BM25 kernel, and decay simulator.","author":{"@type":"Person","name":"chenhw7"},"publisher":{"@type":"Person","name":"chenhw7"},"url":"https://chenhw7.github.io/dsh-memory/memory-architecture.html","image":"https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png","inLanguage":"en"}
+</script>
 <style>
 :root{
   --bg:#0e0d0b; --bg2:#14120e; --panel:#191612; --panel2:#1f1b15;
@@ -650,8 +667,8 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 <footer>
   <div class="wrap">
     <div>
-      <div class="f-t">dsh-memory</div>
-      <p>Long-term memory for the DeepSeek Harness — an installable profile bundle. Every interactive demo on this page is the same algorithm running live inside the page; the data are demo cases.</p>
+      <div class="f-t">Cairn · dsh-memory</div>
+      <p>Long-term memory for the DeepSeek Harness — an installable profile bundle. Every interactive demo on this page is the same algorithm running live inside the page; the data are demo cases. <a href="https://github.com/chenhw7/dsh-memory">View on GitHub →</a></p>
     </div>
     <div class="src">
       <b>SOURCE REFERENCES</b>

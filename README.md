@@ -1,6 +1,6 @@
-# @chenhw7/dsh-memory
+# Cairn
 
-Long-term memory for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), packaged as one installable profile bundle. Cross-session persistent memory — facts, preferences, corrections, and lessons survive across sessions and restarts.
+**Cairn** is long-term memory for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), packaged as the `@chenhw7/dsh-memory` profile bundle — facts, preferences, corrections, and lessons survive across sessions and restarts.
 
 This is a **self-contained single package** (not a multi-package workspace). It depends on dsh core services as **peer dependencies** (provided by the dsh installation you already have) and ships its own `cordis.patch.yml` so `dsh plugin add` activates it as one profile layer.
 

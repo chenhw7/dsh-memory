@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://chenhw7.github.io/dsh-memory/sitemap.xml

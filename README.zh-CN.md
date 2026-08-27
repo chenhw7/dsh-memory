@@ -1,8 +1,8 @@
-# @chenhw7/dsh-memory
+# Cairn
 
 [English](README.md) | **简体中文**
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供长期记忆能力的可安装 profile bundle。跨会话持久化记忆——事实、偏好、修正和经验在会话与重启后仍然保留。
+**Cairn** 是为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供长期记忆能力的 `@chenhw7/dsh-memory` profile bundle —— 事实、偏好、修正和经验在会话与重启后仍然保留。
 
 这是一个**自包含的单一包**（不是多包 workspace）。它依赖 dsh 核心服务作为 **peer dependencies**（由你已经安装的 dsh 提供），并通过自带的 `cordis.patch.yml` 让 `dsh plugin add` 将其激活为一个 profile 层。
 

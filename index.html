@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cairn — long-term memory for DeepSeek Harness</title>
+<meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.">
+<link rel="canonical" href="https://chenhw7.github.io/dsh-memory/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cairn">
+<meta property="og:title" content="Cairn — long-term memory for DeepSeek Harness">
+<meta property="og:description" content="Persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.">
+<meta property="og:url" content="https://chenhw7.github.io/dsh-memory/">
+<meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_CN">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Cairn — long-term memory for DeepSeek Harness">
+<meta name="twitter:description" content="Persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts.">
+<meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Cairn","alternateName":"@chenhw7/dsh-memory","description":"Long-term memory for the DeepSeek Harness: persistent cross-session memory — facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.","applicationCategory":"DeveloperApplication","operatingSystem":"Cross-platform","url":"https://chenhw7.github.io/dsh-memory/","downloadUrl":"https://github.com/chenhw7/dsh-memory","author":{"@type":"Person","name":"chenhw7"},"license":"https://github.com/chenhw7/dsh-memory/blob/main/LICENSE","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<style>
+:root{
+  --bg:#0e0d0b; --bg2:#14120e; --panel:#191612; --panel2:#1f1b15;
+  --ink:#ece5d5; --muted:#9c937f; --faint:#6b6355;
+  --line:#2b261d; --line2:#3a3325;
+  --amber:#e8a83e; --amber-hi:#ffce73; --amber-dim:rgba(232,168,62,.14);
+  --teal:#4ec9b0; --teal-dim:rgba(78,201,176,.12);
+  --red:#e0604a; --red-dim:rgba(224,96,74,.12);
+  --serif:"Noto Serif SC",serif; --sans:"Noto Sans SC",sans-serif; --mono:"IBM Plex Mono",monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16.5px;line-height:1.85;overflow-x:hidden}
+::selection{background:var(--amber);color:#14110a}
+a{color:var(--amber);text-decoration:none}
+a:hover{color:var(--amber-hi)}
+*{scrollbar-color:var(--line2) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:var(--amber)}
+
+/* ── GitHub corner ─── */
+a.gh-corner{position:fixed;top:16px;right:20px;z-index:95;width:52px;height:52px;border:1px solid rgba(232,168,62,.4);border-radius:12px;background:var(--panel2);color:var(--amber);display:flex;align-items:center;justify-content:center;transition:all .3s;box-shadow:0 0 14px rgba(232,168,62,.14)}
+a.gh-corner:hover{border-color:var(--amber);color:var(--amber-hi);box-shadow:0 0 20px rgba(232,168,62,.4);transform:translateY(-2px)}
+
+.wrap{max-width:860px;margin:0 auto;padding:0 40px}
+
+/* ── hero ─── */
+header#hero{padding:140px 0 70px;text-align:center;position:relative}
+header#hero::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse 600px 320px at 50% 30%,rgba(232,168,62,.07),transparent);pointer-events:none}
+.hero-kick{font-family:var(--mono);font-size:12px;letter-spacing:.32em;color:var(--amber);text-transform:uppercase;margin-bottom:22px}
+h1.wordmark{font-family:var(--serif);font-weight:900;font-size:clamp(72px,13vw,156px);line-height:.95;letter-spacing:-.02em;color:var(--ink);position:relative}
+h1.wordmark em{font-style:normal;color:var(--amber);font-weight:700}
+.hero-tag{font-family:var(--serif);font-size:clamp(20px,3vw,28px);font-weight:500;color:var(--muted);margin-top:18px;line-height:1.5}
+.hero-sub{max-width:620px;margin:28px auto 0;font-size:16px;color:var(--muted);line-height:1.85}
+.hero-sub b{color:var(--ink);font-weight:600}
+
+/* ── install block ─── */
+.install{margin:42px auto 0;max-width:520px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);overflow:hidden}
+.install-label{padding:10px 18px;font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--faint);text-transform:uppercase;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.install-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--teal)}
+.install-code{padding:16px 18px;font-family:var(--mono);font-size:15px;color:var(--amber-hi);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.install-code .prompt{color:var(--faint);user-select:none}
+.install-code code{color:var(--amber-hi);font-family:inherit}
+
+/* ── features ─── */
+section{padding:70px 0}
+.sec-head{font-family:var(--mono);font-size:12px;letter-spacing:.28em;color:var(--amber);text-transform:uppercase;margin-bottom:36px;text-align:center}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:28px 26px;transition:border-color .3s,transform .3s}
+.card:hover{border-color:var(--line2);transform:translateY(-3px)}
+.card .ic{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
+.card h3{font-family:var(--serif);font-size:21px;font-weight:700;color:var(--ink);margin-bottom:10px}
+.card p{font-size:14.5px;color:var(--muted);line-height:1.8}
+.card .tag{display:inline-block;margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--teal);border:1px solid rgba(78,201,176,.2);border-radius:99px;padding:2px 12px;background:var(--teal-dim)}
+@media(max-width:640px){.cards{grid-template-columns:1fr}}
+
+/* ── explore links ─── */
+.links{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:10px}
+.links a{display:flex;align-items:center;gap:14px;padding:18px 22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);transition:all .3s}
+.links a:hover{border-color:var(--amber);background:var(--panel2);transform:translateY(-2px)}
+.links a .lk{flex:none}
+.links a .lk svg{display:block}
+.links a .lt{flex:1;min-width:0}
+.links a .lt b{display:block;font-family:var(--serif);font-size:17px;font-weight:700;color:var(--ink);margin-bottom:2px}
+.links a .lt span{font-size:13px;color:var(--faint)}
+.links a .ar{color:var(--faint);transition:color .3s,transform .3s;flex:none}
+.links a:hover .ar{color:var(--amber);transform:translateX(4px)}
+@media(max-width:640px){.links{grid-template-columns:1fr}}
+
+/* ── footer ─── */
+footer{border-top:1px solid var(--line);padding:48px 0 56px;margin-top:30px}
+footer .wrap{display:flex;justify-content:space-between;align-items:flex-start;gap:30px;flex-wrap:wrap}
+footer .f-brand{font-family:var(--serif);font-size:18px;font-weight:700;color:var(--ink)}
+footer .f-brand span{color:var(--amber)}
+footer p{font-size:13.5px;color:var(--faint);margin-top:6px;max-width:420px}
+footer .f-links{display:flex;flex-direction:column;gap:8px;text-align:right}
+footer .f-links a{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+footer .f-links a:hover{color:var(--amber)}
+</style>
+</head>
+<body>
+
+<a class="gh-corner" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener" aria-label="View Cairn on GitHub" title="View Cairn on GitHub">
+<svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+</a>
+
+<!-- ═══════════ HERO ═══════════ -->
+<header id="hero">
+  <div class="wrap">
+    <div class="hero-kick">Long-term memory for DeepSeek Harness</div>
+    <h1 class="wordmark">Cairn<em>.</em></h1>
+    <p class="hero-tag">Leave durable markers; the next session finds its way.</p>
+    <p class="hero-sub"><b>Cairn</b> is persistent cross-session memory for the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>, packaged as the <code>@chenhw7/dsh-memory</code> profile bundle. Facts, preferences, corrections, and lessons survive across sessions and restarts — your agent starts every conversation already knowing what mattered last time.</p>
+    <div class="install">
+      <div class="install-label">Install</div>
+      <div class="install-code"><span class="prompt">$</span><code>dsh plugin add --profile web @chenhw7/dsh-memory</code></div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ FEATURES ═══════════ -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">What it does</div>
+    <div class="cards">
+      <div class="card">
+        <div class="ic">01 · Persistent memory</div>
+        <h3>A durable KV store with audit logging</h3>
+        <p>Facts, preferences, and conventions stored in a durable backend with a 200-row rolling audit log. Every write answers who, when, and why.</p>
+        <span class="tag">survives restarts</span>
+      </div>
+      <div class="card">
+        <div class="ic">02 · Three-layer scoping</div>
+        <h3>Global, project, and user scope</h3>
+        <p>Global memories cross every project. Project memories are per-repo and auto-detected. User memories follow your profile across repos. No bleed, no loss.</p>
+        <span class="tag">auto-detected</span>
+      </div>
+      <div class="card">
+        <div class="ic">03 · BM25 retrieval</div>
+        <h3>CJK-aware, dependency-free Okapi BM25</h3>
+        <p>Latin word tokens plus CJK unigrams and bigrams. Pinned entries surface ahead of equal-relevance matches. Evaluated in CI against a fixed golden set — success@5 = 100%, MRR = 0.958.</p>
+        <span class="tag">measured, not vibes</span>
+      </div>
+      <div class="card">
+        <div class="ic">04 · Human-confirmed writes</div>
+        <h3>Models suggest; humans promote</h3>
+        <p>A background distillation pass extracts durable facts from explicit remember-intent, corrections, and verified failure streaks — but models only write <code>suggested</code> entries. Human confirmation makes them effective.</p>
+        <span class="tag">you stay in control</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ EXPLORE ═══════════ -->
+<section id="explore">
+  <div class="wrap">
+    <div class="sec-head">Explore</div>
+    <div class="links">
+      <a href="memory-architecture.html">
+        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M9 3v18"/></svg></span>
+        <span class="lt"><b>Interactive technical deep-dive</b><span>Extraction loop, write-path gates, BM25 kernel, decay simulator — all live in your browser</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a href="memory-architecture.zh-CN.html">
+        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
+        <span class="lt"><b>交互式技术解析（中文）</b><span>提取循环、写入安全闸、BM25 内核、衰减模拟器，全部在浏览器实时运行</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a href="https://github.com/chenhw7/dsh-memory">
+        <span class="lk"><svg width="26" height="26" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
+        <span class="lt"><b>GitHub repository</b><span>Source, issues, releases, full README with install &amp; configuration docs</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory">
+        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 17l4 4M22 17l-4 4M12 7v6M8 10l4-3 4 3"/></svg></span>
+        <span class="lt"><b>npm package</b><span>@chenhw7/dsh-memory — version history and install instructions</span></span>
+        <span class="ar">→</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ FOOTER ═══════════ -->
+<footer>
+  <div class="wrap">
+    <div>
+      <div class="f-brand">Cairn <span>·</span> <span>@chenhw7/dsh-memory</span></div>
+      <p>Long-term memory for the DeepSeek Harness — an installable profile bundle. MIT licensed.</p>
+    </div>
+    <div class="f-links">
+      <a href="https://github.com/chenhw7/dsh-memory">GitHub →</a>
+      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory">npm →</a>
+      <a href="memory-architecture.html">Deep-dive (EN) →</a>
+      <a href="memory-architecture.zh-CN.html">技术解析 (中文) →</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

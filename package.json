@@ -1,8 +1,27 @@
 {
   "name": "@chenhw7/dsh-memory",
   "version": "0.5.0",
-  "description": "Long-term memory for the DeepSeek Harness: persistent cross-session memory (store, tools, auto-extraction, context injection) as one installable profile bundle",
+  "description": "Cairn — long-term memory for the DeepSeek Harness: persistent cross-session memory (store, tools, auto-extraction, context injection) as one installable profile bundle",
   "type": "module",
+  "homepage": "https://chenhw7.github.io/dsh-memory/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chenhw7/dsh-memory.git"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "memory",
+    "long-term-memory",
+    "agent-memory",
+    "cross-session",
+    "bm25",
+    "llm-agents",
+    "plugin"
+  ],
+  "bugs": {
+    "url": "https://github.com/chenhw7/dsh-memory/issues"
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
