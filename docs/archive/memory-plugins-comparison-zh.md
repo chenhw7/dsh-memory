@@ -1,5 +1,7 @@
 # DSH 记忆插件横向对比分析报告
 
+> **已归档（2026-08-27）**：P0 七项与 P1 八项已全部落地（v0.5.0）。本文保留作决策依据与借鉴来源记录；当前实现状态见 [../TECH_DESIGN.zh-CN.md](../TECH_DESIGN.zh-CN.md)。
+>
 > 分析对象：`~/dsh-memory-reference-project` 下的 `dsh-agent-memory`、`dsh-memory`（@max-null 版）、`dsh-memory-evolve`，对比当前项目 `/home/chenhw7/dsh-memory`（@chenhw7/dsh-memory v0.4.0）。
 > 态度声明：三个参考项目实现路线差异极大，各有取舍；本文只提炼**可验证、附出处**的借鉴点，同时如实指出它们的问题，不盲目移植。
 >

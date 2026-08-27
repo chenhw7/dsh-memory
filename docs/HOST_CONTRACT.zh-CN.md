@@ -1,6 +1,6 @@
 # 宿主 API 工程契约（IMPLEMENTATION 契约文档，P1-6）
 
-> 对应 `docs/memory-plugins-comparison-zh.md` §四 P1-6：借鉴 agent-memory 的「取证回写」纪律——本插件依赖的每一条宿主 API 结论都附 harness 源码 `文件:行号` 出处，harness 升级时按图索骥核对回归，而不是靠踩坑重发现。
+> 对应 `docs/archive/memory-plugins-comparison-zh.md` §四 P1-6：借鉴 agent-memory 的「取证回写」纪律——本插件依赖的每一条宿主 API 结论都附 harness 源码 `文件:行号` 出处，harness 升级时按图索骥核对回归，而不是靠踩坑重发现。
 >
 > 取证基准：`~/deepseek-harness` @ 2026-08（本插件 devDeps 对应 rc.5–rc.8 线）。行号会随后续版本漂移；**符号名 + 文件路径是主锚点，行号是辅助定位**。
 

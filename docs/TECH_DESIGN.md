@@ -885,4 +885,4 @@ src/
 
 ---
 
-*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh-CN.md)), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh-CN.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./memory-plugins-comparison-zh.md) (the P0/P1 program).*
+*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh-CN.md)), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.md) ([中文版](./CLIENT_UI_LESSONS.zh-CN.md)), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh-CN.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*

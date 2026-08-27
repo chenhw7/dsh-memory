@@ -885,4 +885,4 @@ src/
 
 ---
 
-*配套文档：[README.zh-CN.md](../README.zh-CN.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh-CN.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）、[Index 模式评估](./INDEX_MODE_EVALUATION.zh-CN.md)（检索/注入成本实验）、[记忆插件对比](./memory-plugins-comparison-zh.md)（P0/P1 改进计划）。*
+*配套文档：[README.zh-CN.md](../README.zh-CN.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh-CN.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md)（[英文版](./CLIENT_UI_LESSONS.md)）、[Index 模式评估](./INDEX_MODE_EVALUATION.zh-CN.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*

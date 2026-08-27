@@ -1,6 +1,6 @@
 # Index 模式转正评估报告（P1-8）
 
-> 对应 `docs/memory-plugins-comparison-zh.md` §四 P1-8：*「用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档」*。
+> 对应 `docs/archive/memory-plugins-comparison-zh.md` §四 P1-8：*「用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档」*。
 > 实验代码：`src/benchmark/index.ts`（fixture 与度量）+ `tests/recall-golden.spec.ts`（可重复运行，输出本报告全部数字）。
 > 实验日期：2026-08-26。数字由当次真实运行产生，非估算。
 

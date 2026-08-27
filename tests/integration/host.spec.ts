@@ -7,7 +7,7 @@
  *
  * Where the stub suite (355 cases) protects in-module regressions, this layer
  * protects the plugin's real failure mode: host API drift between the bundle
- * and the harness (the @max-null lesson from docs/memory-plugins-comparison-zh.md §四 P1-3).
+ * and the harness (the @max-null lesson from docs/archive/memory-plugins-comparison-zh.md §四 P1-3).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
