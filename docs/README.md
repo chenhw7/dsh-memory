@@ -17,6 +17,7 @@ Living documents describing how the system works today, plus standing maintenanc
 | [HOST_CONTRACT](./HOST_CONTRACT.zh-CN.md) | Host (harness) API contract with source-code evidence per claim; §9 is the check-list to run when the harness is bumped. (zh-CN only) |
 | [INDEX_MODE_EVALUATION](./INDEX_MODE_EVALUATION.zh-CN.md) | Measured comparison of the three injection modes (policy-only / index / full) and the decision to keep policy-only as the default; reproducible via `tests/recall-golden.spec.ts`. (zh-CN only) |
 | [SECURITY_AUDIT](./SECURITY_AUDIT.zh-CN.md) | Security audit (2026-08, v0.5.0): nine-category manual audit + Mimosa sealed deep scan; findings SEC-01…09 with shipped fixes (leaked key removed, notesDir containment, test SSRF guard, CI hardening). Pending owner actions: revoke the leaked key (§5.1) and optionally purge git history (§5.2). (zh-CN only) |
+| [RELEASING](./RELEASING.zh-CN.md) | npm release runbook: the three-command flow, OIDC trusted-publishing prerequisites, failure triage, and the trust boundary (tag-push = publish right). (zh-CN only) |
 
 ## Historical decision records (`archive/`)
 
