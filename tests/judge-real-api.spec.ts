@@ -6,9 +6,9 @@
  * CJK "same-template different-topic" pairs. It is gated behind environment
  * variables so it only runs when explicitly requested:
  *
- *   JUDGE_API_BASE=https://REDACTED/v1
- *   JUDGE_API_KEY=REDACTED
- *   JUDGE_API_MODEL=fuyao-coding-exp
+ *   JUDGE_API_BASE=https://<your-openai-compatible-gateway>/v1
+ *   JUDGE_API_KEY=<your-api-key>
+ *   JUDGE_API_MODEL=<your-model-id>
  *
  * When any of these is absent, the suite is skipped (not failed).
  *
@@ -27,10 +27,34 @@ const API_MODEL = process.env.JUDGE_API_MODEL ?? ''
 
 const hasApi = API_BASE.length > 0 && API_KEY.length > 0 && API_MODEL.length > 0
 
+/**
+ * SSRF guard: the endpoint comes from an environment variable, so parse and
+ * validate it into an explicit URL object before any request — absolute
+ * http(s) only, host not loopback/private-range/metadata. The fetch below uses
+ * this returned object, never the raw env string.
+ */
+function resolveEndpoint(base: string): URL {
+  const url = new URL(base)
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(`JUDGE_API_BASE must be an http(s) URL, got protocol ${url.protocol}`)
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  const blocked =
+    host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local') ||
+    host === '0.0.0.0' || host === '::1' ||
+    /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')
+  if (blocked) throw new Error(`JUDGE_API_BASE host "${host}" is loopback/private/metadata; refusing to fetch`)
+  return url
+}
+
 /** Call the OpenAI-compatible chat-completions endpoint with the judge prompt. */
 async function callJudge(existing: string, candidate: string): Promise<JudgeVerdict> {
+  const endpoint = resolveEndpoint(API_BASE)
+  endpoint.pathname = endpoint.pathname.replace(/\/+$/, '') + '/chat/completions'
   const prompt = buildJudgePrompt(existing, candidate)
-  const res = await fetch(`${API_BASE}/chat/completions`, {
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

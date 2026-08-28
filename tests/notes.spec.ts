@@ -8,7 +8,7 @@ import { renderConventions, renderPitfalls, AUTO_HEADER } from '../src/notes/ren
 import { writeFileAtomic, writeNotesFile, DriftError, ensureAgentsPointer, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from '../src/notes/writer.ts'
 import { buildNotesSectionText, PROJECT_NOTES_NOTE } from '../src/context/policy.ts'
 import { readMemorySnapshot, readMemoryIndex } from '../src/context/index.ts'
-import { resolveNotesSettings, DEFAULT_NOTES_DIR } from '../src/notes/settings.ts'
+import { resolveNotesSettings, resolveNotesDir, DEFAULT_NOTES_DIR } from '../src/notes/settings.ts'
 import type { MemoryStore } from '../src/index.ts'
 
 /** Build a minimal memory entry. */
@@ -88,6 +88,25 @@ describe('renderConventions / renderPitfalls', () => {
     expect(text).toContain('## Environment & cross-project pitfalls')
     expect(text).toContain('(2026-08-21) 症状：x。根因：y。修复：z。')
     expect(text).toContain('pnpm needs --force on this box')
+  })
+})
+
+describe('resolveNotesDir — project-root containment', () => {
+  const root = path.resolve('/repo')
+  const inside = path.resolve(root, 'docs/agent-memory')
+
+  it('accepts repo-relative subdirectories, including nested and dotted paths', () => {
+    expect(resolveNotesDir(root, 'docs/agent-memory')).toBe(inside)
+    expect(resolveNotesDir(root, './docs')).toBe(path.resolve(root, 'docs'))
+    expect(resolveNotesDir(root, 'a/b/../c')).toBe(path.resolve(root, 'a/c'))
+  })
+
+  it('allows the root itself but rejects ../ escapes and absolute paths elsewhere', () => {
+    expect(resolveNotesDir(root, '.')).toBe(root)
+    expect(resolveNotesDir(root, '..')).toBeUndefined()
+    expect(resolveNotesDir(root, '../sibling')).toBeUndefined()
+    expect(resolveNotesDir(root, path.join(root, '..', 'elsewhere'))).toBeUndefined()
+    expect(resolveNotesDir(root, path.resolve('/other/repo'))).toBeUndefined()
   })
 })
 

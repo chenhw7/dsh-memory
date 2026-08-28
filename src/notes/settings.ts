@@ -8,6 +8,8 @@
  * @module @chenhw7/dsh-memory/notes/settings
  */
 
+import path from 'node:path'
+
 /** Whether notes export + injection are enabled. */
 export const DEFAULT_NOTES_ENABLED = true
 /** Repo-relative directory holding the generated notes files. */
@@ -43,4 +45,20 @@ export function resolveNotesSettings(value: unknown): NotesSettings {
     notesAgentsPointer: typeof v.notesAgentsPointer === 'boolean' ? v.notesAgentsPointer : DEFAULT_NOTES_AGENTS_POINTER,
     notesMaxEntriesPerFile: typeof v.notesMaxEntriesPerFile === 'number' && v.notesMaxEntriesPerFile >= 0 ? Math.trunc(v.notesMaxEntriesPerFile) : DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
   }
+}
+
+/**
+ * Resolve `notesDir` against the project root, requiring containment: absolute
+ * values and `../`-style escapes resolve outside the root and are rejected, so
+ * a mistyped or hostile settings value cannot direct notes writes out of the
+ * project. Lexical check only — symlinks are not resolved.
+ * @param cwd - the project root (session working directory).
+ * @param notesDir - the settings value (repo-relative by convention).
+ * @returns the absolute contained directory, or undefined when rejected.
+ */
+export function resolveNotesDir(cwd: string, notesDir: string): string | undefined {
+  const root = path.resolve(cwd)
+  const dir = path.resolve(root, notesDir)
+  if (dir !== root && !dir.startsWith(root + path.sep)) return undefined
+  return dir
 }

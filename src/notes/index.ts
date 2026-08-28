@@ -22,7 +22,7 @@ import type { MemoryStore } from '../index.ts'
 import { isRenderedEntry } from './scope.ts'
 import { renderConventions, renderPitfalls } from './render.ts'
 import { ensureAgentsPointer, writeFileAtomic, writeNotesFile, DriftError } from './writer.ts'
-import { resolveNotesSettings, type NotesSettings } from './settings.ts'
+import { resolveNotesSettings, resolveNotesDir, type NotesSettings } from './settings.ts'
 
 export { isRenderedEntry } from './scope.ts'
 export { renderConventions, renderPitfalls } from './render.ts'
@@ -103,6 +103,8 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
   private readonly driftReported = new Set<string>()
   /** Last store health timestamp already rendered, for the dirty check. */
   private renderedHealthTs: number | undefined
+  /** notesDir values already reported as escaping the project root (log-once). */
+  private readonly traversalReported = new Set<string>()
   /** Debounce timer for activity-triggered re-renders. */
   private timer: ReturnType<typeof setTimeout> | undefined
 
@@ -169,7 +171,17 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
 
   /** Persist the snapshot atomically when it differs from the last write. */
   private persist(cwd: string, snapshot: ProjectNotesSnapshot, settings: NotesSettings): void {
-    const dir = path.join(cwd, settings.notesDir)
+    const dir = resolveNotesDir(cwd, settings.notesDir)
+    if (dir === undefined) {
+      // Containment: an escaping notesDir must never direct writes outside
+      // the project. Rendered snapshots keep flowing to the prompt; only the
+      // file persistence is skipped.
+      if (!this.traversalReported.has(settings.notesDir)) {
+        this.traversalReported.add(settings.notesDir)
+        console.warn(`[dsh-memory] notesDir "${settings.notesDir}" resolves outside the project root; skipping notes persistence for it.`)
+      }
+      return
+    }
     const previous = this.persisted.get(dir)
     if (previous !== undefined && previous.conventions === snapshot.conventions && previous.pitfalls === snapshot.pitfalls) {
       return

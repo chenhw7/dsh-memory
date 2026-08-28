@@ -36,3 +36,6 @@ npm-debug.log*
 .zcode/
 # Local session exports (personal data — never commit)
 dsh-session-*.zip
+
+# Local security-scanner state (machine-local baselines, never commit)
+.mimosa/
