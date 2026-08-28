@@ -296,11 +296,9 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
 
       // Search returns the entry and stamps lastRecalledAt (fire-and-forget).
       store.search({ query: 'recall' })
-      // Give the fire-and-forget write a tick to settle.
-      await new Promise(resolve => setTimeout(resolve, 50))
-
-      const updated = store.get(entry.id)
-      expect(updated!.lastRecalledAt).toBeTypeOf('number')
+      // The stamp lands asynchronously — poll instead of a fixed sleep, or a
+      // slow runner races the write (see the lifecycle test above).
+      await vi.waitFor(() => expect(store.get(entry.id)!.lastRecalledAt).toBeTypeOf('number'))
     })
 
     it('memory_get-style markRecalled stamps lastRecalledAt without touching updatedAt', async () => {
@@ -308,10 +306,8 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       const before = store.get(entry.id)!
 
       store.markRecalled([entry.id])
-      await new Promise(resolve => setTimeout(resolve, 50))
-
+      await vi.waitFor(() => expect(store.get(entry.id)!.lastRecalledAt).toBeDefined())
       const updated = store.get(entry.id)!
-      expect(updated.lastRecalledAt).toBeTypeOf('number')
       // Recalling is not mutating: updatedAt stays untouched.
       expect(updated.updatedAt).toBe(before.updatedAt)
     })
