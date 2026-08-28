@@ -1,18 +1,20 @@
 # Publish to npm when a version tag (v*) is pushed.
 #
-# Auth: the repo secret NPM_TOKEN must be a GRANULAR access token
-# (Packages: read & write, scope @chenhw7/dsh-memory) with
-# "bypass two-factor authentication" enabled. Classic tokens and tokens
-# without that permission are rejected by npm with E403.
+# Auth: OIDC trusted publishing — no NPM_TOKEN secret needed. The package's
+# "Trusted Publisher" setting on npmjs.com must point at this repository and
+# .github/workflows/publish.yml (no environment).
 #
 # Release procedure:
-#   npm version patch --no-git-tag-version   # bump + commit
-#   git tag v<new-version>
+#   npm version patch   # bump + commit + tag
 #   git push origin main --tags
 on:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # OIDC: trusted publishing + provenance signing
 
 jobs:
   publish:
@@ -32,10 +34,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          # Writes .npmrc with //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          # so the npm publish step can authenticate.
-          registry-url: https://registry.npmjs.org/
+      # Node 22 bundles npm 10.x; OIDC trusted publishing needs npm >= 11.5.1.
+      - run: npm install -g 'npm@^11.5.1'
       - run: npm ci --no-audit --no-fund
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --provenance
