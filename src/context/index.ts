@@ -26,9 +26,7 @@ import { annotateConflicts, type ConflictStatus } from './conflict.ts'
 import type { ProjectNotesService, ProjectNotesSnapshot } from '../notes/index.ts'
 import { isRenderedEntry } from '../notes/scope.ts'
 import {
-  DEFAULT_NOTES_AGENTS_POINTER,
   DEFAULT_NOTES_CHAR_LIMIT,
-  DEFAULT_NOTES_DIR,
   DEFAULT_NOTES_ENABLED,
   DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
 } from '../notes/settings.ts'
@@ -66,8 +64,6 @@ const DEFAULT_MEMORY_MODE: MemoryMode = 'policy-only'
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
 const DEFAULT_MAX_SEARCH_RESULTS = 50
 const DEFAULT_DECAY_DAYS = 30
-/** Upper bound on any single generated notes file (defense-in-depth on top of the entry cap). */
-const MAX_NOTES_FILE_CHARS = 32_000
 /**
  * Default maximum number of memory entries injected into the system-prompt
  * snapshot, regardless of the character budget (P0-6). Prevents a large
@@ -120,15 +116,11 @@ export interface MemoryConfig {
   maxSearchResults: number
   /** Days without recall before a project-scoped entry is decayed by the janitor. `0` = disabled. Defaults to `30`. */
   decayDays: number
-  /** Enable project-notes export + injection; defaults to `true`. */
+  /** Enable the `project-notes` prompt section; defaults to `true`. */
   notesEnabled: boolean
-  /** Repo-relative directory holding the generated notes files; defaults to `docs/agent-memory`. */
-  notesDir: string
   /** Character budget for the injected project-notes section; defaults to `4000`. */
   notesCharLimit: number
-  /** Maintain the AGENTS.md pointer block; defaults to `true`. */
-  notesAgentsPointer: boolean
-  /** Max entries per generated notes file; defaults to `100`. */
+  /** Max entries rendered into the project-notes section; defaults to `100`. */
   notesMaxEntriesPerFile: number
   /** Append a fenced auto-recall block to each step's messages (BM25 over the store). Defaults to `false`. */
   autoRecallEnabled: boolean
@@ -147,9 +139,7 @@ export const Config: z<MemoryConfig> = z.object({
   maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
   decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
-  notesDir: z.string().default(DEFAULT_NOTES_DIR),
   notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
-  notesAgentsPointer: z.boolean().default(DEFAULT_NOTES_AGENTS_POINTER),
   notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
   autoRecallEnabled: z.boolean().default(false),
   autoRecallLimit: z.number().step(1).min(1).default(5),
@@ -338,9 +328,8 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   const freezeFor = (session: Session): void => {
     const settings = current()
     const memory = ctx.get('memory')
-    // The project-notes snapshot: rendering is synchronous AND reconciles
-    // (fires the async file persistence), so the frozen prompt content always
-    // matches what lands on disk — no file-read lag, no ordering race.
+    // The project-notes snapshot: rendering is synchronous and side-effect
+    // free (prompt-only since 0.6 — nothing is written to the project).
     const notes: ProjectNotesSnapshot = settings.notesEnabled
       ? ctx.get('projectNotes')?.snapshotFor(session.header?.cwd) ?? EMPTY_NOTES
       : EMPTY_NOTES
@@ -350,8 +339,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     }
     const charLimit = settings.memoryCharLimit
     const maxEntries = settings.memoryMaxEntries ?? DEFAULT_MEMORY_MAX_ENTRIES
-    // No double injection: entries rendered into the notes files are excluded
-    // from the memory section's snapshot/index while notes are enabled.
+    // No double injection: entries rendered into the project-notes section
+    // are excluded from the memory section's snapshot/index while notes are
+    // enabled.
     const exclude = settings.notesEnabled
       ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
       : undefined

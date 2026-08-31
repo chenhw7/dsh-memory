@@ -445,8 +445,8 @@ sequenceDiagram
     Ctx->>Ctx: settings = current() [live]
     Ctx->>NotesSvc: snapshotFor(cwd) [when notesEnabled]
     NotesSvc->>Store: memory.list() — sync render (scan gate, skip stale, isRenderedEntry matrix)
+    Note over NotesSvc: pure in-memory render since 0.6 — zero file I/O (ADR-6)
     NotesSvc-->>Ctx: { conventions, pitfalls } rendered text
-    NotesSvc--)FS: async writeNotesFile (drift-guarded atomic write)<br/>+ ensureAgentsPointer [skip-if-unchanged]
 
     Ctx->>Store: memory.list(scope) per scope
     Ctx->>Conflict: annotateConflicts(filtered)
@@ -478,34 +478,39 @@ sequenceDiagram
     Policy-->>SP: <project-notes> block ("nearer scope wins") or ""
 ```
 
-### 9.1 Notes file persistence detail
+### 9.1 Notes projection & ≤0.5.x artifact cleanup
 
-`snapshotFor(cwd)` renders synchronously and persists asynchronously; a debounced dirty check keeps files fresh without blocking steps.
+`snapshotFor(cwd)` is a synchronous, purely in-memory render — no persistence since 0.6 (ADR-6). Artifacts the 0.5.x file export left in the repo are conservatively cleaned once per project root at the first session creation.
 
 ```mermaid
 sequenceDiagram
-    participant Step as agent/pre-step
+    participant SC as session/created
     participant NotesSvc as ProjectNotesServiceImpl
-    participant Store as store/index.ts
+    participant Clean as notes/cleanup.ts
     participant FS as repo files
 
-    Step->>NotesSvc: reconcileIfStale(agent.session.cwd)
-    NotesSvc->>Store: health().lastActivityTs
-    alt ts unchanged since last render OR timer pending
-        NotesSvc-->>Step: return (no-op)
-    else store changed
-        NotesSvc->>NotesSvc: clearTimeout + setTimeout(2s debounce)
-        NotesSvc->>NotesSvc: snapshotFor(cwd)
-        Note over NotesSvc: renders CONVENTIONS/PITFALLS from in-memory store;<br/>scanner-rejected entries omitted; staleSince entries omitted
-        NotesSvc->>FS: skip if identical to last persisted text (per-dir memo)
-        NotesSvc->>FS: writeNotesFile — drift guard then writeFileAtomic
-        alt disk ≠ last write AND ≠ rendered (external edit)
-            FS-->>NotesSvc: copied to <file>.bak.<ts> · DriftError (log-once per dir)
-            Note over NotesSvc: drifted disk content becomes the new baseline;<br/>the next store change writes normally
-        else unchanged or clean
-            NotesSvc->>FS: writeFileAtomic (tmp sibling + rename)
+    SC->>NotesSvc: cleanupLegacyNotesArtifacts(cwd) [once per root per process]
+    NotesSvc->>FS: read AGENTS.md
+    alt managed markers present
+        NotesSvc->>NotesSvc: stripAgentsPointerBlock — content outside markers untouched
+        alt nothing but whitespace remains (pointer-only file)
+            NotesSvc->>FS: delete AGENTS.md
+        else user-owned content present
+            NotesSvc->>FS: write the stripped text back
         end
-        NotesSvc->>FS: ensureAgentsPointer(AGENTS.md, notesDir)<br/>[create pointer-only file / replace managed block / append]
+    else no markers
+        NotesSvc-->>SC: leave untouched
+    end
+    NotesSvc->>FS: readdir(docs/agent-memory)
+    alt directory exists
+        NotesSvc->>FS: delete only CONVENTIONS.md / PITFALLS.md / *.bak.*
+        alt directory now empty
+            NotesSvc->>FS: remove the directory
+        else foreign files present
+            Note over NotesSvc: keep the directory and the foreign files
+        end
+    else directory absent
+        NotesSvc-->>SC: return (no-op, idempotent)
     end
 ```
 
@@ -699,8 +704,8 @@ graph TB
     subgraph "Notes Layer"
         NotesSvc["notes/index.ts<br/>ProjectNotesService"]
         Matrix["notes/scope.ts<br/>isRenderedEntry matrix"]
-        Render["notes/render.ts<br/>CONVENTIONS / PITFALLS markdown"]
-        Writer["notes/writer.ts<br/>writeNotesFile drift guard + writeFileAtomic<br/>+ AGENTS.md pointer"]
+        Render["notes/render.ts<br/>conventions / pitfalls markdown"]
+        Writer["notes/cleanup.ts<br/>≤0.5.x artifact cleanup (AGENTS.md managed block<br/>+ generated files; idempotent, best-effort)"]
     end
 
     subgraph "Context Layer"
@@ -766,7 +771,7 @@ graph TB
 | Observation | Description | Potential Improvement |
 |-------------|-------------|----------------------|
 | **Multi-point scanning** | `scanContent` runs at the tool boundary, inside the store contract, per extracted/curated line, at the notes gate, and again at every prompt-facing render (`redactBlocked`) | Correctness-first redundancy; could cache scan verdicts keyed by content hash if profiling ever shows cost |
-| **Fire-and-forget background work** | Review/flush/janitor/curator/notes persistence all swallow errors (`void …catch`) | Observability: silent failures are hard to debug; a structured log line or health counter per path would help |
+| **Fire-and-forget background work** | Review/flush/janitor/curator all swallow errors (`void …catch`); the artifact cleanup does the same | Observability: silent failures are hard to debug; a structured log line or health counter per path would help |
 | **Snapshot freeze timing** | Frozen at `session/created`; re-frozen only on a clean `compaction/end` (the sanctioned prefix break) | Mid-session extractions stay invisible to the prompt until compaction or next session; auto-recall covers step-level freshness instead |
 | **Proposal queue is not a memory** | `suggestions` rows never inject, search, or decay; only `adoptSuggestion` promotes them through the full store contract | Keep the two-table boundary intact; a future "auto-adopt high-hit proposals" policy must go through the same contract path |
 | **Retrieval quality is a measured baseline, not a claim** | Golden-set floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) gate every build; per-mode injection cost is snapshotted next to it | Baseline drift is intentional only via a documented re-baseline commit; the cross-language limit stays out of scope |

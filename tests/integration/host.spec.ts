@@ -63,9 +63,7 @@ async function boot(options: BootOptions = {}): Promise<{
     maxSearchResults: 50,
     decayDays: 30,
     notesEnabled: false,
-    notesDir: 'docs/agent-memory',
     notesCharLimit: 4000,
-    notesAgentsPointer: true,
     notesMaxEntriesPerFile: 100,
     ...options.config,
   } as memoryContext.MemoryConfig)

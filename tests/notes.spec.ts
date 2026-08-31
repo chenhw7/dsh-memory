@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { MemoryEntry } from '../src/types.ts'
 import { isRenderedEntry } from '../src/notes/scope.ts'
 import { renderConventions, renderPitfalls, AUTO_HEADER } from '../src/notes/render.ts'
-import { writeFileAtomic, writeNotesFile, DriftError, ensureAgentsPointer, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END } from '../src/notes/writer.ts'
 import { buildNotesSectionText, PROJECT_NOTES_NOTE } from '../src/context/policy.ts'
 import { readMemorySnapshot, readMemoryIndex } from '../src/context/index.ts'
-import { resolveNotesSettings, resolveNotesDir, DEFAULT_NOTES_DIR } from '../src/notes/settings.ts'
+import { resolveNotesSettings } from '../src/notes/settings.ts'
+import { cleanupLegacyNotesArtifacts, stripAgentsPointerBlock, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END, LEGACY_NOTES_DIR } from '../src/notes/cleanup.ts'
 import type { MemoryStore } from '../src/index.ts'
 
 /** Build a minimal memory entry. */
@@ -91,135 +92,16 @@ describe('renderConventions / renderPitfalls', () => {
   })
 })
 
-describe('resolveNotesDir — project-root containment', () => {
-  const root = path.resolve('/repo')
-  const inside = path.resolve(root, 'docs/agent-memory')
-
-  it('accepts repo-relative subdirectories, including nested and dotted paths', () => {
-    expect(resolveNotesDir(root, 'docs/agent-memory')).toBe(inside)
-    expect(resolveNotesDir(root, './docs')).toBe(path.resolve(root, 'docs'))
-    expect(resolveNotesDir(root, 'a/b/../c')).toBe(path.resolve(root, 'a/c'))
-  })
-
-  it('allows the root itself but rejects ../ escapes and absolute paths elsewhere', () => {
-    expect(resolveNotesDir(root, '.')).toBe(root)
-    expect(resolveNotesDir(root, '..')).toBeUndefined()
-    expect(resolveNotesDir(root, '../sibling')).toBeUndefined()
-    expect(resolveNotesDir(root, path.join(root, '..', 'elsewhere'))).toBeUndefined()
-    expect(resolveNotesDir(root, path.resolve('/other/repo'))).toBeUndefined()
-  })
-})
-
-describe('writer', () => {
-  let dir: string
-  beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), 'dsh-notes-')) })
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
-
-  it('writes files atomically, creating parents', async () => {
-    const target = path.join(dir, 'a', 'b', 'FILE.md')
-    await writeFileAtomic(target, 'hello')
-    expect(await readFile(target, 'utf8')).toBe('hello')
-    await writeFileAtomic(target, 'next')
-    expect(await readFile(target, 'utf8')).toBe('next')
-  })
-
-  it('creates a pointer-only AGENTS.md when absent', async () => {
-    const agents = path.join(dir, 'AGENTS.md')
-    await ensureAgentsPointer(agents, DEFAULT_NOTES_DIR)
-    const text = await readFile(agents, 'utf8')
-    expect(text).toContain(AGENTS_POINTER_BEGIN)
-    expect(text).toContain(AGENTS_POINTER_END)
-    expect(text).toContain(DEFAULT_NOTES_DIR)
-  })
-
-  it('is idempotent over an existing pointer block', async () => {
-    const agents = path.join(dir, 'AGENTS.md')
-    await ensureAgentsPointer(agents, DEFAULT_NOTES_DIR)
-    const first = await readFile(agents, 'utf8')
-    await ensureAgentsPointer(agents, DEFAULT_NOTES_DIR)
-    expect(await readFile(agents, 'utf8')).toBe(first)
-  })
-
-  it('appends to an existing AGENTS.md without touching user content', async () => {
-    const agents = path.join(dir, 'AGENTS.md')
-    const userBlock = '# My Repo\n\nHand-written rules stay here.\n'
-    await writeFileAtomic(agents, userBlock)
-    await ensureAgentsPointer(agents, DEFAULT_NOTES_DIR)
-    const text = await readFile(agents, 'utf8')
-    expect(text.startsWith(userBlock)).toBe(true)
-    expect(text).toContain(AGENTS_POINTER_BEGIN)
-  })
-
-  // P0-5: writeNotesFile drift guard tests.
-  describe('writeNotesFile — drift guard (P0-5)', () => {
-    it('writes a new file without any baseline', async () => {
-      const target = path.join(dir, 'CONVENTIONS.md')
-      await writeNotesFile(target, '# Conventions\n\nv1\n', undefined)
-      expect(await readFile(target, 'utf8')).toBe('# Conventions\n\nv1\n')
-    })
-
-    it('skips the write when the on-disk content already matches', async () => {
-      const target = path.join(dir, 'CONVENTIONS.md')
-      await writeNotesFile(target, 'v1', undefined)
-      // Second identical write is a silent no-op (no drift raised, file unchanged).
-      await writeNotesFile(target, 'v1', 'v1')
-      expect(await readFile(target, 'utf8')).toBe('v1')
-    })
-
-    it('overwrites when the on-disk content matches the baseline', async () => {
-      const target = path.join(dir, 'CONVENTIONS.md')
-      await writeNotesFile(target, 'v1', undefined)
-      // Baseline = what's on disk → safe to write new content.
-      await writeNotesFile(target, 'v2', 'v1')
-      expect(await readFile(target, 'utf8')).toBe('v2')
-    })
-
-    it('refuses and backs up when the file was externally modified', async () => {
-      const target = path.join(dir, 'CONVENTIONS.md')
-      // Initial write by us.
-      await writeNotesFile(target, 'v1', undefined)
-      // External edit (simulating a user hand-editing the file).
-      await writeFileAtomic(target, 'user-edit')
-      // Attempting to write v2: onDisk='user-edit', prev='v1' → drift.
-      const err = await writeNotesFile(target, 'v2', 'v1').catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(DriftError)
-      const driftErr = err as DriftError
-      // The drifted file is unchanged.
-      expect(await readFile(target, 'utf8')).toBe('user-edit')
-      // A backup was created alongside the original.
-      expect(driftErr.backupPath).toContain('.bak.')
-      const backup = await readFile(driftErr.backupPath, 'utf8')
-      expect(backup).toBe('user-edit')
-    })
-
-    it('allows the write after drift is absorbed (baseline updated)', async () => {
-      const target = path.join(dir, 'CONVENTIONS.md')
-      await writeNotesFile(target, 'v1', undefined)
-      await writeFileAtomic(target, 'user-edit')
-      // First write → drift error; the caller absorbs the drift.
-      await writeNotesFile(target, 'v2', 'v1').catch(() => {})
-      // Second write with the drifted baseline → now allowed (overwrite the drifted file).
-      await writeNotesFile(target, 'v2', 'user-edit')
-      expect(await readFile(target, 'utf8')).toBe('v2')
-    })
-
-    it('does not throw when previousContent is undefined and file exists (first write)', async () => {
-      // First write over an existing file (e.g. after process restart with no
-      // in-memory baseline): treated as an implicit drift and refused.
-      const target = path.join(dir, 'CONVENTIONS.md')
-      await writeFileAtomic(target, 'pre-existing')
-      const err = await writeNotesFile(target, 'new', undefined).catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(DriftError)
-    })
-  })
-})
-
 describe('resolveNotesSettings', () => {
   it('applies defaults for abs/garbage values', () => {
-    expect(resolveNotesSettings(undefined).notesDir).toBe(DEFAULT_NOTES_DIR)
+    expect(resolveNotesSettings(undefined).notesEnabled).toBe(true)
     expect(resolveNotesSettings({ notesEnabled: false }).notesEnabled).toBe(false)
-    expect(resolveNotesSettings({ notesDir: '   ' }).notesDir).toBe(DEFAULT_NOTES_DIR)
     expect(resolveNotesSettings({ notesCharLimit: 1234 }).notesCharLimit).toBe(1234)
+  })
+
+  it('ignores the pre-0.6 keys (notesDir / notesAgentsPointer)', () => {
+    const resolved = resolveNotesSettings({ notesDir: 'elsewhere', notesAgentsPointer: false })
+    expect(Object.keys(resolved).sort()).toEqual(['notesCharLimit', 'notesEnabled', 'notesMaxEntriesPerFile'])
   })
 })
 
@@ -319,7 +201,7 @@ describe('load-time scan — blocked entries never re-enter a prompt (§9.2a)', 
       const secretContent = 'my key is sk-' + 'b'.repeat(48)
       const entries: MemoryEntry[] = [
         entry({ scope: 'project', category: 'convention', projectName, content: 'clean rule' }),
-        // A secret-bearing convention: would render into CONVENTIONS.md
+        // A secret-bearing convention: would reach the injected section
         // without the load-time guard.
         entry({ scope: 'project', category: 'convention', projectName, content: secretContent }),
       ]
@@ -340,16 +222,6 @@ describe('load-time scan — blocked entries never re-enter a prompt (§9.2a)', 
       expect(snap.conventions).toContain('clean rule')
       expect(snap.conventions).not.toContain(secretContent)
       expect(snap.conventions).not.toContain('[BLOCKED')
-      // Wait out the fire-and-forget persistence so the cleanup below cannot
-      // race an in-flight atomic write.
-      const persistedPath = path.join(cwd, DEFAULT_NOTES_DIR, 'CONVENTIONS.md')
-      let persistedConventions: string | undefined
-      for (let i = 0; i < 200; i++) {
-        persistedConventions = await readFile(persistedPath, 'utf8').catch(() => undefined)
-        if (persistedConventions !== undefined) break
-        await new Promise(r => setTimeout(r, 10))
-      }
-      expect(persistedConventions).toContain('clean rule')
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }
@@ -392,7 +264,7 @@ describe('soft-decay folding in injection surfaces', () => {
 })
 
 describe('ProjectNotesService — snapshotFor via the registered service', () => {
-  it('renders the current project + global + user slices, excludes the rest, and persists', async () => {
+  it('renders the current project + global + user slices, excludes the rest, and writes nothing to disk', async () => {
     const { apply } = await import('../src/notes/index.ts')
     const cwd = await mkdtemp(path.join(tmpdir(), 'dsh-notes-svc-'))
     try {
@@ -427,36 +299,20 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
       const snapNoCwd = service.snapshotFor(undefined)
       expect(snapNoCwd.conventions).toContain('my habit')
       expect(snapNoCwd.conventions).not.toContain('local rule')
-      // Wait for the fire-and-forget persistence to finish (AGENTS.md is
-      // written last) — both to assert the files' contents and to keep the
-      // cleanup below from racing the writes.
-      const agentsPath = path.join(cwd, 'AGENTS.md')
-      let persistedAgents: string | undefined
-      for (let i = 0; i < 200; i++) {
-        persistedAgents = await readFile(agentsPath, 'utf8').catch(() => undefined)
-        if (persistedAgents !== undefined) break
-        await new Promise(r => setTimeout(r, 10))
-      }
-      expect(persistedAgents).toContain(AGENTS_POINTER_BEGIN)
-      const persistedConventions = await readFile(path.join(cwd, DEFAULT_NOTES_DIR, 'CONVENTIONS.md'), 'utf8')
-      expect(persistedConventions).toContain('local rule')
-      expect(persistedConventions).toContain('my habit')
-      // Disabled via settings: empty snapshot, nothing persisted.
-      const cwd2 = await mkdtemp(path.join(tmpdir(), 'dsh-notes-svc2-'))
-      try {
-        let provided2: unknown
-        const ctx2 = {
-          get: (n_: string) => (n_ === 'memory' ? store : undefined),
-          provide: (_n: string, s: unknown) => { provided2 = s },
-          on: () => {},
-          settings: { get: () => ({ notesEnabled: false }) },
-        } as never
-        apply(ctx2)
-        const service2 = provided2 as import('../src/notes/index.ts').ProjectNotesService
-        expect(service2.snapshotFor(cwd2)).toEqual({ conventions: '', pitfalls: '' })
-      } finally {
-        await rm(cwd2, { recursive: true, force: true })
-      }
+      // Zero writes: the project root is untouched (prompt-only projection).
+      expect(existsSync(path.join(cwd, LEGACY_NOTES_DIR))).toBe(false)
+      expect(existsSync(path.join(cwd, 'AGENTS.md'))).toBe(false)
+      // Disabled via settings: empty snapshot.
+      let provided2: unknown
+      const ctx2 = {
+        get: (n_: string) => (n_ === 'memory' ? store : undefined),
+        provide: (_n: string, s: unknown) => { provided2 = s },
+        on: () => {},
+        settings: { get: () => ({ notesEnabled: false }) },
+      } as never
+      apply(ctx2)
+      const service2 = provided2 as import('../src/notes/index.ts').ProjectNotesService
+      expect(service2.snapshotFor(cwd)).toEqual({ conventions: '', pitfalls: '' })
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }
@@ -474,5 +330,81 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
     apply(ctx)
     const service = provided as import('../src/notes/index.ts').ProjectNotesService
     expect(service.snapshotFor('/tmp/whatever')).toEqual({ conventions: '', pitfalls: '' })
+  })
+})
+
+describe('stripAgentsPointerBlock', () => {
+  it('removes a complete managed block and keeps the rest', () => {
+    const content = `# My Repo\n\nHand-written rules.\n\n${AGENTS_POINTER_BEGIN}\n> pointer text\n${AGENTS_POINTER_END}\n\nMore rules.\n`
+    const stripped = stripAgentsPointerBlock(content)
+    expect(stripped).toContain('# My Repo')
+    expect(stripped).toContain('Hand-written rules.')
+    expect(stripped).toContain('More rules.')
+    expect(stripped).not.toContain(AGENTS_POINTER_BEGIN)
+    expect(stripped).not.toContain(AGENTS_POINTER_END)
+  })
+
+  it('returns content without markers unchanged, including a dangling begin marker', () => {
+    expect(stripAgentsPointerBlock('# Clean file\n')).toBe('# Clean file\n')
+    expect(stripAgentsPointerBlock(`${AGENTS_POINTER_BEGIN}\nno end marker\n`)).toBe(`${AGENTS_POINTER_BEGIN}\nno end marker\n`)
+  })
+})
+
+describe('cleanupLegacyNotesArtifacts — ≤0.5.x artifact migration', () => {
+  let dir: string
+  beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), 'dsh-notes-cleanup-')) })
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
+
+  it('deletes a pointer-only AGENTS.md entirely', async () => {
+    const agents = path.join(dir, 'AGENTS.md')
+    await writeFile(agents, `${AGENTS_POINTER_BEGIN}\n> pointer\n${AGENTS_POINTER_END}\n`, 'utf8')
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(existsSync(agents)).toBe(false)
+  })
+
+  it('strips the managed block from a user-owned AGENTS.md, preserving other content', async () => {
+    const agents = path.join(dir, 'AGENTS.md')
+    const user = '# My Repo\n\nHand-written rules stay here.\n'
+    await writeFile(agents, `${user}\n${AGENTS_POINTER_BEGIN}\n> pointer\n${AGENTS_POINTER_END}\n`, 'utf8')
+    await cleanupLegacyNotesArtifacts(dir)
+    const text = await readFile(agents, 'utf8')
+    expect(text).toContain('Hand-written rules stay here.')
+    expect(text).not.toContain(AGENTS_POINTER_BEGIN)
+  })
+
+  it('leaves an AGENTS.md without markers untouched', async () => {
+    const agents = path.join(dir, 'AGENTS.md')
+    const user = '# My Repo\n'
+    await writeFile(agents, user, 'utf8')
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(await readFile(agents, 'utf8')).toBe(user)
+  })
+
+  it('deletes the generated notes files and the emptied directory, including .bak residue', async () => {
+    const notesDir = path.join(dir, LEGACY_NOTES_DIR)
+    await mkdir(notesDir, { recursive: true })
+    await writeFile(path.join(notesDir, 'CONVENTIONS.md'), 'old render', 'utf8')
+    await writeFile(path.join(notesDir, 'PITFALLS.md'), 'old render', 'utf8')
+    await writeFile(path.join(notesDir, 'CONVENTIONS.md.bak.1700000000000'), 'drift backup', 'utf8')
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(existsSync(notesDir)).toBe(false)
+  })
+
+  it('keeps the directory when it holds foreign files, removing only the generated ones', async () => {
+    const notesDir = path.join(dir, LEGACY_NOTES_DIR)
+    await mkdir(notesDir, { recursive: true })
+    await writeFile(path.join(notesDir, 'CONVENTIONS.md'), 'old render', 'utf8')
+    await writeFile(path.join(notesDir, 'my-own-notes.md'), 'mine', 'utf8')
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(existsSync(path.join(notesDir, 'CONVENTIONS.md'))).toBe(false)
+    expect(await readFile(path.join(notesDir, 'my-own-notes.md'), 'utf8')).toBe('mine')
+    expect(existsSync(notesDir)).toBe(true)
+  })
+
+  it('is a no-op on a project without legacy artifacts (and idempotent on rerun)', async () => {
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(existsSync(path.join(dir, 'AGENTS.md'))).toBe(false)
+    await cleanupLegacyNotesArtifacts(dir)
+    expect(await readdir(dir)).toEqual([])
   })
 })

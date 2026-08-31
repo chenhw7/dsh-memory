@@ -445,8 +445,8 @@ sequenceDiagram
     Ctx->>Ctx: settings = current()【实时】
     Ctx->>NotesSvc: snapshotFor(cwd) [notesEnabled 时]
     NotesSvc->>Store: memory.list() —— 同步渲染（扫描门、跳过 stale、isRenderedEntry 矩阵）
+    Note over NotesSvc: 0.6 起纯内存渲染，零文件 I/O（ADR-6）
     NotesSvc-->>Ctx: 渲染好的 { conventions, pitfalls } 文本
-    NotesSvc--)FS: 异步 writeNotesFile（带漂移守卫的原子写）<br/>+ ensureAgentsPointer【内容未变则跳过】
 
     Ctx->>Store: 逐作用域 memory.list(scope)
     Ctx->>Conflict: annotateConflicts(filtered)
@@ -478,34 +478,39 @@ sequenceDiagram
     Policy-->>SP: <project-notes> 块（"nearer scope wins"）或 ""
 ```
 
-### 9.1 笔记文件持久化细节
+### 9.1 笔记投影与 ≤0.5.x 残留清理
 
-`snapshotFor(cwd)` 同步渲染、异步持久化；去抖脏检查保证文件新鲜又不阻塞 step。
+`snapshotFor(cwd)` 是同步纯内存渲染——0.6 起不落盘（ADR-6）。0.5.x 写入仓库的产物在每项目根的第一次会话创建时被一次性保守清理。
 
 ```mermaid
 sequenceDiagram
-    participant Step as agent/pre-step
+    participant SC as session/created
     participant NotesSvc as ProjectNotesServiceImpl
-    participant Store as store/index.ts
+    participant Clean as notes/cleanup.ts
     participant FS as 仓库文件
 
-    Step->>NotesSvc: reconcileIfStale(agent.session.cwd)
-    NotesSvc->>Store: health().lastActivityTs
-    alt ts 与上次渲染相同 或 定时器待触发
-        NotesSvc-->>Step: return（no-op）
-    else store 已变化
-        NotesSvc->>NotesSvc: clearTimeout + setTimeout(2s 去抖)
-        NotesSvc->>NotesSvc: snapshotFor(cwd)
-        Note over NotesSvc: 从内存 store 渲染 CONVENTIONS/PITFALLS；<br/>扫描拒绝的条目省略；staleSince 条目省略
-        NotesSvc->>FS: 与上次持久化文本一致则跳过（按目录 memo）
-        NotesSvc->>FS: writeNotesFile —— 漂移守卫 先于 writeFileAtomic
-        alt 磁盘 ≠ 上次写入 且 ≠ 渲染文本（外部修改）
-            FS-->>NotesSvc: 拷贝到 <file>.bak.<ts> · DriftError（按目录仅告警一次）
-            Note over NotesSvc: 漂移的磁盘内容成为新基线；<br/>下次 store 变更恢复正常写入
-        else 未变 或 干净
-            NotesSvc->>FS: writeFileAtomic（同级临时文件 + rename）
+    SC->>NotesSvc: cleanupLegacyNotesArtifacts(cwd)【每项目根每进程一次】
+    NotesSvc->>FS: 读 AGENTS.md
+    alt 含托管标记块
+        NotesSvc->>NotesSvc: stripAgentsPointerBlock —— 标记外内容不动
+        alt 剥离后只剩空白（pointer-only 文件）
+            NotesSvc->>FS: 删除 AGENTS.md
+        else 用户自有内容存在
+            NotesSvc->>FS: 原子写回剥离后的文本
         end
-        NotesSvc->>FS: ensureAgentsPointer(AGENTS.md, notesDir)<br/>【创建纯指针文件 / 原位替换托管块 / 追加】
+    else 无标记
+        NotesSvc-->>SC: 不碰
+    end
+    NotesSvc->>FS: readdir(docs/agent-memory)
+    alt 目录存在
+        NotesSvc->>FS: 仅删除 CONVENTIONS.md / PITFALLS.md / *.bak.*
+        alt 目录已空
+            NotesSvc->>FS: 删除目录
+        else 有外来文件
+            Note over NotesSvc: 保留目录与外来文件
+        end
+    else 目录不存在
+        NotesSvc-->>SC: return（no-op，幂等）
     end
 ```
 
@@ -699,8 +704,8 @@ graph TB
     subgraph "笔记层"
         NotesSvc["notes/index.ts<br/>ProjectNotesService"]
         Matrix["notes/scope.ts<br/>isRenderedEntry 矩阵"]
-        Render["notes/render.ts<br/>CONVENTIONS / PITFALLS markdown"]
-        Writer["notes/writer.ts<br/>writeNotesFile 漂移守卫 + writeFileAtomic<br/>+ AGENTS.md 指针"]
+        Render["notes/render.ts<br/>conventions / pitfalls markdown"]
+        Writer["notes/cleanup.ts<br/>≤0.5.x 残留清理（AGENTS.md 托管块<br/>+ 生成文件；幂等、best-effort）"]
     end
 
     subgraph "上下文层"
@@ -766,7 +771,7 @@ graph TB
 | 观察 | 描述 | 可能的改进 |
 |------|------|------------|
 | **多点扫描** | `scanContent` 在工具边界、store 契约内、每条提取/curated 行、notes 导出门运行，又在所有面向 prompt 的渲染点重跑（`redactBlocked`） | 正确性优先的冗余；若性能分析显示有开销可按内容 hash 缓存扫描结论 |
-| **后台任务 fire-and-forget** | review/flush/janitor/curator/笔记持久化全部吞错（`void …catch`） | 可观测性：静默失败难排查；可为每条路径加结构化日志或健康计数 |
+| **后台任务 fire-and-forget** | review/flush/janitor/curator 全部吞错（`void …catch`）；残留清理同样 best-effort 吞错 | 可观测性：静默失败难排查；可为每条路径加结构化日志或健康计数 |
 | **快照冻结时机** | `session/created` 冻结；仅在干净的 `compaction/end` 重冻结（被认可的前缀破坏点） | 会话中途的提取在下一次 compaction/会话前对 prompt 不可见；步级新鲜度由自动召回（opt-in）补位 |
 | **建议队列不是记忆** | `suggestions` 行从不注入、不检索、不衰减；只有 `adoptSuggestion` 经完整 store 契约将其提升为条目 | 保持两表边界不变；未来"高 hits 自动采纳"策略也必须走同一契约路径 |
 | **检索质量是实测基线而非断言** | golden-set 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）守护每次构建；各模式注入成本在旁一并快照 | 基线漂移只经"文档化的重定基线"提交发生；跨语言语义召回按设计保持在词法检索范围之外 |

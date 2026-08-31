@@ -653,7 +653,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p>最后，记忆还会<strong>流回仓库</strong>：convention / preference 渲染为 <code>CONVENTIONS.md</code>，failure / procedure / tool-quirk 渲染为 <code>PITFALLS.md</code>（默认 <code>docs/agent-memory/</code>），原子写入、带漂移守卫（外部手改会备份而非覆盖），并在 <code>AGENTS.md</code> 里维护一个指针块供其他工具发现。已渲染进笔记的条目会从 memory 段落中剔除——同一份内容绝不在提示词里出现两次。存储是事实源，文件只是它的只读投影。</p>
+      <p>最后，记忆还会<strong>流回每次会话</strong>：convention / preference 条目与 failure / procedure / tool-quirk 踩坑日志渲染进 <code>project-notes</code> system prompt 段落。不向你的仓库写入任何文件——记忆保存在 host 侧存储中，在 Memory 设置 UI 中管理（0.6 起；≤0.5.x 留下的仓库内笔记文件会被自动清理）。已渲染进笔记的条目会从 memory 段落中剔除——同一份内容绝不在提示词里出现两次。存储是事实源，笔记段落只是它的只读投影。</p>
     </div>
 
     <div class="creed rv">

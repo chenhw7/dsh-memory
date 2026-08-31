@@ -40,9 +40,7 @@ export interface MemoryConfig {
   maxSearchResults?: number
   decayDays?: number
   notesEnabled?: boolean
-  notesDir?: string
   notesCharLimit?: number
-  notesAgentsPointer?: boolean
   notesMaxEntriesPerFile?: number
   /** Step-level auto recall toggle; rendered on the dedicated Auto Recall card. */
   autoRecallEnabled?: boolean
@@ -81,9 +79,7 @@ const DEFAULTS: MemoryConfig = {
   maxSearchResults: 50,
   decayDays: 30,
   notesEnabled: true,
-  notesDir: 'docs/agent-memory',
   notesCharLimit: 4000,
-  notesAgentsPointer: true,
   notesMaxEntriesPerFile: 100,
 }
 

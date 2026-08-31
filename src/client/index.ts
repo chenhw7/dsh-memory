@@ -65,9 +65,7 @@ const NOTES_SPEC: NamespaceCardSpec = {
   descriptionKey: 'notesCardDescription',
   fields: [
     { key: 'notesEnabled', kind: 'checkbox' },
-    { key: 'notesDir', kind: 'text' },
     { key: 'notesCharLimit', kind: 'number' },
-    { key: 'notesAgentsPointer', kind: 'checkbox' },
     { key: 'notesMaxEntriesPerFile', kind: 'number' },
   ],
 }

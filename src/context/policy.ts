@@ -47,16 +47,16 @@ export const MEMORY_INDEX_NOTE =
   + ' Entries reflect what was known at the time they were written — verify against the current repository and tool output before acting on them.'
 
 /**
- * The note that frames injected project notes (CONVENTIONS.md / PITFALLS.md):
- * where they come from and how conflicting entries resolve.
+ * The note that frames the injected project notes (conventions + pitfall
+ * log): where they come from and how conflicting entries resolve.
  */
 export const PROJECT_NOTES_NOTE =
-  'The following project notes are maintained by memory (CONVENTIONS.md / PITFALLS.md). On conflicts between entries, the nearer scope wins: project > global > personal.'
+  'The following project notes are maintained by memory (a conventions list and a pitfall log). On conflicts between entries, the nearer scope wins: project > global > personal.'
 
 /**
  * Build the `project-notes` system-prompt section text for one assembly.
- * @param conventions - the frozen CONVENTIONS.md content (possibly empty).
- * @param pitfalls - the frozen PITFALLS.md content (possibly empty).
+ * @param conventions - the frozen conventions content (possibly empty).
+ * @param pitfalls - the frozen pitfalls content (possibly empty).
  * @param charLimit - character budget for the combined section (`0` → empty).
  * @returns the section text; an empty string drops the section at render.
  */

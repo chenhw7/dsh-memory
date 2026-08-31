@@ -37,7 +37,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
 - **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches. Retrieval quality is not vibes: a fixed golden set (24 entries × 24 queries, English + Chinese) is evaluated in CI — success@5 = 100%, MRR = 0.958 — with injection-cost numbers per prompt mode (see [docs/INDEX_MODE_EVALUATION.zh-CN.md](docs/INDEX_MODE_EVALUATION.zh-CN.md)).
 - **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate. Admission rules exclude anything the repository already records (code structure, git history, fixed-bug narratives), and model-handwritten date prefixes are stripped so timestamps always come from the program.
-- **In-repo project notes** — coding conventions and a pitfall log render into your repo (`docs/agent-memory/` by default) as git-manageable markdown, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer. A drift guard backs up externally edited notes files instead of silently overwriting them.
+- **Project notes prompt section** — coding conventions and a pitfall log render into every session's system prompt (`project-notes` section). Nothing is written into your repository: memory lives entirely in the host-side store, is managed in the Memory settings UI, and upgrades automatically clean up notes files left by ≤0.5.x installs.
 - **Dedup pipeline** — two-stage deduplication (stop-word-filtered Jaccard prefilter + optional LLM judge with bounded merges) prevents near-duplicate accumulation; a low-frequency curator pass re-summarizes oversized entries.
 - **Two-tier memory lifecycle** — pin important memories; overdue project-scoped entries are removed while overdue `global`/`user` entries are soft-decayed (hidden from standing injections, still searchable, un-stamped on recall); entries can also be manually archived from the UI; every write is audited.
 - **Step-level auto recall (opt-in)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable.
@@ -141,6 +141,10 @@ With a source checkout:
 pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 ```
 
+### Upgrading from 0.5.x
+
+Version 0.6 stops exporting memory into repository files. The `docs/agent-memory/CONVENTIONS.md` / `PITFALLS.md` renders and the managed `AGENTS.md` pointer block are gone; memory is prompt-injected and managed in the Memory settings UI only. On the first session in each project, the plugin removes what ≤0.5.x left behind: the managed pointer block is stripped from `AGENTS.md` (a pointer-only `AGENTS.md` is deleted) and the generated files under `docs/agent-memory/` are deleted (only files the plugin generated; anything else in that directory is kept). You can also delete them by hand at any time — nothing writes there anymore.
+
 ## Uninstall
 
 Remove the plugin from a profile:
@@ -218,11 +222,9 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `memoryMaxEntries` | `20` | Entry-count cap for the same frozen snapshot (`0` = no limit). The snapshot ends with a `≈N tokens` estimate so injection cost stays visible. |
 | `maxSearchResults` | `50` | Default cap for `memory_search` / `memory_list` when the call omits `limit`; read live by the tool plugin. `0` = no limit. |
 | `decayDays` | `30` | Lifecycle window for entries not recalled within N days; read live by the review plugin's janitor. `0` = disabled. Overdue `project` entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
-| `notesEnabled` | `true` | Export project notes (conventions + pitfall log) into the repo and inject them into the system prompt. Entries rendered into the notes files are excluded from the memory section to avoid double injection. |
-| `notesDir` | `docs/agent-memory` | Repo-relative directory holding the generated `CONVENTIONS.md` / `PITFALLS.md`. |
+| `notesEnabled` | `true` | Inject the project-notes prompt section (conventions + pitfall log) into the system prompt. Entries rendered into the section are excluded from the memory section to avoid double injection. No repo files are written. |
 | `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
-| `notesAgentsPointer` | `true` | Maintain the managed pointer block in the repo's `AGENTS.md`. |
-| `notesMaxEntriesPerFile` | `100` | Max entries per generated notes file (newest kept). |
+| `notesMaxEntriesPerFile` | `100` | Max entries rendered into the project-notes section (newest kept). |
 | `autoRecallEnabled` | `false` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable. |
 | `autoRecallLimit` | `5` | Max entries in one auto-recall fence (min 1). The fence itself is capped at 1200 characters. |
 | `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters (min 1). |
@@ -278,9 +280,7 @@ memory:
   maxSearchResults: 50
   decayDays: 30
   notesEnabled: true
-  notesDir: docs/agent-memory
   notesCharLimit: 4000
-  notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
   autoRecallEnabled: false
   autoRecallLimit: 5
@@ -336,7 +336,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue tables), registers `ctx.memory` (BM25 search + two-tier decay) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (confirm-mode writes queue as proposals) |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes export (render conventions/pitfalls + atomic write with drift guard + AGENTS.md pointer), registers `ctx.projectNotes` |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection (render conventions/pitfalls into the `project-notes` section; no repo files), registers `ctx.projectNotes`; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (consumed over the `/api` channel) |
 

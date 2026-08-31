@@ -22,7 +22,7 @@
 | `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + **建议队列** 三张表） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + 去重 + janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出器：将约定/踩坑条目渲染为仓库内文件（`CONVENTIONS.md` / `PITFALLS.md`），**漂移守卫**（外部修改过的文件会被备份而非覆盖），维护 `AGENTS.md` 指针块，注册 `ctx.projectNotes` 服务 |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
@@ -45,7 +45,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 1. **持久化**事实、偏好、修正与经验。
 2. 通过一等工具以**相关性排序检索**的方式暴露给模型。
 3. **自动积累**，无需用户操作（信号触发 + LLM 提取）。
-4. **沉淀**进仓库可见的项目笔记，即使没有会话，约定与踩坑也能留存。
+4. **沉淀**项目级笔记：约定与踩坑作为独立的 `project-notes` prompt 段注入每次会话（0.6 起为 prompt-only，不写仓库文件）。
 5. **守护**存储：密钥与注入载荷既不能写入，也不能被再次注入。
 
 ---
@@ -58,7 +58,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G4 — 相关性排序检索。** `memory_search` 按 CJK 感知分词（一元 + 二元 bigram）的 BM25 排序；同等相关时固定条目靠前。
 - **G5 — 自动学习。** (a) 候选信号累积到阈值后的周期性 review 提取——含已验证的失败序列踩坑；(b) 压缩遮蔽上下文时 flush 提取；(c) 会话销毁时 flush 提取；(d) 受预算约束的低频 curator pass 改写超长条目。
 - **G6 — 两层生命周期。** 过期 `project` 条目硬衰减（移除）；过期 `global`/`user` 条目软衰减（打 `staleSince` 戳，从常驻注入隐藏但仍可搜索）；固定条目始终豁免。
-- **G7 — 仓库内项目笔记。** 约定与踩坑渲染为 git 可管理的 markdown 写入仓库，注入每次会话的 system prompt，并通过受管理的 `AGENTS.md` 指针保持可发现——与 memory 段落之间无重复注入。
+- **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（ADR-6，见 PROJECT_NOTES.zh-CN.md）。
 - **G8 — 写入与读取双重安全。** 每条写入路径扫描密钥 / 注入 / 泄露模式；每个面向 prompt 的表面对未通过扫描的内容再脱敏。
 - **G9 — 前端可配置、实时生效。** 全部设置经 dsh 设置界面暴露（两个命名空间四张卡片），无需重启生效。
 - **G10 — 一条命令安装 / 卸载。** `dsh plugin add` / `dsh plugin remove`；卸载保留用户数据。
@@ -95,7 +95,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 | `memory-store` | `storageDomain` | — | 打开 `memory` 域（entries + audit + suggestions）；注册 `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | 注册八个模型工具（人审模式感知） |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | 累加器 + 周期 review + flush + janitor + curator + 建议队列生产者；持有 `memory-review` 命名空间 |
-| `memory-notes` | — | `memory`, `settings` | 注册 `ctx.projectNotes`；渲染并持久化笔记文件（带漂移守卫） |
+| `memory-notes` | — | `memory`, `settings` | 注册 `ctx.projectNotes`；渲染 `project-notes` prompt 快照（纯内存）；清理 ≤0.5.x 文件残留 |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | prompt 注入段 + 自动召回中间件；持有 `memory` 命名空间 |
 | `memory-remote` | `memory` | — | 记忆管理 UI 的 `@Remote` 服务 |
 
@@ -108,7 +108,7 @@ flowchart TB
       store["memory-store · /store<br/>ctx.memory provider + BM25 检索<br/>entries + audit + suggestions 三张表"]
       tool["tool-memory · /tool<br/>八个模型工具（人审模式感知）"]
       review["memory-review · /review<br/>累加器 + LLM 提取 + 去重<br/>+ janitor + curator + 人审队列 · memory-review ns"]
-      notes["memory-notes · /notes<br/>CONVENTIONS/PITFALLS 导出（漂移守卫）· ctx.projectNotes"]
+      notes["memory-notes · /notes<br/>project-notes prompt 投影 · ctx.projectNotes<br/>≤0.5.x 文件残留清理"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 段<br/>自动召回中间件 · memory ns"]
       remote["memory-remote · /remote-service<br/>UI 用 @Remote 服务（14 个方法）"]
     end
@@ -260,7 +260,7 @@ interface MemoryEntry {
 | `tool-quirk` | 工具或库的怪癖 | "esbuild CJS 变量提升要求 RULES 在 inject() 之前定义" |
 | `procedure` | 经工具执行验证过的步骤化流程 | "构建 client：跑 build-client.cjs → 检查 window.__ModuleLoader__" |
 
-类别同时充当项目笔记矩阵的路由键（§7.4）：`convention`/`preference` 渲染进 CONVENTIONS.md，`failure`/`procedure`/`tool-quirk` 渲染进 PITFALLS.md。
+类别同时充当项目笔记矩阵的路由键（§7.4）：`convention`/`preference` 渲染进 `project-notes` 段的 conventions 分节，`failure`/`procedure`/`tool-quirk` 渲染进 pitfalls 分节。
 
 ### 6.3 持久化布局
 
@@ -462,22 +462,22 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`policy-only`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesDir` (`docs/agent-memory`), `notesCharLimit` (4000), `notesAgentsPointer` (true), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
+| `memory` | `memory-context` | `memoryMode` (`policy-only`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
 
-两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片。
+两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
 
-#### 项目笔记导出器（`src/notes/`）
+#### 项目笔记投影（`src/notes/`，0.6 起 prompt-only）
 
-- **服务：** `ProjectNotesService`（抽象类）注册到 `ctx.projectNotes`；`snapshotFor(cwd)` 从 store **同步**渲染并发起异步持久化——冻结进 prompt 的内容与落盘文件因此永不漂移。
+- **服务：** `ProjectNotesService`（抽象类）注册到 `ctx.projectNotes`；`snapshotFor(cwd)` 从 store **同步、纯内存**渲染——无任何文件 I/O。
 - **渲染矩阵（`isRenderedEntry`）**——与 `memory-context` 共享以防重复注入：
-  - CONVENTIONS.md ← 三个作用域的 `convention`/`preference` 条目（渲染顺序即优先级提示：project > global > personal）；
-  - PITFALLS.md ← 仅 `project` + `global` 作用域的 `failure`/`procedure`/`tool-quirk` 条目；
+  - conventions 分节 ← 三个作用域的 `convention`/`preference` 条目（渲染顺序即优先级提示：project > global > personal）；
+  - pitfalls 分节 ← 仅 `project` + `global` 作用域的 `failure`/`procedure`/`tool-quirk` 条目；
   - 无类别或其他类别的条目永不渲染；project 条目要求 `projectName` 匹配（cwd basename）。
-- **加载时防护：** 未通过扫描的内容绝不进入导出文件（直接省略而非脱敏）；软衰减条目退出一切常驻视图。
-- **文件：** `renderConventions` 输出 `## Project conventions` / `## Global practices` / `## Personal habits`；`renderPitfalls` 输出 `## Project pitfalls` / `## Environment & cross-project pitfalls`；两者带 AUTO-GENERATED 头并按 `notesMaxEntriesPerFile` 封顶（按 `updatedAt` 保留最新）。
-- **持久化：** `writeNotesFile` 为每次写入做**漂移检查**保护：磁盘内容必须等于刚渲染的文本，或本插件上次持久化的文本；被外部改过的文件被保留为 `<file>.bak.<ts>`，写入拒绝（`DriftError`，按目录仅告警一次）而不是静默覆盖编辑——之后漂移的磁盘内容被采纳为新基线，使下次 store 变更恢复正常写入。写入经 `writeFileAtomic`（同级临时文件 + rename），随后 `ensureAgentsPointer` 维护仓库 AGENTS.md 中的定界符托管块（`<!-- dsh-memory:begin/end -->`）——文件缺失则创建纯指针文件，已有托管块则原位替换，缺失则追加；标记外的一切不动。内容未变（按目录 memo）则跳过写入；所有失败被吞掉。
-- **触发：** `agent/pre-step` 运行去抖（2 秒）脏检查，比较 store 的 `health().lastActivityTs`；`memory-context` 在冻结期间隐式 reconcile。
+- **加载时防护：** 未通过扫描的内容绝不进入注入段（直接省略而非脱敏）；软衰减条目退出一切常驻视图。
+- **渲染：** `renderConventions` 输出 `## Project conventions` / `## Global practices` / `## Personal habits`；`renderPitfalls` 输出 `## Project pitfalls` / `## Environment & cross-project pitfalls`；两者带来源说明行并按 `notesMaxEntriesPerFile` 封顶（按 `updatedAt` 保留最新）。
+- **不落盘（ADR-6）：** 0.6 起插件对用户仓库零写入；0.5.x 的渲染文件与 AGENTS.md 指针块机制已移除（writer/drift guard 随之删除）。
+- **迁移清理（`cleanup.ts`）：** `session/created` 时每项目根执行一次、幂等、best-effort：剥离 AGENTS.md 托管块（标记外内容不动；pointer-only 文件删除）；删除 `docs/agent-memory/` 下插件生成的 `CONVENTIONS.md` / `PITFALLS.md` / `*.bak.*`（目录含外来文件则保留目录）；不改 `.gitignore`。
 
 #### System prompt 注入段（`src/context/`）
 
@@ -574,7 +574,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | 卡片（slot key） | 命名空间 | 组件 | 字段 |
 |---|---|---|---|
 | `memory` | `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
-| `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesDir`, `notesCharLimit`, `notesAgentsPointer`, `notesMaxEntriesPerFile` |
+| `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1） |
 | `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
 
@@ -629,11 +629,9 @@ memory:
   maxSearchResults: 50           # memory_search / memory_list 默认上限（0 = 不限）
   decayDays: 30                  # janitor 窗口（0 = 禁用）；project 硬衰减、
                                  #   global/user 软衰减
-  notesEnabled: true             # 项目笔记导出 + 注入总开关
-  notesDir: docs/agent-memory    # 仓库相对输出目录
+  notesEnabled: true             # project-notes prompt 段注入总开关
   notesCharLimit: 4000           # 注入 project-notes 段的预算
-  notesAgentsPointer: true       # 维护 AGENTS.md 指针块
-  notesMaxEntriesPerFile: 100    # 每文件条目上限（保留最新）
+  notesMaxEntriesPerFile: 100    # 渲染条目上限（保留最新；键名保留 0.5.x 兼容）
   autoRecallEnabled: false       # 步级 <recalled-memory> 围栏（opt-in）
   autoRecallLimit: 5             # 单围栏最大条数
   autoRecallMinChars: 12         # 用户文本低于该长度跳过召回
@@ -699,7 +697,7 @@ memory:
 | 低价值噪音沉淀（捕获 ≠ 正确） | 所有提取 prompt 中的负面准入规则（排除可从仓库推导的内容）；去重裁决；curator 透传；人审模式的人工闸门 |
 | 存储无限增长 / prompt 膨胀 | `memoryCharLimit` + `memoryMaxEntries` + notes 字符预算 + 1200 字符自动召回上限；`MERGE_CHAR_LIMIT`（600）限制合并增长；`limit`/`offset` 分页；审计日志封顶 200；建议队列封顶 200；两层 janitor 衰减；curator 收缩超长条目 |
 | 冲突记忆被当作事实提供 | 冻结时刻的冲突标注 inline 标记矛盾/陈旧行；软衰减条目在再次召回前退出常驻视图；三个记忆表面均带写时真实性免责 |
-| 被手改的笔记文件被导出器静默覆盖 | 漂移守卫：外部编辑被保留为 `.bak.<ts>`，在漂移内容成为新基线之前写入拒绝 |
+| 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（ADR-6）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
 
 ### 9.2 失效矩阵
@@ -718,9 +716,9 @@ memory:
 | `judgeEnabled: false`（或 judge 流失败） | 预过滤命中直接经 `mergeContent` 合并（安全回退 `duplicate`） |
 | 在 provider 未实现建议队列时开启 `confirmBeforeWrite: true` | 提取行被跳过（尽力而为）；工具写入把拒绝以模型可读错误呈现 |
 | 建议队列超过 200 行上限 | 先淘汰 `hits` 最低、再按 `lastSeenAt` 最旧的行；被采纳/拒绝的行立即离开 |
-| 笔记文件被外部修改 | 漂移守卫把编辑保留为 `<file>.bak.<ts>` 并按目录仅告警一次；漂移内容成为新基线，下次 store 变更恢复正常写入 |
+| 清理在非 git 项目 / 缺权限目录运行 | 全程 best-effort：`readdir`/`rm`/`writeFile` 逐项 catch，失败即跳过；每个项目根每进程仅尝试一次 |
 | UI 中模型目录不可用 | select 字段降级为自由文本输入并附提示；手工 id 仍然可用 |
-| 笔记持久化失败（权限、磁盘） | 吞掉；渲染继续以 store 内真相为准；下次脏检查重试 |
+| 清理与用户在仓库中的操作竞态 | 清理只触达插件自有产物（标记块、已知文件名）；目录含外来文件时保留目录；幂等，重复运行无副作用 |
 | 非法设置值 | 组合/设置期被 schemastery/Zod schema 拒绝；UI 侧另有数值范围客户端校验 |
 
 ---
@@ -735,7 +733,7 @@ dsh-memory/
 ├── src/                    # TypeScript 源码（35 个文件，约 10.1 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（27 个文件，494 个用例）
+├── tests/                  # vitest specs（27 个文件，493 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -760,7 +758,7 @@ patch 特意**不**插入 `storage-json` / `storage-domain` 行：`dsh-web-app` 
 
 ### 10.4 卸载语义
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在 `$DSH_HOME/storages/memory.json`（有意的数据保全保证）；删除该文件即显式清空。`docs/agent-memory/` 下渲染的笔记文件是普通仓库文件，保留到用户自行删除。
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在 `$DSH_HOME/storages/memory.json`（有意的数据保全保证）；删除该文件即显式清空。0.6 起插件不向仓库写文件（ADR-6），卸载后仓库无插件产物残留。
 
 ### 10.5 发布管线
 
@@ -770,13 +768,13 @@ GitHub Actions 在 `v*` tag 推送时发布到 npm（`publish.yml`）：校验 t
 
 ## 11. 测试策略
 
-仓库自带 **27 个 vitest spec 文件、494 个用例**（488 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **27 个 vitest spec 文件、493 个用例**（487 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
-1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（32：渲染矩阵、渲染器、含漂移守卫的 writer、指针维护）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
+1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
-5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（4）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
+5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（4）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
 
 ---
 
@@ -848,12 +846,11 @@ src/
 │                         #   行/id 解析 + [summary:…] 标签 + stripModelDatePrefix、
 │                         #   去重 / 入队管线、curator pass、项目名自动探测
 ├── notes/
-│   ├── index.ts          # 插件：ProjectNotesService（同步渲染 + 异步持久化）、
-│   │                     #   pre-step 去抖 reconcile
+│   ├── index.ts          # 插件：ProjectNotesService（同步纯内存渲染）+
+│   │                     #   session/created 一次性残留清理
 │   ├── scope.ts          # isRenderedEntry 矩阵（与 context 共享：防重复注入）
 │   ├── render.ts         # renderConventions / renderPitfalls markdown
-│   ├── writer.ts         # writeNotesFile 漂移守卫（.bak.<ts> 保留）+
-│   │                     #   writeFileAtomic + ensureAgentsPointer 托管块
+│   ├── cleanup.ts        # ≤0.5.x 文件残留清理（AGENTS.md 托管块 + 生成文件）
 │   └── settings.ts       # notes 默认值 + 防御性解析器
 ├── context/
 │   ├── index.ts          # memory 命名空间（含 memoryMaxEntries）+ 两个 prompt

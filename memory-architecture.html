@@ -653,7 +653,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p>Finally, memories <strong>flow back into the repository</strong>: convention / preference render into <code>CONVENTIONS.md</code>, failure / procedure / tool-quirk into <code>PITFALLS.md</code> (default <code>docs/agent-memory/</code>), written atomically with a drift guard (external edits are backed up, never overwritten), with a pointer block maintained in <code>AGENTS.md</code> so other tooling can discover them. Entries already rendered into notes are excluded from the memory section — the same content never appears twice in the prompt. The store is the source of truth; the files are its read-only projection.</p>
+      <p>Finally, memories <strong>flow back into every session</strong>: convention / preference entries and the failure / procedure / tool-quirk pitfall log render into the <code>project-notes</code> system-prompt section. Nothing is written into your repository — memory lives in the host-side store and is managed in the Memory settings UI (since 0.6; the ≤0.5.x in-repo notes files are cleaned up automatically). Entries already rendered into notes are excluded from the memory section — the same content never appears twice in the prompt. The store is the source of truth; the notes section is its read-only projection.</p>
     </div>
 
     <div class="creed rv">

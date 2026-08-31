@@ -1,19 +1,20 @@
 /**
  * The scope×category render matrix for project notes (§4 of
- * docs/PROJECT_NOTES.zh-CN.md): which store entries land in the notes files.
- * Pure functions, zero host imports — shared by the notes renderer and by
- * `memory-context` (which excludes the same set from its own snapshot/index
- * injection so content never appears twice in the prompt).
+ * docs/PROJECT_NOTES.zh-CN.md): which store entries land in the
+ * `project-notes` prompt section. Pure functions, zero host imports — shared
+ * by the notes renderer and by `memory-context` (which excludes the same set
+ * from its own snapshot/index injection so content never appears twice in
+ * the prompt).
  *
  * @module @chenhw7/dsh-memory/notes/scope
  */
 
 import type { MemoryCategory, MemoryEntry } from '../types.ts'
 
-/** Categories rendered into CONVENTIONS.md. */
+/** Categories rendered as conventions. */
 export const NOTES_CONVENTION_CATEGORIES: readonly MemoryCategory[] = ['convention', 'preference']
 
-/** Categories rendered into PITFALLS.md (project- and global-scoped only). */
+/** Categories rendered as pitfalls (project- and global-scoped only). */
 export const NOTES_PITFALL_CATEGORIES: readonly MemoryCategory[] = ['failure', 'procedure', 'tool-quirk']
 
 /** The minimal entry shape the matrix needs. */

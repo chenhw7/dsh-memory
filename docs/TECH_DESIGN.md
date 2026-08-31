@@ -22,7 +22,7 @@
 | `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + **suggestion-queue** tables) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + dedup + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes exporter: renders convention/pitfall entries into in-repo files (`CONVENTIONS.md` / `PITFALLS.md`) behind a **drift guard** that backs up externally edited files, maintains the `AGENTS.md` pointer, registers the `ctx.projectNotes` service |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt sections (`memory` @90, `project-notes` @91) + step-level auto-recall middleware; owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (three tabs, full write path) |
 
@@ -58,7 +58,7 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 - **G4 — Relevance-ranked retrieval.** `memory_search` ranks by BM25 over CJK-aware tokenization (unigrams + bigrams), pinning important entries ahead of equal-relevance matches.
 - **G5 — Automatic learning.** (a) Periodic review extraction when enough candidate signals accumulate — including verified failure-streak pitfalls; (b) flush extraction when compaction shadows context; (c) flush extraction on session dispose; (d) a budget-gated curator pass that re-summarizes oversized entries.
 - **G6 — Two-tier lifecycle.** Overdue `project` entries are hard-decayed (removed); overdue `global`/`user` entries are soft-decayed (stamped `staleSince`, hidden from standing injections but still searchable); pinned entries are always exempt.
-- **G7 — In-repo project notes.** Conventions and pitfalls render into git-manageable markdown inside the repo, inject into every session's system prompt, and stay discoverable via a managed `AGENTS.md` pointer — with no double injection against the memory section.
+- **G7 — Project-notes prompt section.** Conventions and pitfalls render from the KV store into every session's system prompt (the `project-notes` section), with no double injection against the memory section — and no files written into the user's repository (ADR-6, see PROJECT_NOTES.zh-CN.md).
 - **G8 — Safe writes *and* safe reads.** Every write path scans content for secrets / injection / exfiltration; every prompt-facing surface re-redacts content that fails the scan.
 - **G9 — Frontend-configurable, live.** All settings exposed through the dsh settings UI (four cards over two namespaces) and applied without restart.
 - **G10 — One-command install / uninstall.** `dsh plugin add` / `dsh plugin remove`; uninstall preserves user data.
@@ -95,7 +95,7 @@ The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which insert
 | `memory-store` | `storageDomain` | — | Opens the `memory` domain (entries + audit + suggestions); registers `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | Registers the eight model tools (confirm-mode aware) |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | Accumulator + periodic review + flush + janitor + curator + suggestion queue producer; owns the `memory-review` namespace |
-| `memory-notes` | — | `memory`, `settings` | Registers `ctx.projectNotes`; renders + persists the notes files (drift-guarded) |
+| `memory-notes` | — | `memory`, `settings` | Registers `ctx.projectNotes`; renders the `project-notes` prompt snapshot (pure in-memory); cleans up ≤0.5.x file-export artifacts |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | Prompt sections + auto-recall middleware; owns the `memory` namespace |
 | `memory-remote` | `memory` | — | `@Remote` service for the memory management UI |
 
@@ -108,7 +108,7 @@ flowchart TB
       store["memory-store · /store<br/>ctx.memory provider + BM25 search<br/>entries + audit + suggestions tables"]
       tool["tool-memory · /tool<br/>eight model tools (confirm-mode aware)"]
       review["memory-review · /review<br/>accumulator + LLM extraction + dedup<br/>+ janitor + curator + review queue · memory-review ns"]
-      notes["memory-notes · /notes<br/>CONVENTIONS/PITFALLS export (drift-guarded) · ctx.projectNotes"]
+      notes["memory-notes · /notes<br/>project-notes prompt projection · ctx.projectNotes<br/>≤0.5.x artifact cleanup"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 sections<br/>auto-recall middleware · memory ns"]
       remote["memory-remote · /remote-service<br/>@Remote service for UI (14 methods)"]
     end
@@ -260,7 +260,7 @@ JSON on the durable medium:
 | `tool-quirk` | A tool or library quirk | "esbuild CJS var hoisting requires defining RULES before inject()" |
 | `procedure` | Verified step-by-step process confirmed by tool execution | "Build client: run build-client.cjs → check window.__ModuleLoader__" |
 
-Categories double as the routing key for the project-notes matrix (§7.4): `convention`/`preference` render into CONVENTIONS.md, `failure`/`procedure`/`tool-quirk` render into PITFALLS.md.
+Categories double as the routing key for the project-notes matrix (§7.4): `convention`/`preference` render into the conventions section of `project-notes`, `failure`/`procedure`/`tool-quirk` render into the pitfalls section.
 
 ### 6.3 Persistence layout
 
@@ -462,22 +462,22 @@ Two namespaces, both live:
 
 | Namespace | Owner | Keys (default) |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`policy-only`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesDir` (`docs/agent-memory`), `notesCharLimit` (4000), `notesAgentsPointer` (true), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
+| `memory` | `memory-context` | `memoryMode` (`policy-only`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
 
-Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`).
+Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored).
 
-#### Project-notes exporter (`src/notes/`)
+#### Project-notes projection (`src/notes/`, prompt-only since 0.6)
 
-- **Service:** `ProjectNotesService` (abstract) registered on `ctx.projectNotes`; `snapshotFor(cwd)` renders **synchronously** from the store and fires async persistence — so the frozen prompt content always matches what lands on disk.
+- **Service:** `ProjectNotesService` (abstract) registered on `ctx.projectNotes`; `snapshotFor(cwd)` renders **synchronously, purely in memory** from the store — no file I/O at all.
 - **Render matrix (`isRenderedEntry`)** — shared with `memory-context` to prevent double injection:
-  - CONVENTIONS.md ← `convention`/`preference` entries from all scopes (render order = precedence hint: project > global > personal);
-  - PITFALLS.md ← `failure`/`procedure`/`tool-quirk` entries from `project` + `global` only;
+  - conventions section ← `convention`/`preference` entries from all scopes (render order = precedence hint: project > global > personal);
+  - pitfalls section ← `failure`/`procedure`/`tool-quirk` entries from `project` + `global` only;
   - uncategorized entries and other categories never render; project-scope entries require a matching `projectName` (cwd basename).
-- **Load-time guards:** scanner-rejected content never reaches the exported files (omitted, not redacted); soft-decayed entries drop out of every standing view.
-- **Files:** `renderConventions` emits `## Project conventions` / `## Global practices` / `## Personal habits`; `renderPitfalls` emits `## Project pitfalls` / `## Environment & cross-project pitfalls`; both carry the AUTO-GENERATED header and cap entries (`notesMaxEntriesPerFile`, newest-by-`updatedAt` first).
-- **Persistence:** `writeNotesFile` guards each write with a **drift check**: the on-disk content must match either the freshly rendered text or the last text this plugin persisted; an externally modified file is preserved as `<file>.bak.<ts>` and the write refuses (a `DriftError`, surfaced as a log-once warning per directory) instead of silently clobbering the edit — after which the drifted on-disk content is adopted as the new baseline so the next store change writes normally. Writes go through `writeFileAtomic` (temp sibling + rename), then `ensureAgentsPointer` maintains the marker-delimited block (`<!-- dsh-memory:begin/end -->`) in the repo's AGENTS.md — creates a pointer-only file when absent, replaces the managed block in place, appends when missing; everything outside the markers untouched. Writes skip when content is unchanged (per-dir memo) and all failures are swallowed.
-- **Triggers:** `agent/pre-step` runs a debounced (2 s) dirty check comparing the store's `health().lastActivityTs`; `memory-context` reconciles implicitly by calling `snapshotFor` during its freeze.
+- **Load-time guards:** scanner-rejected content never reaches the injected section (omitted, not redacted); soft-decayed entries drop out of every standing view.
+- **Render:** `renderConventions` emits `## Project conventions` / `## Global practices` / `## Personal habits`; `renderPitfalls` emits `## Project pitfalls` / `## Environment & cross-project pitfalls`; both carry the provenance line and cap entries (`notesMaxEntriesPerFile`, newest-by-`updatedAt` first).
+- **No persistence (ADR-6):** since 0.6 the plugin writes nothing into the user's repository; the 0.5.x rendered files and AGENTS.md pointer mechanism are gone (the writer/drift guard was deleted with them).
+- **Migration cleanup (`cleanup.ts`):** once per project root per process on `session/created`, idempotent, best-effort: strips the AGENTS.md managed block (everything outside the markers untouched; a pointer-only file is deleted); deletes the plugin-generated `CONVENTIONS.md` / `PITFALLS.md` / `*.bak.*` under `docs/agent-memory/` (foreign files keep the directory); never touches `.gitignore`.
 
 #### System-prompt sections (`src/context/`)
 
@@ -574,7 +574,7 @@ Contributes **four cards** into Settings → Plugins → Plugin configuration, a
 | Card (slot key) | Namespace | Component | Fields |
 |---|---|---|---|
 | `memory` | `memory` | curated `MemoryPluginCard` | `memoryMode` select (policy-only/full/index/custom/off), conditional custom-policy textarea, `memoryCharLimit`, `memoryMaxEntries` (min 0), `maxSearchResults`, `decayDays` |
-| `memory-notes` | `memory` | spec-driven `NamespaceCard` | `notesEnabled`, `notesDir`, `notesCharLimit`, `notesAgentsPointer`, `notesMaxEntriesPerFile` |
+| `memory-notes` | `memory` | spec-driven `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec-driven `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit` (min 1), `autoRecallMinChars` (min 1) |
 | `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
 
@@ -629,11 +629,9 @@ memory:
   maxSearchResults: 50           # default memory_search / memory_list cap (0 = unlimited)
   decayDays: 30                  # janitor window (0 = disabled); hard-decays project,
                                  #   soft-decays global/user
-  notesEnabled: true             # project-notes export + injection master switch
-  notesDir: docs/agent-memory    # repo-relative output directory
+  notesEnabled: true             # project-notes prompt-section injection master switch
   notesCharLimit: 4000           # injected project-notes section budget
-  notesAgentsPointer: true       # maintain the AGENTS.md pointer block
-  notesMaxEntriesPerFile: 100    # per-file entry cap (newest kept)
+  notesMaxEntriesPerFile: 100    # rendered-entry cap (newest kept; key kept for 0.5.x compat)
   autoRecallEnabled: false       # step-level <recalled-memory> fence (opt-in)
   autoRecallLimit: 5             # max entries per fence
   autoRecallMinChars: 12         # skip recall below this user-text length
@@ -699,7 +697,7 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | Low-value noise sedimenting (capture ≠ correctness) | Negative admission rule in all extraction prompts (repo-derivable content excluded); dedup judge; curator passthrough; confirm-mode human gate |
 | Unbounded store growth / prompt bloat | `memoryCharLimit` + `memoryMaxEntries` + notes char budgets + 1200-char auto-recall cap; `MERGE_CHAR_LIMIT` (600) bounds merge growth; `limit`/`offset` pagination; audit log capped at 200; suggestion queue capped at 200; two-tier janitor decay; curator shrinks oversized entries |
 | Conflicting memories served as truth | Freeze-time conflict annotation marks contradicted/staled lines inline; soft-decayed entries hidden from standing views until re-recalled; write-time-truth disclaimer on all three memory surfaces |
-| Hand-edited notes file silently overwritten by the exporter | Drift guard: external edits are preserved as `.bak.<ts>` and the write refuses until the drifted content becomes the new baseline |
+| The plugin unexpectedly writes files into the user's repository | The 0.6 notes projection does zero file I/O (ADR-6); rendering is pure in-memory; ≤0.5.x artifacts are conservatively cleaned on `session/created` (only plugin-generated files; content outside the markers untouched) |
 | Retrieval quality regressing unnoticed | Golden-set CI floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) — a tokenizer/weight/budget regression fails the build |
 
 ### 9.2 Failure matrix
@@ -718,9 +716,9 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | `judgeEnabled: false` (or judge stream fails) | Prefilter hits merge directly via `mergeContent` (safe fallback `duplicate`) |
 | `confirmBeforeWrite: true` on a provider without a suggestion queue | Extraction lines are skipped (best-effort); tool writes surface the rejection as a model-readable error |
 | Suggestion queue exceeds the 200-row cap | Lowest-`hits`, then oldest-`lastSeenAt` rows evicted; adopted/rejected rows leave immediately |
-| Notes file edited externally | Drift guard preserves the edit as `<file>.bak.<ts>` and logs once per directory; the drifted content becomes the new baseline, so the next store change writes normally again |
+| Cleanup runs in a non-git project / permission-denied directory | Entirely best-effort: every `readdir`/`rm`/`writeFile` failure is caught and skipped; attempted once per project root per process |
 | Model catalog unavailable in the UI | Select fields degrade to free-text inputs with a hint; manual ids still work |
-| Notes persistence fails (permissions, disk) | Swallowed; rendering continues serving the in-store truth; retry on the next dirty-check |
+| Cleanup races user activity in the repository | Cleanup only touches the plugin's own artifacts (the marker block, known file names); foreign files keep the directory; idempotent — reruns have no side effects |
 | Invalid settings values | Rejected by the schemastery/Zod schemas at composition/settings time; the UI additionally validates numeric ranges client-side |
 
 ---
@@ -735,7 +733,7 @@ dsh-memory/
 ├── src/                    # TypeScript sources (35 files, ~10.1 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (27 files, 494 cases)
+├── tests/                  # vitest specs (27 files, 493 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -760,7 +758,7 @@ The patch deliberately inserts **no** `storage-json` / `storage-domain` rows: th
 
 ### 10.4 Uninstall semantics
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain in `$DSH_HOME/storages/memory.json` (intentional data-preservation guarantee); users wipe them explicitly by deleting that file. Rendered notes files under `docs/agent-memory/` are ordinary repo files and stay until the user deletes them.
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain in `$DSH_HOME/storages/memory.json` (intentional data-preservation guarantee); users wipe them explicitly by deleting that file. Since 0.6 the plugin writes no repository files (ADR-6), so uninstalling leaves no plugin artifacts in the repo.
 
 ### 10.5 Release pipeline
 
@@ -770,9 +768,9 @@ GitHub Actions publishes to npm on `v*` tags (`publish.yml`): it verifies the ta
 
 ## 11. Testing Strategy
 
-The repo ships **27 vitest spec files, 494 test cases** (488 active + 6 skipped without real-API keys), in five layers:
+The repo ships **27 vitest spec files, 493 test cases** (487 active + 6 skipped without real-API keys), in five layers:
 
-1. **Pure-function units** — `extract.spec` (67: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (32: render matrix, renderers, writer incl. drift guard, pointer maintenance), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
+1. **Pure-function units** — `extract.spec` (67: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
 2. **Contract** — `store-contract.spec` (14): an in-memory `TestMemoryStore` exercises the abstract contract (CRUD/search/pin/archive/janitor two-tier decay/health/audit, scanner rejections, project-scope validation).
 3. **Tool behavior** — `tools.spec` (37): the eight `execute()` paths against a real `ToolRuntime` + `SystemPrompt` composition with the in-memory store; `tools-confirm-and-window.spec` (10): confirm-mode queueing (`{ pending, suggestionId }`, `targetEntryId` proposals) + `memory_list` smart view (newest-first, `since`/`until` window, metadata, widen hint).
 4. **Remote & client UI** — `remote-service.spec` (12: projects aggregation / staleSince·stale passthrough / newest-first ordering / `recordRecall:false` suppression / archive + suggestion methods); `memory-section.client.spec.tsx` (24, jsdom): tab split / lazy loading / filters / review-queue adopt·reject·edit / manage write actions / error recovery.
@@ -791,7 +789,7 @@ The repo ships **27 vitest spec files, 494 test cases** (488 active + 6 skipped 
 - **Prompt budget:** memory content ≤ `memoryCharLimit` (5000 chars ≈ 1.2–1.5 k tokens) **and ≤ `memoryMaxEntries` entries (default 20)** + policy block (~0.4 k tokens); the snapshot footer and the auto-recall fence footer both report ≈tokens; index mode collapses tails into category roll-up lines; project-notes ≤ `notesCharLimit` (4000); auto-recall fence ≤ 1200 chars. Standing per-mode cost over the golden fixture is measured in §7.9 (policy-only ≈344 tokens flat regardless of store size).
 - **Cache stability:** snapshots freeze at session creation and refresh only at `compaction/end` (prefix rebuilds there anyway); auto-recall touches only the step's trailing message channel, leaving the system-prompt prefix intact.
 - **Extraction spend:** charged per trigger (drain / compaction / dispose / curator tick) against a per-session budget (default 20); reuses the session's provider/model unless overridden.
-- **Notes I/O:** renders synchronously from memory, persists atomically and only on content change, debounced 2 s behind the pre-step dirty check.
+- **Notes cost:** renders synchronously and purely in memory at freeze time — zero file I/O since 0.6 (ADR-6); the one-time ≤0.5.x artifact cleanup runs once per project root per process.
 - **I/O:** one JSON file; writes serialize on the domain write chain; reads are in-memory.
 
 ---
@@ -849,12 +847,11 @@ src/
 │                         #   dedup / queue storage pipelines, curator pass,
 │                         #   project auto-detection
 ├── notes/
-│   ├── index.ts          # plugin: ProjectNotesService (render-sync + persist-async),
-│   │                     #   pre-step debounce reconcile
+│   ├── index.ts          # plugin: ProjectNotesService (pure in-memory render) +
+│   │                     #   session/created one-time artifact cleanup
 │   ├── scope.ts          # isRenderedEntry matrix (shared with context: no double injection)
 │   ├── render.ts         # renderConventions / renderPitfalls markdown
-│   ├── writer.ts         # writeNotesFile drift guard (.bak.<ts> preserve) +
-│   │                     #   writeFileAtomic + ensureAgentsPointer managed block
+│   ├── cleanup.ts        # ≤0.5.x artifact cleanup (AGENTS.md managed block + generated files)
 │   └── settings.ts       # notes defaults + defensive resolver
 ├── context/
 │   ├── index.ts          # memory namespace (incl. memoryMaxEntries) + two prompt

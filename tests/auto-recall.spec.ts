@@ -55,9 +55,7 @@ const BASE_CONFIG = {
   maxSearchResults: 50,
   decayDays: 30,
   notesEnabled: false,
-  notesDir: 'docs/agent-memory',
   notesCharLimit: 4000,
-  notesAgentsPointer: true,
   notesMaxEntriesPerFile: 100,
 } as const
 

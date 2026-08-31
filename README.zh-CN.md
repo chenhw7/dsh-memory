@@ -34,7 +34,7 @@
 - **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
 - **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（24 条 × 24 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.958——并附各注入模式的成本数字（见 [docs/INDEX_MODE_EVALUATION.zh-CN.md](docs/INDEX_MODE_EVALUATION.zh-CN.md)）。
 - **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。准入规则排除一切"仓库已记录的内容"（代码结构、git 历史、已修复 bug 的经过），模型手写的日期前缀会被剥离，时间戳永远由程序盖戳。
-- **仓库内项目笔记** — 编码约定与踩坑日志渲染为仓库内可 git 管理的 markdown（默认 `docs/agent-memory/`），每次会话注入 system prompt，并在 `AGENTS.md` 中维护一行托管指针块供其他工具发现。漂移守卫保证被外部手改过的笔记文件会被备份而非静默覆盖。
+- **项目笔记 prompt 段落** — 编码约定与踩坑日志渲染进每次会话的 system prompt（`project-notes` 段）。不向仓库写入任何文件：记忆完全保存在 host 侧存储中，在 Memory 设置 UI 里管理；升级时自动清理 ≤0.5.x 留下的笔记文件。
 - **去重管线** — 两阶段去重（停用词过滤的 Jaccard 预过滤 + 可选 LLM 裁决，合并长度有上限），防止近似重复条目累积；低频 curator pass 会将过长条目改写为简洁单行。
 - **两层记忆生命周期** — 固定重要记忆；过期的 project 作用域条目被移除，而过期的 `global`/`user` 条目做软衰减（从常驻注入面隐藏但仍可搜索，再次召回即解除）；条目也可以从界面手动归档；每次写入都有审计。
 - **步级自动召回（可选）** — 每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息；不触碰 system prompt，保持 KV-cache 前缀稳定。
@@ -139,6 +139,10 @@ dsh plugin --profile web update @chenhw7/dsh-memory
 pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 ```
 
+### 从 0.5.x 升级
+
+0.6 版本停止向仓库导出记忆文件：`docs/agent-memory/CONVENTIONS.md` / `PITFALLS.md` 渲染文件与 `AGENTS.md` 托管指针块一并移除，记忆只通过 prompt 注入并在 Memory 设置 UI 中管理。升级后在每个项目的第一次会话里，插件会自动清理 ≤0.5.x 留下的产物：从 `AGENTS.md` 中剥离托管指针块（若文件只含指针块则整文件删除），并删除 `docs/agent-memory/` 下由插件生成的文件（只删插件生成的；目录中的其他文件保留）。你也可以随时手动删除它们——现在不会再有任何文件被写入仓库。
+
 ## 卸载
 
 从 profile 中移除插件：
@@ -216,11 +220,9 @@ dsh web
 | `memoryMaxEntries` | `20` | 同一冻结快照的条目数上限（`0` = 无限制）。快照尾部附 `≈N tokens` 估算，注入成本始终可见。 |
 | `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限，由工具插件实时读取。`0` = 无限制。 |
 | `decayDays` | `30` | N 天内未召回条目的生命周期窗口，由 review 插件的 janitor 实时读取。`0` = 禁用。过期的 `project` 条目被**移除**（硬衰减）；过期的 `global`/`user` 条目改为**软衰减**——打上 `stale` 戳，从注入面和笔记文件中隐藏但仍可搜索，再次召回即自动解除。固定（pin）条目始终豁免。 |
-| `notesEnabled` | `true` | 启用项目笔记的仓库内文件导出与 system prompt 注入。已渲染进笔记文件的条目会从 memory 段落中排除，避免重复注入。 |
-| `notesDir` | `docs/agent-memory` | 仓库内生成 `CONVENTIONS.md` / `PITFALLS.md` 的目录。 |
+| `notesEnabled` | `true` | 注入项目笔记 prompt 段落（约定 + 踩坑日志）。已渲染进该段落的条目会从 memory 段落中排除，避免重复注入。不写任何仓库文件。 |
 | `notesCharLimit` | `4000` | 注入的 `project-notes` 段落字符上限。 |
-| `notesAgentsPointer` | `true` | 维护仓库 `AGENTS.md` 中的托管指针块。 |
-| `notesMaxEntriesPerFile` | `100` | 每个生成笔记文件的最大条目数（保留最新）。 |
+| `notesMaxEntriesPerFile` | `100` | 渲染进项目笔记段落的最大条目数（保留最新）。 |
 | `autoRecallEnabled` | `false` | 步级自动召回：每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息。不触碰 system prompt，保持 KV-cache 前缀稳定。 |
 | `autoRecallLimit` | `5` | 单次自动召回围栏内的最大条数（最小 1）。围栏本身上限 1200 字符。 |
 | `autoRecallMinChars` | `12` | 该步用户文本短于该字符数时跳过召回（最小 1）。 |
@@ -276,9 +278,7 @@ memory:
   maxSearchResults: 50
   decayDays: 30
   notesEnabled: true
-  notesDir: docs/agent-memory
   notesCharLimit: 4000
-  notesAgentsPointer: true
   notesMaxEntriesPerFile: 100
   autoRecallEnabled: false
   autoRecallLimit: 5
@@ -334,7 +334,7 @@ memory:
 | `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列三张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（人审模式下写入改为入队） |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator + 人审队列），持有 `memory-review` 设置命名空间 |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记导出（渲染约定/踩坑 + 带漂移守卫的原子写 + AGENTS.md 指针），注册 `ctx.projectNotes` |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影（渲染约定/踩坑进 `project-notes` 段落；0.6 起不写仓库文件），注册 `ctx.projectNotes`；会话创建时清理 ≤0.5.x 的文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @90 + `project-notes` @91）、步级自动召回，持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（设置「记忆」区经 `/api` 通道消费） |
 
