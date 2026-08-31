@@ -1,4 +1,4 @@
-# 安全审计报告（docs/SECURITY_AUDIT.zh-CN.md）
+# 安全审计报告（docs/SECURITY_AUDIT.zh.md）
 
 - **审计对象**：`@chenhw7/dsh-memory`（Cairn）— DeepSeek Harness 长期记忆插件
 - **审计分支**：`security-audit`（基于 `main` @ `0d2edad`）
@@ -177,7 +177,7 @@ git push origin --force --all && git push origin --force --tags
 | 2 | GitHub Actions 改为 commit SHA 固定（v4.4.0） | `.github/workflows/ci.yml`、`.github/workflows/publish.yml` |
 | 3 | `npm install` → `npm ci`（强制 lockfile） | 同上两个 workflow |
 | 4 | `.gitignore` 追加 `.mimosa/` | `.gitignore` |
-| 5 | 本安全审计报告入库 | `docs/SECURITY_AUDIT.zh-CN.md` |
+| 5 | 本安全审计报告入库 | `docs/SECURITY_AUDIT.zh.md` |
 | 6 | `notesDir` 包含性校验：新增 `resolveNotesDir()`（越界拒绝持久化 + log-once 告警）并接入 `persist()` | `src/notes/settings.ts`、`src/notes/index.ts` |
 | 7 | `resolveNotesDir` 包含性行为的 5 个单元测试 | `tests/notes.spec.ts` |
 | 8 | 测试端点 SSRF 守卫：`fetch` 前校验 http(s) 绝对 URL + 非回环/私网/元数据主机 | `tests/judge-real-api.spec.ts` |

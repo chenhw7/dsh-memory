@@ -1,12 +1,12 @@
 # AGENTS.md — Implemented Agent Notes
 
-These Agent Notes describe shipped decisions. Follow the [Agent Note format](../README.md#the-file-format) and the upstream [documentation standard](../../../deepseek-harness/docs/AGENTS.md); `verify-agent-note-format` gates the lifecycle-specific structure in the harness repository — here the structure is convention.
+These Agent Notes describe shipped decisions. Follow the [Agent Note format](../README.md#the-file-format) and the [documentation standard](../../../docs/AGENTS.md) and the format rules; the upstream `verify-agent-note-format` gate does not run here — the structure is convention ([the format note](../../../../deepseek-harness/.agents/notes/implemented/process/2026-07-05-uniform-agent-note-format.md) owns the rationale, read-only).
 
 ## Keep an implemented Agent Note current with what actually shipped
 
 Keep paths, symbols, defaults, and mechanisms current in the same change that alters them. Rewrite stale facts in place; do not append change history.
 
-When a shipped note is unlikely to guide future work, archive its complete triplet through the harness's [`dsh-archive-agent-notes`](../../../deepseek-harness/.agents/skills/dsh-archive-agent-notes/SKILL.md) workflow (applied by hand here) instead of continuing to maintain it.
+When a shipped note is unlikely to guide future work, archive its complete triplet through the [`dsh-archive-agent-notes`](../../skills/dsh-archive-agent-notes/SKILL.md) workflow instead of continuing to maintain it.
 
 ### This is not a license to rewrite the *decision*
 

@@ -1,5 +1,5 @@
 /**
- * `@chenhw7/dsh-memory/notes`: the project-notes projection (docs/PROJECT_NOTES.zh-CN.md).
+ * `@chenhw7/dsh-memory/notes`: the project-notes projection (docs/PROJECT_NOTES.zh.md).
  * A function plugin that renders habit/convention/pitfall entries from the
  * memory store into the `project-notes` system-prompt section. Since 0.6 it
  * writes NOTHING into the user's project — the store is the sole source of

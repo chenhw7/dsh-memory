@@ -1,6 +1,6 @@
 /**
  * The scope×category render matrix for project notes (§4 of
- * docs/PROJECT_NOTES.zh-CN.md): which store entries land in the
+ * docs/PROJECT_NOTES.zh.md): which store entries land in the
  * `project-notes` prompt section. Pure functions, zero host imports — shared
  * by the notes renderer and by `memory-context` (which excludes the same set
  * from its own snapshot/index injection so content never appears twice in
@@ -25,7 +25,7 @@ export type NotesKind = 'conventions' | 'pitfalls'
 
 /**
  * Decide whether an entry is rendered into the notes files, and into which
- * one. Rules (docs/PROJECT_NOTES.zh-CN.md §4):
+ * one. Rules (docs/PROJECT_NOTES.zh.md §4):
  * - `project`-scoped entries must match the current project name; an unknown
  *   project (no cwd) excludes them.
  * - Conventions come from all three scopes (project > global > personal is

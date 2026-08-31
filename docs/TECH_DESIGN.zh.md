@@ -26,7 +26,7 @@
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
-记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（24 条 × 24 组查询，中英混合）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.958），各注入模式的常驻注入成本也按同样方式测量（见 [INDEX_MODE_EVALUATION.zh-CN.md](./INDEX_MODE_EVALUATION.zh-CN.md)）。
+记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（24 条 × 24 组查询，中英混合）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.958），各注入模式的常驻注入成本也按同样方式测量（见 [INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)）。
 
 ---
 
@@ -58,14 +58,14 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G4 — 相关性排序检索。** `memory_search` 按 CJK 感知分词（一元 + 二元 bigram）的 BM25 排序；同等相关时固定条目靠前。
 - **G5 — 自动学习。** (a) 候选信号累积到阈值后的周期性 review 提取——含已验证的失败序列踩坑；(b) 压缩遮蔽上下文时 flush 提取；(c) 会话销毁时 flush 提取；(d) 受预算约束的低频 curator pass 改写超长条目。
 - **G6 — 两层生命周期。** 过期 `project` 条目硬衰减（移除）；过期 `global`/`user` 条目软衰减（打 `staleSince` 戳，从常驻注入隐藏但仍可搜索）；固定条目始终豁免。
-- **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（ADR-6，见 PROJECT_NOTES.zh-CN.md）。
+- **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（ADR-6，见 PROJECT_NOTES.zh.md）。
 - **G8 — 写入与读取双重安全。** 每条写入路径扫描密钥 / 注入 / 泄露模式；每个面向 prompt 的表面对未通过扫描的内容再脱敏。
 - **G9 — 前端可配置、实时生效。** 全部设置经 dsh 设置界面暴露（两个命名空间四张卡片），无需重启生效。
 - **G10 — 一条命令安装 / 卸载。** `dsh plugin add` / `dsh plugin remove`；卸载保留用户数据。
 - **G11 — 写路径上的人类治理。** 可选的人审模式（`confirmBeforeWrite`）把每次自动提取*以及*模型发起的写入都路由进待确认提议队列（重复信号累计 `hits`）；采纳（可带修改）是提议变成记忆的唯一途径，因此模型永远无法自我提升（self-promote）。
 - **G12 — 可度量的检索与注入经济性。** 固定 golden set 把召回质量变成 CI 守护的指标（success@k / P@1 / MRR，含 zh/en 切片），把各模式的常驻注入成本变成数字；prompt 预算在字符旁边报告 `≈tokens`。
 
-客户端 UI 开发经验——包括阻断 CSS 注入的 esbuild CJS var 提升 bug、宿主不导出组件的约束等——记录在 [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md)。
+客户端 UI 开发经验——包括阻断 CSS 注入的 esbuild CJS var 提升 bug、宿主不导出组件的约束等——记录在 [CLIENT_UI_LESSONS.zh.md](./CLIENT_UI_LESSONS.zh.md)。
 
 ---
 
@@ -606,7 +606,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 - **Golden 夹具：** `GOLDEN_ENTRIES` —— 24 条主题互不重叠、跨三个作用域的条目（12 英文 / 6 中文 / 6 混合），其中故意放了几枚诱饵词元（两条条目共享 端口/port），让精度保持诚实——以及 `GOLDEN_CASES` —— 24 组 查询→相关 id 对，混合关键词风格与提问风格。
 - **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 91.7%、MRR = 0.958。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
-- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——是 index 模式裁决（[INDEX_MODE_EVALUATION.zh-CN.md](./INDEX_MODE_EVALUATION.zh-CN.md)）的输入：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
+- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——是 index 模式裁决（[INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)）的输入：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
 - **已知边界，记录在案：** 纯中文查询对纯英文条目零词法重叠、必然漏检——词法 BM25 不承诺跨语言语义召回；那是 embedding 层的问题，属于另一个工程量级。
 
 模块以 `@chenhw7/dsh-memory/benchmark` 导出（含类型），夹具与指标可在 spec 之外复用。
@@ -882,4 +882,4 @@ src/
 
 ---
 
-*配套文档：[README.zh-CN.md](../README.zh-CN.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh-CN.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md)、[Index 模式评估](./INDEX_MODE_EVALUATION.zh-CN.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*
+*配套文档：[README.zh.md](../README.zh.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh.md)、[Index 模式评估](./INDEX_MODE_EVALUATION.zh.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*

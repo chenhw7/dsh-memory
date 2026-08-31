@@ -1,8 +1,8 @@
 # v0.3.0 实施说明 —— 记忆系统改进路线图（P0 + P1）
 
-> **已归档（2026-08-27）**：v0.3.0 已发布。本文保留作该版本的实施记录；后续版本见 [../TECH_DESIGN.zh-CN.md](../TECH_DESIGN.zh-CN.md)。
+> **已归档（2026-08-27）**：v0.3.0 已发布。本文保留作该版本的实施记录；后续版本见 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md)。
 >
-> 依据 `docs/archive/MEMORY_SYSTEM_ANALYSIS.zh-CN.md` §6 路线图落地。P2 三项（embedding 平面、pitfall 结构化字段、remote UI 管理面）经评估**有意推迟**：均为大结构增量，与"单文件、零配置、一个 npm 包"的极简约束冲突，留待规模触发条件出现后再启动。
+> 依据 `docs/archive/MEMORY_SYSTEM_ANALYSIS.zh.md` §6 路线图落地。P2 三项（embedding 平面、pitfall 结构化字段、remote UI 管理面）经评估**有意推迟**：均为大结构增量，与"单文件、零配置、一个 npm 包"的极简约束冲突，留待规模触发条件出现后再启动。
 >
 | | |
 |---|---|

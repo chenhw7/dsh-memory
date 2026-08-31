@@ -32,7 +32,7 @@
 - **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
 - **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
-- **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（24 条 × 24 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.958——并附各注入模式的成本数字（见 [docs/INDEX_MODE_EVALUATION.zh-CN.md](docs/INDEX_MODE_EVALUATION.zh-CN.md)）。
+- **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（24 条 × 24 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.958——并附各注入模式的成本数字（见 [docs/INDEX_MODE_EVALUATION.zh.md](docs/INDEX_MODE_EVALUATION.zh.md)）。
 - **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。准入规则排除一切"仓库已记录的内容"（代码结构、git 历史、已修复 bug 的经过），模型手写的日期前缀会被剥离，时间戳永远由程序盖戳。
 - **项目笔记 prompt 段落** — 编码约定与踩坑日志渲染进每次会话的 system prompt（`project-notes` 段）。不向仓库写入任何文件：记忆完全保存在 host 侧存储中，在 Memory 设置 UI 里管理；升级时自动清理 ≤0.5.x 留下的笔记文件。
 - **去重管线** — 两阶段去重（停用词过滤的 Jaccard 预过滤 + 可选 LLM 裁决，合并长度有上限），防止近似重复条目累积；低频 curator pass 会将过长条目改写为简洁单行。

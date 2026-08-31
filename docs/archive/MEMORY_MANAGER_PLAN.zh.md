@@ -1,6 +1,6 @@
 # 记忆管理中心（Memory Manager）实施规划
 
-> **已归档（2026-08-27）**：一期已随 v0.4.0 发布，实施偏差记录在 §12。本文保留作决策依据；当前行为与接口以 [../TECH_DESIGN.zh-CN.md](../TECH_DESIGN.zh-CN.md) 为准。
+> **已归档（2026-08-27）**：一期已随 v0.4.0 发布，实施偏差记录在 §12。本文保留作决策依据；当前行为与接口以 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md) 为准。
 >
 > 状态：**一期已实施并通过端到端验收**（2026-08-24，验收记录见 §12）。二期（CRUD + 审计）、三期（增强）待启动。
 >
@@ -137,7 +137,7 @@ MemorySection.tsx ──操作──▶ MemorySectionController（memory-section
 
 ### 5.4 施工注意（承接既有踩坑记录）
 
-- 异步加载 effect 的守卫状态**不得**进依赖数组（`useRef` 一次性守卫 + 超时兜底），见 `docs/CLIENT_UI_LESSONS.zh-CN.md`。
+- 异步加载 effect 的守卫状态**不得**进依赖数组（`useRef` 一次性守卫 + 超时兜底），见 `docs/CLIENT_UI_LESSONS.zh.md`。
 - 可能为 undefined 的草稿值，布尔守卫提取一次复用，**严禁**同函数内二次裸访问（`draft.xxx.length` 式崩溃已有先例）。
 - client 源码不进 tsc program；宿主包一律 type-only import；`RULES`/样式定义必须先于 `inject()` 调用。
 - 构建零改动：`scripts/build-client.cjs` 直接吃新文件。
@@ -174,8 +174,8 @@ MemorySection.tsx ──操作──▶ MemorySectionController（memory-section
 
 ## 8. 文档更新
 
-- `README.md` / `README.zh-CN.md`：功能特性补"记忆管理中心"；架构段补 section 说明。
-- `docs/TECH_DESIGN.zh-CN.md` / `.md` §7.7 / §7.8：把"设置 UI **暂未**消费该服务"更新为已实现，补 H1–H3 的 wire 变更与客户端挂载模式。
+- `README.md` / `README.zh.md`：功能特性补"记忆管理中心"；架构段补 section 说明。
+- `docs/TECH_DESIGN.zh.md` / `.md` §7.7 / §7.8：把"设置 UI **暂未**消费该服务"更新为已实现，补 H1–H3 的 wire 变更与客户端挂载模式。
 - 本文档的英文镜像 `MEMORY_MANAGER_PLAN.md`（发布前补）。
 
 ## 9. 风险与对策

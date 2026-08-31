@@ -1,6 +1,6 @@
 # dsh-memory 记忆系统分析报告
 
-> **已归档（2026-08-27）**：P0/P1 已随 v0.3.0 落地，P2 有意推迟。本文保留撰写时的现状描述作为改进依据与决策记录；当前架构见 [../TECH_DESIGN.zh-CN.md](../TECH_DESIGN.zh-CN.md)。
+> **已归档（2026-08-27）**：P0/P1 已随 v0.3.0 落地，P2 有意推迟。本文保留撰写时的现状描述作为改进依据与决策记录；当前架构见 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md)。
 
 | | |
 |---|---|
@@ -8,7 +8,7 @@
 | 参照系 | `~/how-ai-agents-remember` 五方案：OpenClaw / Hermes Agent / nanobot / NullClaw / OpenFang |
 | 实证数据 | 当时运行时存储 `~/.dsh/storages/memory.json`：20 条记忆，平均 435 字符，最长 1377 字符（user 6 / global 4 / project 10）；下文引用的条目级样本均已脱敏（去除真实 ID 与敏感内容）|
 | 分析维度 | 记忆深度 · 安全性 · 自动触发检索机制 · 更新时效性 |
-| 实施状态 | **P0 全部七项与 P1 全部六项已于 v0.3.0 落地**（362 测试通过）；P2 三项经评估有意推迟，逐项实现说明见 [IMPLEMENTATION_NOTES_v0.3.0.zh-CN.md](./IMPLEMENTATION_NOTES_v0.3.0.zh-CN.md)。本报告保留撰写时的现状描述作为改进依据。 |
+| 实施状态 | **P0 全部七项与 P1 全部六项已于 v0.3.0 落地**（362 测试通过）；P2 三项经评估有意推迟，逐项实现说明见 [IMPLEMENTATION_NOTES_v0.3.0.zh.md](./IMPLEMENTATION_NOTES_v0.3.0.zh.md)。本报告保留撰写时的现状描述作为改进依据。 |
 
 ---
 
@@ -112,7 +112,7 @@ MemoryEntry = { id, scope, category?, content: string, projectName?,
 
 **现象**：会话开始时经 AGENTS.md 注入的只有指针块（`<!-- dsh-memory:begin --> … notes live in docs/agent-memory/ …`），模型并不会因此去读文件。容易误判为"notes 根本没进上下文"。
 
-**实际机制**：内容走的是另一条通道——`memory-context` 在 order 91 注册的 `<project-notes>` 段，`session/created` 时调用 `projectNotes.snapshotFor(cwd)` 从 KV 存储同步渲染并冻结进会话快照（不经过磁盘文件，与持久化共用同一次渲染，PROJECT_NOTES.zh-CN.md §8）。两条通道各司其职：
+**实际机制**：内容走的是另一条通道——`memory-context` 在 order 91 注册的 `<project-notes>` 段，`session/created` 时调用 `projectNotes.snapshotFor(cwd)` 从 KV 存储同步渲染并冻结进会话快照（不经过磁盘文件，与持久化共用同一次渲染，PROJECT_NOTES.zh.md §8）。两条通道各司其职：
 
 | 通道 | 载体 | 受众 | 携带内容 |
 |---|---|---|---|

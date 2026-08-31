@@ -1,6 +1,6 @@
 # DSH 记忆插件横向对比分析报告
 
-> **已归档（2026-08-27）**：P0 七项与 P1 八项已全部落地（v0.5.0）。本文保留作决策依据与借鉴来源记录；当前实现状态见 [../TECH_DESIGN.zh-CN.md](../TECH_DESIGN.zh-CN.md)。
+> **已归档（2026-08-27）**：P0 七项与 P1 八项已全部落地（v0.5.0）。本文保留作决策依据与借鉴来源记录；当前实现状态见 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md)。
 >
 > 分析对象：`~/dsh-memory-reference-project` 下的 `dsh-agent-memory`、`dsh-memory`（@max-null 版）、`dsh-memory-evolve`，对比当前项目 `/home/chenhw7/dsh-memory`（@chenhw7/dsh-memory v0.4.0）。
 > 态度声明：三个参考项目实现路线差异极大，各有取舍；本文只提炼**可验证、附出处**的借鉴点，同时如实指出它们的问题，不盲目移植。
@@ -169,11 +169,11 @@ suggest 队列（`SUGGESTIONS.jsonl`，同内容重复建议只累计 hits 并�
 5. ✅ **browse/时间维度检索入口**：`memory_list` 增加按时间分桶浏览或 since/until 过滤（借鉴 agent-memory memory_browse + evolve since/until）。
    > **已完成（2026-08-26）**：`memory_list` 新增 `since`/`until` 参数（createdAt 毫秒边界、含端点），窗口内 newest-first 分页，`earliest/latest` 元数据随窗口收窄，空窗且库非空时提示放宽过滤；与 scope/projectName 过滤可组合。
 6. ✅ **IMPLEMENTATION 契约文档**：记录本插件依赖的宿主 API 契约，每条附 harness 源码 文件:行号 出处（借鉴 agent-memory 取证回写纪律），降低 harness 升级时的回归成本。
-   > **已完成（2026-08-26）**：`docs/HOST_CONTRACT.zh-CN.md`——存储域、settings 热更、system-prompt 注入、会话事件面（compaction/end 数据形状、agent/pre-step waterfall）、session-projection、LLM 调用纪律、Typert 远程服务与 /api 信任围栏、客户端 slot 八个板块逐条附出处，末尾附 harness bump 时的八项核对清单。
+   > **已完成（2026-08-26）**：`docs/HOST_CONTRACT.zh.md`——存储域、settings 热更、system-prompt 注入、会话事件面（compaction/end 数据形状、agent/pre-step waterfall）、session-projection、LLM 调用纪律、Typert 远程服务与 /api 信任围栏、客户端 slot 八个板块逐条附出处，末尾附 harness bump 时的八项核对清单。
 7. ✅ **记忆的可编辑性闭环（复审新增，坐标系标准 7）**：Memory section 二期把"只读浏览"补成"写路径闭环"——条目编辑/删除/归档操作（采纳前可编辑，借鉴 evolve 审阅面板的"编辑后采纳"）；编辑直接落 KV、notes 由渲染层重建，保持 store 单一真源。与 P1-1 待确认队列共用同一 UI 分区，是同一轮 UI 迭代的自然范围。
    > **已完成（2026-08-26）**：Manage 页每行新增 编辑（行内表单：content/category/summary）/置顶/归档（手动盖 staleSince 戳，与软衰减同一表示，注入隐藏但可搜索可复活）/两段式删除；remote 服务相应新增 `archive` 方法并给 `update` 补 summary 字段；全部操作失败行内报错且不清空列表；client jsdom 测试扩至 24 条覆盖各交互。
 8. ✅ **index 模式转正评估（复审新增，坐标系标准 1）**：P0-4 summary tag 与 P0-6 条数上限/token 口径就位后，用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档——让"两级结构"从配置面里的一项变成可辩护的默认行为，而不是拍脑袋换默认值。
-   > **已完成（2026-08-26）**：`docs/INDEX_MODE_EVALUATION.zh-CN.md`。实测（24 条库存）：policy-only ≈344 token 恒定零条目；index ≈955 token 全覆盖 24/24 存在行；full ≈809 token 但已触发 20 条上限折叠至 20/24。**裁决：不改出厂默认**——golden set 只证明"能搜到"（success@5=100%），不能证明"会去搜"；policy-only 保持默认克制姿态，index 定位为文档中的推荐进阶档（库存大或观察到漏搜时升级），并附实测成本数字。
+   > **已完成（2026-08-26）**：`docs/INDEX_MODE_EVALUATION.zh.md`。实测（24 条库存）：policy-only ≈344 token 恒定零条目；index ≈955 token 全覆盖 24/24 存在行；full ≈809 token 但已触发 20 条上限折叠至 20/24。**裁决：不改出厂默认**——golden set 只证明"能搜到"（success@5=100%），不能证明"会去搜"；policy-only 保持默认克制姿态，index 定位为文档中的推荐进阶档（库存大或观察到漏搜时升级），并附实测成本数字。
 
 **P2（大工程、按真实需求立项）**
 1. **project 记忆的 git 同步/团队共享**：条目身份证（内容确定性 ID）+ 三方合并 + 专属分支。先做"项目级导出导入 + ID 对齐"这一步可以拿到 80% 价值；完整 sync 对账请参考 evolve `lib/sync/`（repo/merge/entryid/identity 四件套共 ~2100 行，复杂度集中在身份与冲突 GUI）。**立项前置评估**：记忆离开本机进共享仓库后威胁模型改变（跨设备长历史、协作者可读），现有写入口密钥扫描必须扩展到共享路径，否则共享等于放大泄漏面。

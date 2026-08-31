@@ -1,8 +1,2 @@
-# Bilingual-pair consistency record: the git blob hash of each side as of the last
-# confirmed-consistent state. Both languages carry equal authority; after editing either
-# side, bring the other along and re-record with:
-#   git hash-object .agents/notes/README.md .agents/notes/README.zh.md
-# (The upstream pairing gate `pnpm run verify-translation-pairing` does not run in this
-# repository; this record is maintained by hand.)
-README.md: 439a01e3bb0559a258ccfcca52eac2114829c746
-README.zh.md: d379b64ecc7337dbea240a2233e19056576427e6
+README.md: 0be2024c9dc661e23817502175538f2e424b23ee
+README.zh.md: bc71932633086e08c0163909bf6fc2475179b461

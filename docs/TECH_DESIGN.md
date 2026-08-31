@@ -8,7 +8,7 @@
 | Language / runtime | TypeScript (strict, ESM), Node.js 22 |
 | License | MIT |
 | Status | Implemented, published to npm |
-| 中文版 | [TECH_DESIGN.zh-CN.md](./TECH_DESIGN.zh-CN.md) |
+| 中文版 | [TECH_DESIGN.zh.md](./TECH_DESIGN.zh.md) |
 
 ---
 
@@ -26,7 +26,7 @@
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt sections (`memory` @90, `project-notes` @91) + step-level auto-recall middleware; owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (three tabs, full write path) |
 
-Memories are structured records with three scopes (`global` / `project` / `user`), persisted to a single JSON file under `$DSH_HOME/storages/`. Every write path is security-scanned against secrets, prompt-injection, and exfiltration patterns; every prompt-facing read path re-redacts scanner-violating content (`redactBlocked`). All behavior is configurable from two live settings namespaces (`memory`, `memory-review`) and applies without restart. Retrieval quality is evidence-backed, not asserted: a fixed golden set of 24 entries × 24 queries (English + Chinese) runs in CI against the real store (success@5 = 100%, MRR = 0.958), and the standing-injection cost of each prompt mode is measured the same way (see [INDEX_MODE_EVALUATION.zh-CN.md](./INDEX_MODE_EVALUATION.zh-CN.md)).
+Memories are structured records with three scopes (`global` / `project` / `user`), persisted to a single JSON file under `$DSH_HOME/storages/`. Every write path is security-scanned against secrets, prompt-injection, and exfiltration patterns; every prompt-facing read path re-redacts scanner-violating content (`redactBlocked`). All behavior is configurable from two live settings namespaces (`memory`, `memory-review`) and applies without restart. Retrieval quality is evidence-backed, not asserted: a fixed golden set of 24 entries × 24 queries (English + Chinese) runs in CI against the real store (success@5 = 100%, MRR = 0.958), and the standing-injection cost of each prompt mode is measured the same way (see [INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)).
 
 ---
 
@@ -58,14 +58,14 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 - **G4 — Relevance-ranked retrieval.** `memory_search` ranks by BM25 over CJK-aware tokenization (unigrams + bigrams), pinning important entries ahead of equal-relevance matches.
 - **G5 — Automatic learning.** (a) Periodic review extraction when enough candidate signals accumulate — including verified failure-streak pitfalls; (b) flush extraction when compaction shadows context; (c) flush extraction on session dispose; (d) a budget-gated curator pass that re-summarizes oversized entries.
 - **G6 — Two-tier lifecycle.** Overdue `project` entries are hard-decayed (removed); overdue `global`/`user` entries are soft-decayed (stamped `staleSince`, hidden from standing injections but still searchable); pinned entries are always exempt.
-- **G7 — Project-notes prompt section.** Conventions and pitfalls render from the KV store into every session's system prompt (the `project-notes` section), with no double injection against the memory section — and no files written into the user's repository (ADR-6, see PROJECT_NOTES.zh-CN.md).
+- **G7 — Project-notes prompt section.** Conventions and pitfalls render from the KV store into every session's system prompt (the `project-notes` section), with no double injection against the memory section — and no files written into the user's repository (ADR-6, see PROJECT_NOTES.zh.md).
 - **G8 — Safe writes *and* safe reads.** Every write path scans content for secrets / injection / exfiltration; every prompt-facing surface re-redacts content that fails the scan.
 - **G9 — Frontend-configurable, live.** All settings exposed through the dsh settings UI (four cards over two namespaces) and applied without restart.
 - **G10 — One-command install / uninstall.** `dsh plugin add` / `dsh plugin remove`; uninstall preserves user data.
 - **G11 — Human governance on the write path.** An optional confirm mode routes every automatic extraction *and* model-initiated write through a pending-proposal queue (repeated signals accumulate `hits`); adoption (with edits) is the only way a proposal becomes a memory, so the model can never self-promote.
 - **G12 — Measurable retrieval & injection economics.** A fixed golden set turns recall quality into CI-guarded metrics (success@k / P@1 / MRR, zh/en slices) and per-mode standing-injection cost into numbers; prompt budgets report `≈tokens` next to characters.
 
-Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [CLIENT_UI_LESSONS.zh-CN.md](./CLIENT_UI_LESSONS.zh-CN.md) (zh-CN).
+Client UI development lessons — including the esbuild CJS var-hoisting bug that prevented CSS injection, and the host's non-exported component constraint — are documented in [CLIENT_UI_LESSONS.zh.md](./CLIENT_UI_LESSONS.zh.md) (zh-CN).
 
 ---
 
@@ -606,7 +606,7 @@ A pure, dependency-free module that turns "the retrieval is strong" from a struc
 
 - **Golden fixture:** `GOLDEN_ENTRIES` — 24 topically distinct entries across the three scopes (12 English / 6 Chinese / 6 mixed), with a few deliberate decoy tokens (two entries share 端口/port) so precision stays honest — and `GOLDEN_CASES` — 24 query→relevant-ids pairs in keyword and question styles.
 - **Recall evaluation:** `evaluateRecall(searcher, k = 5)` runs every case against a store-shaped search face (the real `DomainMemoryStore` in the spec) and aggregates **success@k** (all relevant ids inside the top-k), **P@k**, **P@1**, **MRR**, plus zh/en slices. Current baseline: success@5 = 100%, P@1 = 91.7%, MRR = 0.958. The spec floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh success@5 ≥ 0.8) make any tokenizer/weight/budget regression a CI failure.
-- **Injection cost:** `measureInjectionCost(mode, renderedSection, …)` reports rendered characters and ≈tokens (4-chars/token heuristic, the same estimate the snapshot footer uses) per `policy-only` / `index` / `full` mode over the fixture store — the input to the index-mode verdict ([INDEX_MODE_EVALUATION.zh-CN.md](./INDEX_MODE_EVALUATION.zh-CN.md)): keep `policy-only` as the default; `index` is the recommended power mode.
+- **Injection cost:** `measureInjectionCost(mode, renderedSection, …)` reports rendered characters and ≈tokens (4-chars/token heuristic, the same estimate the snapshot footer uses) per `policy-only` / `index` / `full` mode over the fixture store — the input to the index-mode verdict ([INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)): keep `policy-only` as the default; `index` is the recommended power mode.
 - **Known boundary, on the record:** a pure-Chinese query against a pure-English entry has zero lexical overlap and necessarily misses — lexical BM25 does not promise cross-language semantic recall; that is an embeddings-layer problem, a different order of engineering.
 
 The module is exported as `@chenhw7/dsh-memory/benchmark` (types included) so the fixture and metrics can be reused outside the spec.
@@ -882,4 +882,4 @@ src/
 
 ---
 
-*Companion documents: [README.md](../README.md) (user guide), [README.zh-CN.md](../README.zh-CN.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh-CN.md)), [中文版技术方案](./TECH_DESIGN.zh-CN.md), [Client UI Lessons](./CLIENT_UI_LESSONS.zh-CN.md) (zh-CN), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh-CN.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*
+*Companion documents: [README.md](../README.md) (user guide), [README.zh.md](../README.zh.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh.md)), [中文版技术方案](./TECH_DESIGN.zh.md), [Client UI Lessons](./CLIENT_UI_LESSONS.zh.md) (zh-CN), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*
