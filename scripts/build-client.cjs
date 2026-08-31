@@ -25,7 +25,7 @@ const externals = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-locale/client',
   '@deepseek-ai/dsh-api-remotes/client',
   '@deepseek-ai/dsh-client-ui-settings/client',

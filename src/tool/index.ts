@@ -11,8 +11,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
+// Type-only: merges the `settings` service (SettingsProvider) into the Context
+// so `sctx.settings` types in this module.
+import type {} from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {
   MemoryCategory,
@@ -27,9 +29,9 @@ export const name = 'tool-memory'
 export const inject = ['tools']
 
 /** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
-const MEMORY_NS = settingsNamespace('memory')
+const MEMORY_NS = 'memory'
 /** The `memory-review` settings namespace — read cross-namespace (owned by memory-review). */
-const REVIEW_NS = settingsNamespace('memory-review')
+const REVIEW_NS = 'memory-review'
 
 /** Default for the search-result cap when the namespace value is absent. */
 const DEFAULT_MAX_SEARCH_RESULTS = 50

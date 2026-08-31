@@ -79,6 +79,12 @@
 
 - 准备一个要添加记忆能力的 profile（本文以 `web` 为例）。
 
+> [!IMPORTANT]
+> **Harness 渠道：`alpha`（0.1.2-alpha.x）。** 本 bundle 按 `@deepseek-ai/dsh-settings`
+> 0.1.2-alpha API（`ctx.settings.installSection`）构建，peer 范围为 `^0.1.2-alpha.2`。
+> 请从 `alpha` 渠道安装 dsh——rc（`next`）线仍带着已被移除的模块级 helper，无法加载
+> 本 bundle。见[已知限制](#已知限制)。
+
 ### 从 npm 安装（推荐）
 
 一条命令。npm 上的 tarball 是预构建的，安装时 pnpm 不会在你的机器上运行任何构建脚本，也不需要额外的 pnpm 配置：
@@ -361,6 +367,7 @@ memory:
 - **提取质量跟随会话模型** — review/flush/curator 复用会话当前路由的 provider/model，除非显式覆盖。
 - **会话中途的提取在下次压缩或新会话前不会出现在提示里** — 注入快照为 KV-cache 稳定性而冻结；步级自动召回（可选）提供逐步新鲜度。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
+- **要求 alpha 渠道（0.1.2-alpha.x）** — 本 bundle 使用 0.1.2-alpha 的 settings API（`ctx.settings.installSection`、host-only 投影注册），peer 范围为 `^0.1.2-alpha.2`。rc（`next`）线仍是旧的模块级 `installSettingsSection` helper，无法加载本 bundle；请从 `alpha` dist-tag 安装 dsh。client bundle 同样对齐 alpha 客户端包（`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`），它们取代了已移除的 `dsh-client-runtime`。
 
 ## 许可证
 

@@ -13,7 +13,9 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only: merges the `settings` service (SettingsProvider) into the Context
+// so `ctx.settings` types in this module.
+import type {} from '@deepseek-ai/dsh-settings'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { scanContent } from '../scanner.ts'
 import type { MemoryStore } from '../index.ts'
@@ -35,7 +37,7 @@ export const name = 'memory-notes'
 export const inject: string[] = []
 
 /** The settings namespace owned by `memory-context`, read here defensively. */
-const MEMORY_NS = settingsNamespace('memory')
+const MEMORY_NS = 'memory'
 
 /**
  * Frozen project-notes content for one project root: the rendered section

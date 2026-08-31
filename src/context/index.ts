@@ -18,7 +18,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only: merges the `settings` service (SettingsProvider) into the Context
+// so `ctx.settings` / `sctx.settings` type in this module.
+import type {} from '@deepseek-ai/dsh-settings'
 import { redactBlocked } from '../scanner.ts'
 import type { MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryStore } from '../index.ts'
@@ -58,7 +60,7 @@ export const name = 'memory-context'
 export const inject = ['systemPrompt']
 
 /** The settings namespace this plugin owns. */
-const NS = settingsNamespace('memory')
+const NS = 'memory'
 
 const DEFAULT_MEMORY_MODE: MemoryMode = 'policy-only'
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
@@ -301,19 +303,21 @@ export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?
 export function apply(ctx: Context, config: MemoryConfig): void {
   // Source thunk for the current resolved settings: the settings scope while
   // one is attached, the composition entry otherwise. Reassigned by
-  // `installSettingsSection` on attach and detach.
+  // `installSection` on attach and detach.
   let current = (): MemoryConfig => config
 
   // Per-session frozen memory snapshots (content + index), read once at session/created.
   const sessionMemory = new WeakMap<Session, FrozenSnapshot>()
 
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => {
-      current = source
-    },
-    // The section text provider reads settings live at each assembly, so a
-    // committed change is picked up without re-judging registration-level facts.
-    onChange: () => {},
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      setSource: (source) => {
+        current = source
+      },
+      // The section text provider reads settings live at each assembly, so a
+      // committed change is picked up without re-judging registration-level facts.
+      onChange: () => {},
+    })
   })
 
   /** Infer the current project name from a session's cwd (basename). */

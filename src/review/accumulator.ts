@@ -20,13 +20,15 @@ import { z as zod } from 'zod'
 import type { ZodType } from 'zod'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-/** The projection key this unit owns in the {@link SessionProjectionMap}. */
+/** The projection key this unit owns in the {@link SessionProjectionStateMap}. */
 export const MEMORY_REVIEW_PROJECTION_KEY = 'memory-review-candidates'
 
+// Host-only projection unit: the accumulated state is consumed by the review
+// drain itself (`stateOf`), never exposed on the client wire (no `wire` view).
 declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionMap {
+  interface SessionProjectionStateMap {
     /** Accumulated candidate memory fragments awaiting LLM extraction. */
-    'memory-review-candidates': AccumulatorView
+    'memory-review-candidates': AccumulatorState
   }
 }
 
@@ -314,7 +316,7 @@ export function applyAccumulator(state: AccumulatorState, event: SessionEvent, p
   return state
 }
 
-/** Zod schema for the accumulator's wire payload. */
+/** Zod schema validating the accumulator's persisted state before a fold seeds it. */
 export const accumulatorSchema: ZodType<AccumulatorView> = zod.object({
   candidates: zod.array(zod.object({
     text: zod.string(),

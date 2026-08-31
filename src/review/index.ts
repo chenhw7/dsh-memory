@@ -24,8 +24,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
+// Type-only: merges the `settings` service (SettingsProvider) into the Context
+// so `sctx.settings` types in this module.
+import type {} from '@deepseek-ai/dsh-settings'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -53,10 +55,10 @@ export const name = 'memory-review'
 export const inject = ['llm']
 
 /** The settings namespace owned by this plugin (live, UI-visible). */
-const NS = settingsNamespace('memory-review')
+const NS = 'memory-review'
 
 /** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
-const MEMORY_NS = settingsNamespace('memory')
+const MEMORY_NS = 'memory'
 
 /** Default for decayDays when the namespace value is absent. */
 const DEFAULT_DECAY_DAYS = 30
@@ -223,11 +225,13 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
  */
 export function apply(ctx: Context, config: Config = {}): void {
   // Live-resolved config: the settings scope while one is attached, the
-  // composition entry otherwise (swapped by installSettingsSection on attach/detach).
+  // composition entry otherwise (swapped by installSection on attach/detach).
   let resolved = (): ResolvedConfig => resolveConfig(config)
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => { resolved = () => resolveConfig(source()) },
-    onChange: () => {},
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      setSource: (source) => { resolved = () => resolveConfig(source()) },
+      onChange: () => {},
+    })
   })
 
   // `decayDays` lives in the `memory` namespace (owned by memory-context).
@@ -260,14 +264,14 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   // Register the projection accumulator (optional: only when sessionProjections
-  // is composed; headless assemblies stay unaffected).
+  // is composed; headless assemblies stay unaffected). Host-only unit: the
+  // state is read back through `stateOf`, so no `wire` view is declared.
   ctx.inject(['sessionProjections'], (pctx) => {
     pctx.sessionProjections.register<typeof MEMORY_REVIEW_PROJECTION_KEY, AccumulatorState>({
       key: MEMORY_REVIEW_PROJECTION_KEY,
-      schema: accumulatorSchema,
+      stateSchema: accumulatorSchema,
       init: () => emptyAccumulator,
       apply: (state, event) => applyAccumulator(state, event, resolved().pitfallStreakThreshold),
-      view: (state: AccumulatorState): AccumulatorView => state,
       stateVersion: 2,
     })
   })
@@ -369,8 +373,9 @@ async function maybeRunReview(
   const projections = ctx.get('sessionProjections')
   if (projections === undefined) return
   const session = agent.session
-  const snapshot = projections.snapshot(session)
-  const state = snapshot.values[MEMORY_REVIEW_PROJECTION_KEY] as AccumulatorState | undefined
+  // Host-state read: the accumulator is a host-only unit (no wire view), so
+  // the state comes from `stateOf`, not the client-facing `snapshot`.
+  const state = projections.stateOf(session, MEMORY_REVIEW_PROJECTION_KEY)
   if (state === undefined) return
   const mark = highWaterMarks.get(session) ?? -1
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)

@@ -16,7 +16,7 @@
  * exact either way.
  */
 
-import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
   MemoryEntryJson,
   MemoryHealthResult,

@@ -12,7 +12,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { MemorySection } from '../src/client/MemorySection.tsx'
 import type { MemorySectionInjected, MemorySectionProps } from '../src/client/MemorySection.tsx'
 import { MEMORY_BATCH_SIZE, MemorySectionController } from '../src/client/memory-section-store.ts'

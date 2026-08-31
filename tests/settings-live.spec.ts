@@ -5,10 +5,10 @@
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SettingsProvider, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import { MemoryStore } from '../src/index.ts'
 import type { MemoryEntry, MemoryId, MemorySearchQuery } from '../src/types.ts'
 import * as tool from '../src/tool/index.ts'
@@ -51,7 +51,7 @@ class MiniStore extends MemoryStore {
 
 const testSignal = new AbortController().signal
 let callCounter = 0
-const MEMORY_NS = settingsNamespace('memory')
+const MEMORY_NS = 'memory' as const
 
 describe('maxSearchResults — live layering via the memory namespace', () => {
   async function setup(compositionCap: number) {
@@ -90,6 +90,24 @@ describe('maxSearchResults — live layering via the memory namespace', () => {
     await ctx.plugin(ToolRuntime)
     ctx.provide('memory', new MiniStore(3))
     await ctx.plugin(tool, { maxSearchResults: 2 })
+    expect(await count(ctx)).toBe(2)
+  })
+
+  it('falls back to the composition entry when the settings provider unloads', async () => {
+    const ctx = new Context()
+    const settingsFiber = await ctx.plugin(TestSettingsProvider)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    ctx.provide('memory', new MiniStore(3))
+    await ctx.plugin(context, {} as never)
+    await ctx.plugin(tool, { maxSearchResults: 2 })
+    // The user layer applies live while the provider stands.
+    await ctx.settings.update(MEMORY_NS, { maxSearchResults: 1 })
+    expect(await count(ctx)).toBe(1)
+    // Unloading the provider (not the consumer) drops every consumer back to
+    // its composition entry: memory-context's installSection detach wiring and
+    // tool-memory's namespace read both return to the entry cap.
+    await settingsFiber.dispose()
     expect(await count(ctx)).toBe(2)
   })
 })

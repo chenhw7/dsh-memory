@@ -81,6 +81,13 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 
 - A profile you want to add memory to (this guide uses `web`).
 
+> [!IMPORTANT]
+> **Harness channel: `alpha` (0.1.2-alpha.x).** This bundle is built against the
+> `@deepseek-ai/dsh-settings` 0.1.2-alpha API (`ctx.settings.installSection`)
+> and declares `^0.1.2-alpha.2` peers. Install dsh from the `alpha` channel —
+> the rc (`next`) line ships the removed module-level helpers and cannot load
+> this bundle. See [Known Limitations](#known-limitations).
+
 ### From npm (recommended)
 
 One command. The published tarball ships prebuilt, so pnpm does not run any build script on your machine and no extra pnpm configuration is needed:
@@ -363,6 +370,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 - **Extraction quality tracks the session model** — review/flush/curator reuse the session's routed provider/model unless explicitly overridden.
 - **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected snapshot is frozen for KV-cache stability; step-level auto recall (opt-in) covers per-step freshness instead.
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
+- **Alpha channel (0.1.2-alpha.x) required** — the bundle uses the 0.1.2-alpha settings API (`ctx.settings.installSection`, host-only projection registrations) and declares `^0.1.2-alpha.2` peers. The rc (`next`) line still ships the removed module-level `installSettingsSection` helper and cannot load this bundle; install dsh from the `alpha` dist-tag. The client bundle likewise targets the alpha client packages (`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`), which replaced the removed `dsh-client-runtime`.
 
 ## License
 
