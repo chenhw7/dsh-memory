@@ -1,0 +1,191 @@
+{
+  "summary": {
+    "projectName": "dsh-memory",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 26,
+    "overview": "项目侧机制齐备（分层 AGENTS.md 指引、30 个测试文件、push/PR 与 tag 双 workflow、OIDC 可信发布），但 30 天窗口内没有任何可回看的会话证据（eligibleSessions=0，采集警告 disabled-source-root / missing-optional-root），行为类结论均为未观测，该缺口保留在证据边界内。两个保留发现都属于\"机制存在但未接线/未对齐\"：改动最热的 src/client 不经过任何类型检查、根 AGENTS.md 对 CI 边界的描述与实际 workflow 矛盾。",
+    "aiAgentPractice": {
+      "inspectedSurfaces": [
+        "Rules",
+        "Skills",
+        "Workflows"
+      ],
+      "coverageRows": [
+        {
+          "surface": "Rules",
+          "scopes": [
+            "Project",
+            "Global"
+          ],
+          "count": 2,
+          "paths": [
+            "AGENTS.md",
+            "~/.qoder/rules/code_rule.md"
+          ]
+        },
+        {
+          "surface": "Skills",
+          "scopes": [
+            "Project",
+            "Global",
+            "Plugin"
+          ],
+          "count": 103,
+          "paths": [
+            ".agents/skills/dsh-archive-agent-notes/SKILL.md",
+            ".agents/skills/dsh-ci-test-reliability/SKILL.md",
+            ".agents/skills/dsh-code-review/SKILL.md",
+            ".agents/skills/dsh-doc/SKILL.md",
+            ".agents/skills/dsh-find-simplifications/SKILL.md",
+            ".agents/skills/dsh-merging-stacked-prs/SKILL.md",
+            ".agents/skills/dsh-pre-push-checks/SKILL.md",
+            ".agents/skills/dsh-prose-standard/SKILL.md",
+            ".agents/skills/dsh-translate-docs/SKILL.md",
+            ".agents/skills/dsh-trim-cot-leakage/SKILL.md",
+            ".agents/skills/record-browser-gif/SKILL.md",
+            "~/.agents/skills/ask-matt/SKILL.md"
+          ]
+        },
+        {
+          "surface": "Hooks",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 2,
+          "paths": [
+            "~/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/qoder-hooks.json"
+          ]
+        },
+        {
+          "surface": "MCP",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 1,
+          "paths": [
+            "~/.qoder/plugins/cache/qoder-bundler/computer-use/.mcp.json"
+          ]
+        },
+        {
+          "surface": "Workflows",
+          "scopes": [
+            "Project"
+          ],
+          "count": 2,
+          "paths": [
+            ".github/workflows/ci.yml",
+            ".github/workflows/publish.yml"
+          ]
+        },
+        {
+          "surface": "Plugins",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 4,
+          "paths": [
+            "~/.qoder/plugins/cache/qoder-bundler/better-harness/.qoder-plugin/plugin.json",
+            "~/.qoder/plugins/cache/qoder-bundler/computer-use/.qoder-plugin/plugin.json",
+            "~/.qoder/plugins/cache/qoder-bundler/qoder-create-plugin",
+            "~/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/plugin.json"
+          ]
+        },
+        {
+          "surface": "Commands",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        },
+        {
+          "surface": "Memories",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        }
+      ],
+      "repositorySourceRows": []
+    },
+    "assignmentSummaries": [],
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 70,
+        "summary": "根 AGENTS.md、docs/AGENTS.md、TECH_DESIGN（双语）与 HOST_CONTRACT（带宿主源码出处）提供了清晰的任务边界与权威上下文并已接入会话规则；但其中对 CI 触发边界的描述已与实际 workflow 漂移，且窗口内无会话证据证明实际使用。",
+        "findingRefs": [
+          "agents-md-ci-drift"
+        ]
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 68,
+        "summary": "npm ci / npm run build / npm run test 三条支持路径在 AGENTS.md 与 package.json 中一致可见且可复现；启动与权限边界行为在本窗口内未被观测到。",
+        "findingRefs": []
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 66,
+        "summary": "30 个测试文件与每次 push/PR 触发 build+test 的 CI 已接线（tsc 由 build 承担类型门禁）；但改动最频繁的 src/client 被排除在 tsc 之外且 esbuild 不做类型检查，验证覆盖存在确定性缺口。",
+        "findingRefs": [
+          "client-typecheck-gap"
+        ]
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 62,
+        "summary": "tag 与版本一致性校验、actions 按 commit SHA 固定、OIDC 可信发布与 prepublishOnly（build && test）门禁齐备并已按 tag 推送接线；本窗口内没有可核验的实际交付事件，回滚/恢复路径未经检视。",
+        "findingRefs": []
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 35,
+        "summary": "完成了有界评审：窗口内 0 个会话事件，重复工作与维护漂移均无法判定（insufficient-episodes / not-evaluable），该证据缺口保留在证据边界内；建议先用插件的 session-analysis sources 诊断恢复会话采集，35 分仅代表完成了有界评审。",
+        "findingRefs": []
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "client-typecheck-gap",
+      "title": "改动最频繁的 src/client 出现类型错误时，构建与测试仍会全绿通过",
+      "severity": "Medium",
+      "reason": "事实：tsconfig.json 将 src/client 排除在 tsc 之外（exclude 第 34 行）；scripts/build-client.cjs 仅用 esbuild 打包（不做类型检查）；vitest 同样经 esbuild 转译执行；CI 只运行 build+test。因此没有任何门禁对 src/client 做静态类型检查，而近 89 次提交中 src/client 恰是改动最热的路径（client/index.ts 14 次提交，MemorySection.tsx 净变更约 2039 行）。推断：客户端类型回归只能靠单个行为测试兜底，与项目\"在类型化边界信任 TypeScript\"的前提脱节。边界：AGENTS.md 已如实记录该约定为既定架构决策，窗口内未观测到实际类型事故。",
+      "expectedOutput": [
+        "Update the existing Config owner identified by the reviewed evidence and retain a focused validation result."
+      ],
+      "expectedArtifact": "Config",
+      "aiFixPrompt": "/better-harness fix this issue\n\n为 src/client 增加\"仅检查、不发射\"的类型门禁：新增 tsconfig.client.json（继承现有 tsconfig，include 限定 src/client，按 build-client.cjs 与 vitest.config.ts 已声明的 automatic JSX 运行时配置对应 tsc 选项，noEmit），并把该检查接入现有 npm run build 或 CI 的 build-and-test 任务；不得改变 scripts/build-client.cjs 的产物路径与包装格式；同步更新根 AGENTS.md 中\"客户端不经宿主构建类型检查\"的表述，使文档与新门禁一致。\n\n## Validation\n\n- 在 src/client 临时注入一个类型错误，确认新门禁让 npm run build 失败\n- 移除注入后 npm run build && npm test 全绿，lib/client/index.js 产物格式不变",
+      "dimensionRefs": [
+        "change-validation"
+      ]
+    },
+    {
+      "id": "agents-md-ci-drift",
+      "title": "根 AGENTS.md 与实际 CI 行为相互矛盾，代理无法确定 push 后是否有测试兜底",
+      "severity": "Low",
+      "reason": "事实：根 AGENTS.md Commands 段注释写\"CI = GitHub Actions publish.yml on tag push\"；而 .github/workflows/ci.yml 的自述与配置是每次 push main 与 PR 都运行 npm run build + npm test，publish.yml 才是 v* tag 触发的发布流。推断：把根 AGENTS.md 当权威上下文的代理会把 push 到 main 读成没有 CI 检查，低估交付边界的验证覆盖。不确定性：这只是文档漂移，两个 workflow 本身行为正常。",
+      "expectedOutput": [
+        "Update the existing Document owner identified by the reviewed evidence and retain a focused validation result."
+      ],
+      "expectedArtifact": "Document",
+      "aiFixPrompt": "/better-harness fix this issue\n\n更新根 AGENTS.md Commands 段中对 CI 的注释，使其与 .github/workflows 一致：ci.yml 在每次 push main 与 PR 运行 build+test，publish.yml 在 v* tag 推送时执行 OIDC 发布；不改动两个 workflow 本身，并遵守项目\"一处事实一个家\"的文档规约。\n\n## Validation\n\n- 重读根 AGENTS.md 与 ci.yml、publish.yml，三者对触发边界的描述一致\n- 未引入与 docs/ 下其他文档重复的事实归属",
+      "dimensionRefs": [
+        "task-understanding"
+      ]
+    }
+  ]
+}

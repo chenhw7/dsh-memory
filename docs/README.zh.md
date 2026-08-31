@@ -24,6 +24,7 @@
 | 文档 | 曾是什么 |
 |---|---|
 | [archive/MEMORY_SYSTEM_ANALYSIS.zh.md](./archive/MEMORY_SYSTEM_ANALYSIS.zh.md) | v0.2.x 系统分析（对五个参照方案）+ P0/P1/P2 路线图。P0/P1 已随 v0.3.0 落地，P2 有意推迟。文中条目级引述已脱敏。 |
+| [archive/MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md](./archive/MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md) | v0.7.0 继任深度评估（前作系统分析的接续）：核验前作 8 项指控已在当前代码修复，评估检索语义、召回兑现、并发与安全不对称等现状，附修复路线建议。 |
 | [archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md](./archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md) | v0.3.0 实施说明（P0×7 + P1×6）。 |
 | [archive/memory-plugins-comparison-zh.md](./archive/memory-plugins-comparison-zh.md) | 与三个参考 dsh 记忆插件的横向对比 + P0/P1 治理改进清单，全部已随 v0.5.0 落地。 |
 | [archive/MEMORY_MANAGER_PLAN.zh.md](./archive/MEMORY_MANAGER_PLAN.zh.md) | 记忆管理中心 UI 实施规划；一期已随 v0.4.0 发布，§12 记录实施偏差（如弃 `$mount` 改 `/api` RPC 直呼）。 |

@@ -26,6 +26,7 @@ Completed planning/analysis documents, kept for the "why": decision rationale, v
 | Document | What it was |
 |---|---|
 | [archive/MEMORY_SYSTEM_ANALYSIS.zh.md](./archive/MEMORY_SYSTEM_ANALYSIS.zh.md) | v0.2.x system analysis against five reference designs + P0/P1/P2 roadmap. P0/P1 shipped in v0.3.0; P2 deliberately deferred. Entry-level quotes are anonymized. |
+| [archive/MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md](./archive/MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md) | v0.7.0 successor deep evaluation (follow-up to the system analysis): verifies the eight prior findings as fixed, assesses retrieval semantics, recall fulfillment, concurrency, and the security asymmetry, with a remediation roadmap. |
 | [archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md](./archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md) | v0.3.0 implementation notes (P0×7 + P1×6). |
 | [archive/memory-plugins-comparison-zh.md](./archive/memory-plugins-comparison-zh.md) | Comparison against three reference dsh memory plugins + the P0/P1 governance program, all shipped in v0.5.0. |
 | [archive/MEMORY_MANAGER_PLAN.zh.md](./archive/MEMORY_MANAGER_PLAN.zh.md) | Memory-management UI implementation plan; phase 1 shipped in v0.4.0, §12 records implementation deviations (e.g. `/api` RPC instead of `$mount`). |
