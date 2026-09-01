@@ -526,17 +526,17 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 `scanContent(content): { allowed, reasons }` 是**零依赖纯模块**，被工具边界、store 契约、review 提取器、notes 导出门与 prompt 渲染器共享——彼此互不 import。
 
-三类模式（合计 29 个正则）：
+三类模式（合计 37 个正则）：
 
 | 类别 | 模式（示例） |
 |---|---|
 | `secret`（16） | DeepSeek / OpenAI / Anthropic API key、GitHub token、AWS access key + 40 位 secret、通用 Bearer token、JWT、SSH 私钥头、Slack token、Google API key、Stripe key、HuggingFace token、Twilio API key、URL 内嵌 token、Git 凭据 URL |
-| `injection`（9） | "ignore previous instructions"、"disregard prior …"、"you are now a …"、"forget everything"、"new system prompt"、"act as a different …"、"do not follow previous …"、"override … instructions"、`[system]: ignore` |
+| `injection`（17） | 英文 9 条："ignore previous instructions"、"disregard prior …"、"you are now a …"、"forget everything"、"new system prompt"、"act as a different …"、"do not follow previous …"、"override … instructions"、`[system]: ignore`；中文 8 条对应同一批攻击类（忽略/无视前文指令、拒绝遵循指令、角色接管"你现在扮演"、伪造新系统提示词、提示词提取、伪造系统权威框、输出协议伪造）——只匹配第二人称祈使或角色指派框架，第一人称自我陈述与文档性提及不命中；常驻中英双语语料（11 攻击 + 30 正当）把误报率钉在 0 |
 | `exfiltration`（4） | `curl/wget …` 指向 `DSH_/DEEPSEEK_/API_/SECRET_/TOKEN_/KEY_` 环境变量、`print/echo/cat/export` 同类变量、`base64/eval --decode` 同类变量、"send the api key to …" |
 
 命中即 fail closed：以 `"<kind>: <pattern>"` reasons 拒绝写入。
 
-- **白名单：** `setAllowlist({ patternName: [expectedValues…] })` 在模式名匹配*且*内容包含期望值时压制该命中——文档/夹具中的脱敏样例 key 可存，同形状的真 key 依然被抓。
+- **白名单：** `setAllowlist({ patternName: [expectedValues…] })` 在模式名匹配*且*内容包含期望值时压制该命中——文档/夹具中的脱敏样例 key 可存，同形状的真 key 依然被抓。生产接线：`tool-memory` 的 Config 字段 `scannerAllowlist` 在插件组合时一次性安装（缺省为空），经 `cordis.patch.yml` 或设置可配。
 - **读取时脱敏：** `redactBlocked(content)` 在存量内容将重新进入 LLM 上下文的每一处（prompt 快照、索引、自动召回围栏、notes 相关判断、提取快照）重跑扫描，未通过则替换为 `[BLOCKED: reasons]`。工具读面（`memory_search`/`memory_list`/`memory_get` 投影与渲染）与管理 UI 读面（remote 条目投影）同样脱敏展示。原件留在 store 里供用户检查——静默删除只会掩盖攻击；取原文走显式破窗路径：`memory_get` 传 `raw: true`（模型修复用）或 remote `getRaw`（UI 编辑器用），两者每次调用都由 store 追加一条 `readRaw` 审计记录（`source: 'ui'`）。
 
 ### 7.6 Invariant 伴生件（`src/invariant.ts`）
@@ -833,7 +833,7 @@ src/
 ├── types.ts              # 纯领域类型（MemoryEntry + summary、MemorySuggestion、
 │                         #   audit）+ memory/* SessionEventMap 声明
 ├── brand.ts              # MemoryId/AuditId/SuggestionId 品牌类型 + UUID 工厂
-├── scanner.ts            # scanContent（29 正则）、allowlist、redactBlocked
+├── scanner.ts            # scanContent（37 正则）、allowlist、redactBlocked
 ├── invariant.ts          # 空操作 invariant 伴生件（认领包名）
 ├── benchmark/
 │   └── index.ts          # golden-set 夹具 + evaluateRecall（success@k/P@1/MRR、

@@ -526,17 +526,17 @@ The system prompt is untouched — the block rides only in this step's message c
 
 `scanContent(content): { allowed, reasons }` is a **dependency-free pure module** shared by the tool boundary, the store contract, the review extractor, the notes exporter, and the prompt renderers — none imports the others.
 
-Three pattern classes (29 regexes total):
+Three pattern classes (37 regexes total):
 
 | Class | Patterns (examples) |
 |---|---|
 | `secret` (16) | DeepSeek / OpenAI / Anthropic API keys, GitHub tokens, AWS access key + 40-char secret, generic Bearer token, JWT, SSH private-key header, Slack tokens, Google API keys, Stripe key, HuggingFace token, Twilio API key, URL-embedded token, Git credentials URL |
-| `injection` (9) | "ignore previous instructions", "disregard prior …", "you are now a …", "forget everything", "new system prompt", "act as a different …", "do not follow previous …", "override … instructions", `[system]: ignore` |
+| `injection` (17) | 9 English: "ignore previous instructions", "disregard prior …", "you are now a …", "forget everything", "new system prompt", "act as a different …", "do not follow previous …", "override … instructions", `[system]: ignore`; 8 Chinese covering the same attack classes (ignore/disregard prior instructions, refusal-to-follow, role takeover "你现在扮演", forged new system prompt, prompt extraction, fake authority framing, output-protocol forgery) — matching only second-person imperatives or role assignments; first-person self-statements and documentary mentions never hit. A resident bilingual corpus (11 attacks + 30 legitimate) pins the false-positive rate at zero |
 | `exfiltration` (4) | `curl/wget …` targeting `DSH_/DEEPSEEK_/API_/SECRET_/TOKEN_/KEY_` env vars, `print/echo/cat/export` of the same, `base64/eval --decode` of the same, "send the api key to …" |
 
 A hit fails closed: the write is rejected with `"<kind>: <pattern>"` reasons.
 
-- **Allowlist:** `setAllowlist({ patternName: [expectedValues…] })` suppresses a hit when its pattern name matches *and* the content contains one of the expected values — documentation/fixtures with redacted sample keys stay storable while real keys of the same shape are caught.
+- **Allowlist:** `setAllowlist({ patternName: [expectedValues…] })` suppresses a hit when its pattern name matches *and* the content contains one of the expected values — documentation/fixtures with redacted sample keys stay storable while real keys of the same shape are caught. Production wiring: the `scannerAllowlist` field of tool-memory's Config is installed once at plugin composition (empty by default), configurable via `cordis.patch.yml`.
 - **Load-time redaction:** `redactBlocked(content)` re-runs the scan on stored content wherever it would re-enter an LLM context (prompt snapshot, index, auto-recall fence, notes-boundary decisions, extraction snapshots) and substitutes `[BLOCKED: reasons]`. The tool read face (`memory_search`/`memory_list`/`memory_get` projection and rendering) and the management-UI read face (remote entry projection) redact their display the same way. The original stays in the store for user inspection — silent deletion would only hide the attack; reading it back goes through an explicit break-glass path: `memory_get` with `raw: true` (model-side repair) or the remote `getRaw` method (UI editor), each call appending a `readRaw` audit record (`source: 'ui'`) through the store.
 
 ### 7.6 Invariant companion (`src/invariant.ts`)
@@ -833,7 +833,7 @@ src/
 ├── types.ts              # pure domain types (MemoryEntry + summary, MemorySuggestion,
 │                         #   audit) + memory/* SessionEventMap declarations
 ├── brand.ts              # MemoryId/AuditId/SuggestionId branded types + UUID factories
-├── scanner.ts            # scanContent (29 regexes), allowlist, redactBlocked
+├── scanner.ts            # scanContent (37 regexes), allowlist, redactBlocked
 ├── invariant.ts          # no-op invariant companion (name claim)
 ├── benchmark/
 │   └── index.ts          # golden-set fixture + evaluateRecall (success@k/P@1/MRR,
