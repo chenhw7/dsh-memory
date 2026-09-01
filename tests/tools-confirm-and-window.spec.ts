@@ -5,13 +5,14 @@
  *   instead of writing entries (the model never self-promotes);
  * - `memory_list` accepts `since`/`until` epoch-ms bounds on createdAt.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { scanContent, validateProjectScope, MemoryStore } from '../src/index.ts'
+import { setAllowlist, getAllowlist } from '../src/scanner.ts'
 import type { AddMemoryInput, AddSuggestionInput, AuditSource, MemoryEntry, MemoryId, MemoryHealth, MemorySearchQuery, MemorySuggestion } from '../src/types.ts'
 
 import * as tool from '../src/tool/index.ts'
@@ -267,6 +268,79 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
     const result = await callTool(ctx, 'memory_add', { scope: 'global', content: 'auto path' })
     const value = result.value as { entry?: { content: string }; pending?: boolean }
     expect(value.pending).toBeUndefined()
+    expect(store.rows.size).toBe(1)
+  })
+})
+
+describe('scannerAllowlist production wiring (§3.10)', () => {
+  /** A sample that trips the DeepSeek secret pattern but is a documented placeholder. */
+  const SAMPLE_KEY = 'sk-' + '0'.repeat(32)
+
+  afterEach(() => {
+    // Restore the module-level allowlist: tool.apply may have overwritten it.
+    setAllowlist({})
+  })
+
+  it('a composition without scannerAllowlist keeps the empty default (no suppression)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    ctx.provide('memory', new ScriptedTimeStore())
+    await ctx.plugin(tool, { maxSearchResults: 50 })
+    expect(getAllowlist()).toEqual({})
+    expect(scanContent(SAMPLE_KEY).allowed).toBe(false)
+  })
+
+  it('a composition with scannerAllowlist suppresses exactly the expected value', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const store = new ScriptedTimeStore()
+    ctx.provide('memory', store)
+    // Config-driven: the allowlist arrives through the tool plugin's Config,
+    // the same surface a deployment edits in cordis.patch.yml.
+    await ctx.plugin(tool, {
+      maxSearchResults: 50,
+      scannerAllowlist: { 'DeepSeek API key': [SAMPLE_KEY] },
+    })
+    expect(getAllowlist()).toEqual({ 'DeepSeek API key': [SAMPLE_KEY] })
+
+    // The allowlisted placeholder passes the write path…
+    const ok = await callTool(ctx, 'memory_add', { scope: 'global', content: `sample key: ${SAMPLE_KEY}` })
+    expect(ok.isError).toBe(false)
+    expect(store.rows.size).toBe(1)
+  })
+
+  it('the allowlist does not suppress a real key of the same shape', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const store = new ScriptedTimeStore()
+    ctx.provide('memory', store)
+    await ctx.plugin(tool, {
+      maxSearchResults: 50,
+      scannerAllowlist: { 'DeepSeek API key': [SAMPLE_KEY] },
+    })
+    // A different value matching the same pattern is still caught…
+    expect(scanContent('sk-' + 'a'.repeat(40)).allowed).toBe(false)
+    // …and the write path rejects it loudly.
+    const rejected = await callTool(ctx, 'memory_add', { scope: 'global', content: 'real key: ' + 'sk-' + 'a'.repeat(40) })
+    expect(rejected.isError).toBe(true)
+    expect(store.rows.size).toBe(0)
+  })
+
+  it('memory_add without a scanner-hit stays unaffected by the wiring', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const store = new ScriptedTimeStore()
+    ctx.provide('memory', store)
+    await ctx.plugin(tool, {
+      maxSearchResults: 50,
+      scannerAllowlist: { 'DeepSeek API key': [SAMPLE_KEY] },
+    })
+    const clean = await callTool(ctx, 'memory_add', { scope: 'global', content: 'plain convention note' })
+    expect(clean.isError).toBe(false)
     expect(store.rows.size).toBe(1)
   })
 })

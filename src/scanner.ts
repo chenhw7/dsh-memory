@@ -44,6 +44,11 @@ export function setAllowlist(allowlist: ScanAllowlist): void {
   activeAllowlist = allowlist
 }
 
+/** The currently active allowlist, for diagnostics and tests that restore state. */
+export function getAllowlist(): ScanAllowlist {
+  return activeAllowlist
+}
+
 /** Check whether a hit is allowlisted: pattern name matches and the matched substring is expected. */
 function isAllowlisted(content: string, hit: ScanHit): boolean {
   const allowed = activeAllowlist[hit.pattern]
@@ -82,6 +87,24 @@ const INJECTION_PATTERNS: readonly { readonly name: string; readonly re: RegExp 
   { name: 'do not follow', re: /do\s+not\s+follow\s+(?:any\s+)?(?:previous|prior|above)\s+(?:instructions|rules)/i },
   { name: 'override instructions', re: /override\s+(?:all\s+)?(?:previous|prior|system)\s+\w*\s*instructions/i },
   { name: 'system: ignore', re: /\[?system\]?\s*:\s*ignore/i },
+  // ── Chinese (CJK) counterparts ────────────────────────────────────────────
+  // Each rule mirrors one English pattern class above: imperative override
+  // (忽略之前指令 / 无视前文 / 不要遵循之前的指令), role-assignment takeover
+  // (你现在扮演), prompt-extraction (新的系统提示词 / 输出系统提示词), fake
+  // authority framing (系统指令：忽略), and output-protocol forgery
+  // (输出格式伪造). Deliberately conservative: only second-person imperative or
+  // role-assignment framings match — declarative statements about one's own
+  // past behavior (e.g. "我忽略了之前的错误") never hit, and merely documenting
+  // phrases like "系统提示词" is not enough without an override or exfiltration
+  // verb (the legit corpus below pins this down).
+  { name: '忽略之前指令', re: /(?:请|请你)?(?:一律|先|全部|统统)?(?:忽略|无视)(?:之前|先前|以上|上面|上述|前面|系统|收到的)*(?:的)?(?:所有|全部)*[\u4e00-\u9fff]{0,4}?(?:指令|提示词?|规则|设定|约束)/ },
+  { name: '无视前文', re: /(?:请)?(?:一律|全部|统统|先)?(?:无视|不理会|撇开|别管)(?:之前|先前|以上|上面|上述|前面|前文|上下文|system|其他|别的)?(?:的)?(?:所有|全部)?(?:指令|提示词?|设定|约束|它们|这些)/ },
+  { name: '不要遵循之前的指令', re: /(?:请)?不要(?:再)?(?:遵循|遵守|执行|听从|服从)(?:之前|先前|以上|上面|上述|前面|系统|收到|给出|发送|要求)*?(?:的)?(?:所有)?(?:指令|提示词?|规则)/ },
+  { name: '你现在扮演', re: /(?:从现在起|现在开始|现在)?你(?:现在)?(?:是|扮演(?:成|为)?|来当|来扮演)(?:一?[个名位])?[^\s，。！？,.!?,]{1,12}(?:，|。|!|！|$)/ },
+  { name: '新的系统提示词', re: /(?:新的?|全新|更新|重写|覆盖)(?:的)?(?:系统提示词?|system\s*prompt)(?:，|。|,|\.|\s*(?:从现在起|以后|按我说的|听我的))/i },
+  { name: '输出系统提示词', re: /(?:输出|打印|泄露|复述|逐字(?:输出|复述)|原样(?:输出|复述)|告诉我)(?:你的?|完整的?|全部的?)?(?:系统提示词?|初始指令|设置指令)/ },
+  { name: '系统指令：忽略', re: /(?:\[|\b)(?:系统提示|系统|管理员|system|admin)(?:\]|)\s*[:：]\s*(?:忽略|无视|停止遵守|忘记)(?:之前|先前|以上|上述|前面|全部|所有|一切)/ },
+  { name: '输出格式伪造', re: /(?:之后|以后|后续)(?:的)?(?:所有|每次|每个)?(?:输出|回复|回答|响应)(?:必须|都要|一律|只)(?:以|用|按|包含)(?:JSON|代码块|指定格式|固定格式)/ },
 ]
 
 /** Exfiltration patterns: content that tries to induce tool calls or data egress on later reads. */

@@ -24,7 +24,8 @@ import type {
   MemorySearchQuery,
 } from '../types.ts'
 import { scanContent, validateProjectScope, validateContent } from '../index.ts'
-import { redactBlocked } from '../scanner.ts'
+import { redactBlocked, setAllowlist } from '../scanner.ts'
+import type { ScanAllowlist } from '../scanner.ts'
 
 export const name = 'tool-memory'
 export const inject = ['tools']
@@ -49,11 +50,23 @@ const CATEGORIES = [
 export interface Config {
   /** Maximum entries a `memory_search` returns when the call omits `limit`. */
   maxSearchResults: number
+  /**
+   * Scanner allowlist (§3.10's production path): pattern names mapped to the
+   * exact substrings the deployment expects to appear. A scan hit is
+   * suppressed only when both the pattern name and one expected substring
+   * match — real keys of the same shape stay caught. Absent in yml resolves
+   * to an empty allowlist (no suppression).
+   */
+  scannerAllowlist?: ScanAllowlist
 }
 
 /** Schemastery configuration for the memory tool consumer. */
 export const Config = z.object({
   maxSearchResults: z.number().default(50),
+  // Optional in yml: absent resolves to `{}` — the same shape as "no
+  // suppression". An empty object is indistinguishable from absent, which is
+  // exactly the semantics `setAllowlist({})` gives.
+  scannerAllowlist: z.dict(z.array(z.string())),
 })
 
 /** Model-facing projection of one {@link MemoryEntry}; branded id serializes as a plain string. */
@@ -231,11 +244,17 @@ function formatEntryList(header: string, entries: readonly RenderEntry[]): strin
 /**
  * Register the six memory tools on `ctx.tools`.
  * @param ctx - registrant context carrying the tool registry.
- * @param config - deployment's search-result cap; serves as the composition
- *   `base` for the `memory` namespace (owned by memory-context). The cap is
- *   read live per call so a settings change applies immediately.
+ * @param config - deployment's search-result cap (serves as the composition
+ *   `base` for the `memory` namespace owned by memory-context) and the scanner
+ *   allowlist (§3.10) installed at apply time. The cap is read live per call
+ *   so a settings change applies immediately.
  */
 export function apply(ctx: Context, config: Config): void {
+  // §3.10's production path: install the composition's scanner allowlist
+  // before any write path can run, so a documented false positive is
+  // suppressible from cordis.yml without code changes. Idempotent — each
+  // apply overwrites the module-level allowlist wholesale.
+  setAllowlist(config.scannerAllowlist ?? {})
   // Live-read `maxSearchResults` from the `memory` namespace (owned by
   // memory-context); fall back to the composition entry when no settings
   // service is mounted. Same cross-namespace pattern as memory-notes.
