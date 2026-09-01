@@ -74,7 +74,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 1. **一个可安装 bundle。** 单个 npm 包；本质是 `cordis.patch.yml` 加七个导出子路径（store、tool、review、notes、context、remote-service、client）。无多包 workspace，npm 安装无安装期构建。
 2. **消费而非重造。** dsh 全部核心能力（storage、tools、LLM、session、system prompt、settings、compaction 事件、invariants）都作为 **peer dependency** 经 Cordis 服务容器消费——插件绝不复制宿主机制。
 3. **服务抽象。** `MemoryStore` 抽象类是契约；消费方（tools、review、notes、remote）只依赖 `ctx.get('memory')`，不依赖后端实现。基于 storage-domain 的 provider 可替换。
-4. **写入时 + 读取时的纵深防御。** 内容在每个关键边界都被扫描——工具边界（模型可读的拒绝）、store 契约内（后台路径无法绕过）、每条提取行入库前——以及每个面向 prompt 的渲染点（`redactBlocked` 把违规存量内容替换为 `[BLOCKED: …]` 占位符而非静默删除）。
+4. **写入时 + 读取时的纵深防御。** 内容在每个关键边界都被扫描——工具边界（模型可读的拒绝）、store 契约内（后台路径无法绕过）、每条提取行入库前——以及每个面向 prompt 的渲染点（`redactBlocked` 把违规存量内容替换为 `[BLOCKED: …]` 占位符而非静默删除）。存量内容也无法伪造围栏闭合：每条注入围栏（`<memory-context>`、`<memory-index>`、`<recalled-memory>`、`<project-notes>`）在渲染时经 `neutralizeFenceBreaks` 对被包裹正文中的插件自有闭合标签做中性化转义，含 `</memory-context>` 的条目无法越出围栏发言。
 5. **绝不阻塞 agent 循环。** review/flush/curation/janitor/自动召回全部尽力而为；一个失败或缓慢的 LLM 调用永远不能卡住 step、compaction 或 dispose。自动召回整体包裹 try/catch，任何失败都原样落到 `next()`。
 6. **该响的地方响，该静的地方静。** 缺失服务在用户最早能看见的点（工具调用）响亮失败，而后台提取静默降级为 no-op。
 7. **prompt 预算纪律与缓存稳定性。** 注入内容有上限（`memoryCharLimit` **以及 `memoryMaxEntries`**、notes 的 `notesCharLimit`、自动召回围栏固定 1200 字符），且其 ≈token 成本直接报告在表面上。召回快照按会话冻结（稳定 KV-cache 前缀）；**compaction 是唯一被认可的重新冻结时机**——前缀本来就要重建。

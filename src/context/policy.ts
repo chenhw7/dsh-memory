@@ -11,6 +11,26 @@ import type { MemoryEntry } from '../types.ts'
 /** How recalled memory reaches the system prompt. */
 export type MemoryMode = 'full' | 'policy-only' | 'custom' | 'off' | 'index'
 
+/** Fence tag names owned by this plugin's injection surfaces. */
+export const PROMPT_FENCE_TAGS = ['memory-context', 'memory-index', 'recalled-memory', 'project-notes', 'memory-policy'] as const
+
+/**
+ * Neutralize forged fence closers before stored content enters an injection
+ * fence: `</memory-context>` becomes `<\/memory-context>` so a stored entry
+ * cannot close the plugin's own fence and speak outside it. Opening tags are
+ * left intact — they cannot terminate a fence — and the escaping applies to
+ * stored content only; the fences this builder itself emits stay untouched.
+ * @param text - store-sourced text about to be wrapped in a plugin fence.
+ * @returns the same text with every plugin-owned closer neutralized.
+ */
+export function neutralizeFenceBreaks(text: string): string {
+  let out = text
+  for (const tag of PROMPT_FENCE_TAGS) {
+    out = out.split(`</${tag}>`).join(`<\\/${tag}>`)
+  }
+  return out
+}
+
 /**
  * The fixed `<memory-policy>` guidance block injected verbatim by the `full`
  * and `policy-only` modes.
@@ -64,7 +84,7 @@ export function buildNotesSectionText(conventions: string, pitfalls: string, cha
   if (charLimit <= 0) return ''
   const body = [conventions, pitfalls].filter(text => text.trim().length > 0).join('\n\n')
   if (body.length === 0) return ''
-  let text = `<project-notes>\n${PROJECT_NOTES_NOTE}\n\n${body}\n</project-notes>`
+  let text = `<project-notes>\n${PROJECT_NOTES_NOTE}\n\n${neutralizeFenceBreaks(body)}\n</project-notes>`
   if (text.length > charLimit) {
     text = `${text.slice(0, charLimit)}\n…(project notes truncated at ${charLimit} characters)`
   }
@@ -182,11 +202,11 @@ export function buildMemorySectionText(
       return MEMORY_POLICY_TEXT
     case 'full': {
       if (memoryContent.length === 0) return MEMORY_POLICY_TEXT
-      return `<memory-context>\n${MEMORY_CONTEXT_NOTE}\n\n${memoryContent}\n</memory-context>\n\n${MEMORY_POLICY_TEXT}`
+      return `<memory-context>\n${MEMORY_CONTEXT_NOTE}\n\n${neutralizeFenceBreaks(memoryContent)}\n</memory-context>\n\n${MEMORY_POLICY_TEXT}`
     }
     case 'index': {
       if (indexContent.length === 0) return MEMORY_POLICY_TEXT
-      return `<memory-index>\n${MEMORY_INDEX_NOTE}\n\n${indexContent}\n</memory-index>\n\n${MEMORY_POLICY_TEXT}`
+      return `<memory-index>\n${MEMORY_INDEX_NOTE}\n\n${neutralizeFenceBreaks(indexContent)}\n</memory-index>\n\n${MEMORY_POLICY_TEXT}`
     }
   }
 }
@@ -230,6 +250,6 @@ export function buildAutoRecallBlock(entries: readonly MemoryEntry[], charLimit:
     used += line.length + 1
   }
   if (lines.length === 0) return ''
-  const fence = `<recalled-memory>\n${AUTO_RECALL_NOTE}\n\n${lines.join('\n')}\n</recalled-memory>`
+  const fence = `<recalled-memory>\n${AUTO_RECALL_NOTE}\n\n${neutralizeFenceBreaks(lines.join('\n'))}\n</recalled-memory>`
   return `${fence}\n[recalled-memory fence: ${fence.length} characters ≈${estimateFenceTokens(fence)} tokens]`
 }
