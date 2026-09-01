@@ -46,24 +46,31 @@ export interface SelectOptionsInput {
   readonly draft: Readonly<Record<string, unknown>>
 }
 
+/**
+ * The card-spec locale-key domain: the `en` dictionary union. Kept as a plain
+ * string union (not the host's `LocaleKeysOf`) so the specs stay plain data
+ * the tsc build can check without pulling the host locale merge.
+ */
+type SpecLocaleKey = keyof typeof import('./locales.ts').en
+
 /** One displayed field: its settings key, control kind, and locale keys. */
 export interface FieldSpec {
   readonly key: string
   readonly kind: 'checkbox' | 'number' | 'text' | 'select'
-  readonly labelKey?: string
-  readonly hintKey?: string
+  readonly labelKey?: SpecLocaleKey
+  readonly hintKey?: SpecLocaleKey
   /** Client-side lower bound mirroring the host schema's `.min(n)`; defaults to 0. */
   readonly minValue?: number
   /** For kind `'select'`: derive the options from the loaded model catalog + draft. */
   readonly options?: (input: SelectOptionsInput) => { value: string; label: string }[]
   /** For kind `'select'`: locale key of the sentinel empty-value option rendered first. */
-  readonly emptyOptionKey?: string
+  readonly emptyOptionKey?: SpecLocaleKey
 }
 
 /** The full card content: card-chrome locale keys + the fields, in display order. */
 export interface NamespaceCardSpec {
-  readonly titleKey: string
-  readonly descriptionKey: string
+  readonly titleKey: SpecLocaleKey
+  readonly descriptionKey: SpecLocaleKey
   readonly fields: readonly FieldSpec[]
 }
 
@@ -280,8 +287,10 @@ export function NamespaceCard(props: NamespaceCardProps) {
         <div className={css.body}>
           {!snap.writable ? <p className={css.readOnly} role="status">{t('readOnly')}</p> : null}
           {spec.fields.map(field => {
-            const label = t(field.labelKey ?? field.key)
-            const hint = t(field.hintKey ?? `${field.key}Hint`)
+            // A field's settings key doubles as its default label key; every
+            // field key exists in the dictionary (checked by the spec types).
+            const label = t(field.labelKey ?? (field.key as SpecLocaleKey))
+            const hint = t(field.hintKey ?? (`${field.key}Hint` as SpecLocaleKey))
             const base = {
               key: field.key,
               id: `dsh-settings-${field.key}`,
@@ -315,7 +324,8 @@ export function NamespaceCard(props: NamespaceCardProps) {
               )
             }
             if (field.kind === 'select') {
-              return renderSelectField(field, base)
+              // Discriminated-union check: select-only props are required here.
+              return renderSelectField(field as FieldSpec & { kind: 'select' }, base)
             }
             return (
               <TextField

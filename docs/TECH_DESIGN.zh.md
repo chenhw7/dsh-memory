@@ -592,7 +592,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 - **草稿暂存：** 编辑只在本地暂存；Save 时 diff 草稿与 committed 并并行下发 `set`/`unset`（每次都是 durable、revision-fenced 的文档变更）。数值合法性门控 Save；只要用户层带有该字段（按存在性而非取值），即显示"Overridden"徽标 + reset。
 - **模型目录下拉：** `select` 字段在首次展开时经连接的 `api.llm.models({})` RPC 懒加载选项（与 Models 设置页同一目录），并与 15 秒超时竞速。解析器（`model-catalog.ts`）提供 `providerOptions`（全部目录分组）与 `modelOptions`（所选 provider 的 models，否则聚合全部分组并以 `provider · model` 标注去重）。哨兵空选项 = "跟随会话路由"，映射为 `unset`（写 `''` 会造成假 overridden——overridden 按存在性判断）。无 llm face / 加载失败 / 零选项时下拉降级为自由文本 TextField 并附可用性提示；目录不再提供的已存 id 保持原样可见。
 - **宿主契约约束：** 宿主不以运行时值导出 `PluginCard`/`ValueField`/`CardForm`，故卡片外壳、字段组件（`fields.tsx`）与 CSS（`card-styles.ts`，经 `<style data-dsh-memory>` 注入的 `dsm-c-*` 类，逐行移植自宿主的 `--dsw-alias-*` token）均在本地复刻。`RULES` 数组必须在 `inject()` 调用前定义（esbuild 提升 `var` 声明但不提升初始化式——详见 CLIENT_UI_LESSONS）。
-- **构建：** `scripts/build-client.cjs` 用 esbuild 把 TSX 客户端打包成 loader 兼容产物（宿主包全部 external）；`scripts/fix-imports.cjs` 修正 tsc 输出里的 `.ts → .js` 引用并复制 Typert 产物。client 源码被排除在服务端 tsconfig program 之外（client 代码不经 tsc 检查；esbuild 擦除 type import）。
+- **构建：** `npm run build` 先后跑两个 tsc 程序——宿主 `tsc -p tsconfig.json`（`src/`，排除 `src/client`）与 client 类型门禁 `tsc -p tsconfig.client.json`（`src/client`，`noEmit`，JSX/DOM 对齐浏览器运行时，五个未随本包安装类型的宿主 client 包经 `paths` 映射到 harness workspace 的类型产物）——再由 `scripts/fix-imports.cjs` 修正 tsc 输出里的 `.ts → .js` 引用并复制 Typert 产物，最后 `scripts/build-client.cjs` 用 esbuild 把 TSX 客户端打包成 loader 兼容产物（宿主包全部 external，运行时经注入的 `require` 解析）。client 类型错误因此与宿主错误一样让构建失败。
 
 #### Memory 内容管理区（`settings.section` slot，id `memory`，order 25）
 
@@ -778,7 +778,7 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **28 个 vitest spec 文件、505 个用例**（499 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **28 个 vitest spec 文件、530 个用例**（524 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。

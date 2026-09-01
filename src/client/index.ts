@@ -42,6 +42,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: the plugins settings tab's SlotMap merge (settings.plugin.item).
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+// Type-only: merges `ctx.slots` (SlotRegistry) into the client Context — the
+// slot injection/registration surface this module's apply() drives.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
@@ -56,6 +59,19 @@ import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
 import { modelOptions, providerOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
+
+/**
+ * The plugin-owned locale namespace: this bundle registers the dictionary
+ * (`ctx.locale.register('settings.memory', …)`) and its cards/section are the
+ * only consumers, so the namespace key's union lives here — the same `en`
+ * dictionary the `translate` fallback reads.
+ */
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Memory cards + section copy (dictionaries registered in this module). */
+    'settings.memory': keyof typeof en
+  }
+}
 
 export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
 export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
@@ -212,6 +228,7 @@ function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRe
   return {
     list: request => invoke('list', request),
     search: request => invoke('search', request),
+    getRaw: request => invoke('getRaw', request),
     projects: () => invoke('projects'),
     health: () => invoke('health'),
     update: request => invoke('update', request),

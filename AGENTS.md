@@ -11,7 +11,7 @@ src/           Plugin source (ESM TypeScript, compiled to lib/)
   tool/          memory tool surface (search/save/forget…)
   review/        automatic extraction pipeline (memory-review)
   notes/         project-notes prompt projection
-  client/        settings-card UI (built separately, excluded from tsc emit)
+  client/        settings-card UI (own tsconfig gate; esbuild bundle, no tsc emit)
   remote/        remote storage adapter
   benchmark/     benchmark utilities
 tests/         vitest specs (unit + integration)
@@ -27,7 +27,7 @@ scripts/       Build and site tooling
 ## Commands
 
 ```sh
-npm run build    # tsc -p tsconfig.json + fix-imports + client bundle (prepublishOnly runs build && test)
+npm run build    # tsc (host + client gate) + fix-imports + client bundle (prepublishOnly runs build && test)
 npm run test     # vitest run (the only test lane)
 npm ci           # install (npm, not pnpm/yarn)
 ```
@@ -38,7 +38,7 @@ There is no typecheck/lint/doc-gate runner: `tsc` gates the build, vitest gates 
 
 - **Read `.agents/notes/README.md` before non-trivial changes.** Every non-trivial change includes an Agent Note in the same commit ([when to write one](.agents/notes/README.md#when-to-write-one)).
 - **Host contract**: this package consumes host services as peer dependencies and must stay compatible with the installed harness. `docs/HOST_CONTRACT.zh.md` records the contract with source evidence; §9 is the checklist to run when the harness is bumped.
-- **Client source is not type-checked by the host build**: `src/client` compiles through `scripts/build-client.cjs` (esbuild, single-file bundle, no asset pipeline). Client UI copy and field conventions follow the [settings-plugin contract](docs/CLIENT_UI_LESSONS.zh.md); UI copy stays locale-owned.
+- **Client source is type-checked by its own gate, not the host program**: `src/client` is excluded from the host `tsc` program and compiles through `scripts/build-client.cjs` (esbuild, single-file bundle, no asset pipeline); `npm run build` type-checks it first via `tsc -p tsconfig.client.json`. Client UI copy and field conventions follow the [settings-plugin contract](docs/CLIENT_UI_LESSONS.zh.md); UI copy stays locale-owned.
 - **The plugin writes no files into the repository** (since 0.6): user data lives under `$DSH_HOME/storages/memory.json` and notes under a configured `notesDir` with containment checks; never reintroduce repo-file generation.
 - **No hardcoded tunables**: deployment-varying choices are validated `Config` fields changeable from `cordis.patch.yml` and the settings UI; protocol constants and security invariants stay fixed.
 - **Misconfiguration fails loud** at load; never silently skip a missing referent.

@@ -97,7 +97,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
     "prepare": "echo skip",
     "prepublishOnly": "npm run build && npm run test",
     "test": "vitest run"
@@ -143,6 +143,7 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.20.0",
+    "@types/react": "^18.3.31",
     "jsdom": "^30.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

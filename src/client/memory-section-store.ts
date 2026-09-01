@@ -495,7 +495,10 @@ export class MemorySectionController {
     const done = await this.act(async api => {
       const response = await api.suggestReject({ id })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      return { ok: response.result.value.rejected, message: response.result.value.rejected ? undefined : 'proposal was already decided' }
+      // Keep the success message conditional so it never becomes `string | undefined`.
+      return response.result.value.rejected
+        ? { ok: true }
+        : { ok: false, message: 'proposal was already decided' }
     })
     if (done) this.set({ pending: this.store.getSnapshot().pending.filter(s => s.id !== id), actionError: null })
     return done
