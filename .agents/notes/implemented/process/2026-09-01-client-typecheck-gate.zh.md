@@ -13,7 +13,7 @@ Status: implemented
 一个专用的 client 类型检查程序,接进既有 build 车道:
 
 - **`tsconfig.client.json`**——继承宿主配置,覆盖为 `noEmit` + `composite: false`,设 `jsx: "react-jsx"`(automatic runtime,与 `build-client.cjs` 和 `vitest.config.ts` 一致),lib 换成 `es2023 + dom + dom.iterable`(client 代码跑在浏览器),`types` 去掉 Node。
-- **宿主包类型映射。** client 引入的五个宿主包(`dsh-client-ui-slots`、`-ui-primitives`、`-ui-settings/client`、`-ui-settings-plugins/client`、`-client-locale/client`,外加提供 `ctx.slots` 的 `-ui-renderer/client` 与被传递引入的 `-api-remotes/client`)在本包 node_modules 里没有类型;它们的 `paths` 条目指向 harness workspace checkout 的 `lib/types` 产物。client 打包仍经注入的 `require` 在运行时解析它们——映射只给引入提供类型,不改变发布物。
+- **宿主包类型面。** client 从 `dsh-client-ui-slots`、`-ui-primitives`、`-ui-settings/client`、`-ui-settings-plugins/client`、`-client-locale/client`、`-ui-renderer/client`(`ctx.slots` merge)与 `-client-connection/client`(`connection/reset` 事件 merge)引入类型。它们全部是 devDependency,钉在与运行时 peer `@deepseek-ai/dsh-client-store` 相同的 `0.1.2-alpha` 版本线上,且发布 tarball 携带 `lib/types/`,因此所有 `paths` 条目都解析到本包 node_modules 内——门禁不依赖 harness checkout。client 打包仍把它们当作 external 经注入的 `require` 在运行时解析;这些 devDependency 实际上只提供类型,不进入发布物。
 - **`@types/react@18.3.31`** 作为 devDependency,与 react 18.3.x 运行时匹配。
 - **build 接线。** `npm run build` = `tsc (host)` → `tsc -p tsconfig.client.json` → `fix-imports` → `build-client`。门禁在打包之前运行,client 类型错误让 build 失败而不是发布出去。
 
@@ -28,5 +28,5 @@ Status: implemented
 ## 后果
 
 - client 类型错误与宿主错误一样,会让 `npm run build` 失败,进而让 CI 失败。
-- `tsconfig.client.json` 里的 harness workspace 路径假定了同级 checkout 布局;在没有相邻 harness workspace 的环境构建本包时,须以其他方式提供声明(打包物本身不依赖它们)。
+- 宿主包 devDependencies 钉在已安装 peer 的版本线上;升级 harness peer(`HOST_CONTRACT` §9 核对清单)时必须在同一次变更里同步移动这些钉子,否则门禁会用落后于运行时的类型检查 client。
 - `AGENTS.md` 的 client 条目与 [quality-gates note](2026-08-31-quality-gates.zh.md) 现在把该门禁描述为已强制,而非豁免。

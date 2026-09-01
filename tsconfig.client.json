@@ -5,11 +5,12 @@
   // type-checked. `npm run build` runs it before bundling.
   //
   // The client bundle treats host packages and react as externals resolved at
-  // runtime (build-client.cjs); five of them ship no types inside this
-  // package's node_modules, so their declarations are mapped to the harness
-  // workspace checkout. JSX (react-jsx = automatic runtime) and the DOM lib
-  // mirror build-client.cjs and vitest.config.ts. `types: []` drops the Node
-  // globals the host program pulls in — client code runs in the browser.
+  // runtime (build-client.cjs); their type declarations come from the
+  // devDependencies pinned to the same 0.1.2-alpha line as the runtime peer
+  // `@deepseek-ai/dsh-client-store` — no harness checkout is required to build
+  // this package. JSX (react-jsx = automatic runtime) and the DOM lib mirror
+  // build-client.cjs and vitest.config.ts. `types: []` drops the Node globals
+  // the host program pulls in — client code runs in the browser.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
@@ -19,13 +20,14 @@
     "types": [],
     "paths": {
       "@deepseek-ai/cordis": ["./node_modules/@deepseek-ai/cordis/lib/types/context.ts"],
-      "@deepseek-ai/dsh-client-ui-slots": ["../deepseek-harness/packages/client/ui-slots/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-client-ui-primitives": ["../deepseek-harness/packages/client/ui-primitives/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-client-ui-settings/client": ["../deepseek-harness/packages/client/ui-settings/lib/types/client/index.d.ts"],
-      "@deepseek-ai/dsh-client-ui-settings-plugins/client": ["../deepseek-harness/packages/client/ui-settings-plugins/lib/types/client/index.d.ts"],
-      "@deepseek-ai/dsh-client-locale/client": ["../deepseek-harness/packages/client/locale/lib/types/client/index.d.ts"],
-      "@deepseek-ai/dsh-client-ui-renderer/client": ["../deepseek-harness/packages/client/ui-renderer/lib/types/client/index.d.ts"],
-      "@deepseek-ai/dsh-api-remotes/client": ["../deepseek-harness/packages/client/ui-settings/node_modules/@deepseek-ai/dsh-api-remotes/lib/types/client/index.d.ts"]
+      "@deepseek-ai/dsh-client-ui-slots": ["./node_modules/@deepseek-ai/dsh-client-ui-slots/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-primitives": ["./node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-settings/client": ["./node_modules/@deepseek-ai/dsh-client-ui-settings/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-settings-plugins/client": ["./node_modules/@deepseek-ai/dsh-client-ui-settings-plugins/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["./node_modules/@deepseek-ai/dsh-client-locale/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-renderer/client": ["./node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-connection/client": ["./node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-api-remotes/client": ["./node_modules/@deepseek-ai/dsh-api-remotes/lib/types/client/index.d.ts"]
     }
   },
   "include": ["src/client"],

@@ -13,7 +13,7 @@ English | [中文](2026-09-01-client-typecheck-gate.zh.md)
 A dedicated client typecheck program, wired into the existing build lane:
 
 - **`tsconfig.client.json`** — extends the host config, overrides to `noEmit` + `composite: false`, sets `jsx: "react-jsx"` (the automatic runtime, matching `build-client.cjs` and `vitest.config.ts`), swaps the lib to `es2023 + dom + dom.iterable` (client code runs in the browser), and drops Node from `types`.
-- **Host-package type mapping.** Five host packages the client imports (`dsh-client-ui-slots`, `-ui-primitives`, `-ui-settings/client`, `-ui-settings-plugins/client`, `-client-locale/client`, plus `-ui-renderer/client` for `ctx.slots` and `-api-remotes/client` pulled in transitively) ship no types inside this package's node_modules; their `paths` entries point at the harness workspace checkout's `lib/types` outputs. The client bundle keeps resolving them at runtime through the injected `require` — the mapping types the imports without changing what ships.
+- **Host-package type surface.** The client imports types from `dsh-client-ui-slots`, `-ui-primitives`, `-ui-settings/client`, `-ui-settings-plugins/client`, `-client-locale/client`, `-ui-renderer/client` (the `ctx.slots` merge), and `-client-connection/client` (the `connection/reset` event merge). All are devDependencies pinned to the same `0.1.2-alpha` line as the runtime peer `@deepseek-ai/dsh-client-store`, and their published tarballs carry `lib/types/`, so every `paths` entry resolves inside this package's `node_modules` — the gate needs no harness checkout. The client bundle keeps treating them as externals resolved at runtime through the injected `require`; the devDependencies are type-only in effect and do not ship.
 - **`@types/react@18.3.31`** as a devDependency, matching the react 18.3.x runtime.
 - **Build wiring.** `npm run build` = `tsc (host)` → `tsc -p tsconfig.client.json` → `fix-imports` → `build-client`. The gate runs before the bundle, so a client type error fails the build instead of shipping.
 
@@ -28,5 +28,5 @@ The stock measurement that decided "clean first, then wire": with the environmen
 ## Consequences
 
 - Client type errors fail `npm run build` and therefore CI, like host errors already did.
-- The harness-workspace paths in `tsconfig.client.json` assume the sibling checkout layout; a deployment building this package without the harness workspace next to it must provide the declarations another way (the bundle itself does not depend on them).
+- The host-package devDependencies are pinned to the installed peer's version line; bumping the harness peer (`HOST_CONTRACT` §9 checklist) must move these pins in the same change, or the gate checks the client against types older than the runtime.
 - `AGENTS.md`'s client bullet and the [quality-gates note](2026-08-31-quality-gates.md) now describe the gate as enforced, not exempt.

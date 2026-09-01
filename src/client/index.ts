@@ -43,8 +43,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: the plugins settings tab's SlotMap merge (settings.plugin.item).
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: merges `ctx.slots` (SlotRegistry) into the client Context — the
-// slot injection/registration surface this module's apply() drives.
+// slot injection/registration surface this module's apply() drives — and the
+// `connection/reset` client event this module reloads the section on.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { MemoryPluginCard } from './MemoryPluginCard.tsx'
