@@ -158,7 +158,7 @@ flowchart LR
 
 Adopting a queued proposal from the UI runs the very same `store.add` / `store.update` path (audited with `source: 'ui'`); rejecting deletes the queue row. A `replace` proposal carries `targetEntryId`, so an already-confirmed entry is never touched until a human says yes.
 
-**Read path:** `memory_search` applies structured filters first (scope / category / projectName), then scores the surviving candidates with **BM25** over CJK-aware tokenization (Latin word tokens; CJK unigrams + adjacent bigrams, non-negative IDF, K1=1.2, B=0.75). Results sort by score desc → pinned desc → `updatedAt` desc; `limit` defaults to the live `maxSearchResults` (`0` = unlimited). Returned hits get a fire-and-forget `lastRecalledAt` stamp which also clears any soft-decay stamp — the management UI passes `recordRecall: false` so browsing never stamps. `memory_list` presents the **smart default view**: newest-first pagination (`limit`/`offset`) over an optional `since`/`until` creation-time window, carrying `earliest`/`latest`/`hasStale` metadata and a widen-the-filter hint when a narrowed query is empty over a non-empty store; only the returned page counts as recalled. `memory_get` marks the single entry recalled.
+**Read path:** `memory_search` applies structured filters first (scope / category / projectName), then scores the surviving candidates with **BM25** over CJK-aware tokenization (Latin word tokens; CJK unigrams + adjacent bigrams, non-negative IDF, K1=1.2, B=0.75). Results sort by score desc → pinned desc → importance desc (absent reads as mid-range, so unassessed entries are not penalized) → `updatedAt` desc; `limit` defaults to the live `maxSearchResults` (`0` = unlimited). Returned hits get a fire-and-forget `lastRecalledAt` stamp plus an `accessCount` increment, which also clears any soft-decay stamp — the management UI passes `recordRecall: false` so browsing never stamps. `memory_list` presents the **smart default view**: newest-first pagination (`limit`/`offset`) over an optional `since`/`until` creation-time window, carrying `earliest`/`latest`/`hasStale` metadata and a widen-the-filter hint when a narrowed query is empty over a non-empty store; only the returned page counts as recalled. `memory_get` marks the single entry recalled.
 
 **Automatic-extraction path:**
 
@@ -220,6 +220,12 @@ interface MemoryEntry {
   readonly staleSince?: number   // soft-decay stamp: hidden from standing injections,
                                  // still searchable; cleared by the next recall —
                                  // also stamped/cleared by the manual archive toggle
+  readonly accessCount?: number  // cumulative recall count (the store increments it
+                                 // on every recall stamp; never-recalled reads as 0) —
+                                 // the mechanical use-signal for ranking and eviction
+  readonly importance?: number   // model-assessed importance 1–5 (optional on
+                                 // add/replace; clamped into range on write;
+                                 // absent = not assessed)
 }
 ```
 
@@ -316,14 +322,14 @@ A suggestion is **not** a memory: it never injects, never searches, and never de
 - **`DomainMemoryStore`** implements it over the storage-domain tables:
   - `add`: validate project scope → validate non-blank content → scan → mint `MemoryId` → `entries.put` → `appendAudit`.
   - `update`: merge fields (content / category / summary — empty-string summary clears), validate + scan merged content; missing id → `undefined`.
-  - `search`: structured filters first, then **BM25 ranking** (below); results sorted by score desc → pinned desc → `updatedAt` desc; default limit = live cap, `0` = unlimited; returns `{ entries, total }`. A fire-and-forget `stampRecalled` refreshes `lastRecalledAt` on returned hits **and clears `staleSince`** (recall proves usefulness and restores injection visibility) while leaving `updatedAt` untouched. `recordRecall: false` in the query suppresses all of that — the management UI browses through this flag so a read never rewrites metadata.
-  - `markRecalled(ids)`: same stamping path for entries surfaced via `memory_list` pages and `memory_get`.
+  - `search`: structured filters first, then **BM25 ranking** (below); results sorted by score desc → pinned desc → importance desc (absent reads as mid-range) → `updatedAt` desc; default limit = live cap, `0` = unlimited; returns `{ entries, total }`. A fire-and-forget `stampRecalled` refreshes `lastRecalledAt` and bumps `accessCount` on returned hits **and clears `staleSince`** (recall proves usefulness and restores injection visibility) while leaving `updatedAt` untouched. `recordRecall: false` in the query suppresses all of that — the management UI browses through this flag so a read never rewrites metadata.
+  - `markRecalled(ids)`: same stamping path (including the `accessCount` increment) for entries surfaced via `memory_list` pages and `memory_get`.
   - `archiveEntry` / `unarchiveEntry`: the **manual dormancy toggle** — stamps/clears `staleSince` directly, reusing the soft-decay representation so every existing surface (injection filters, stale badges, recall-revival) behaves consistently. Audited as `update` with the caller's source.
   - `list`: optional scope + project filter, ordered by `createdAt` asc.
   - `pin(id)` / `unpin(id)`: set `pinned` on the entry (no audit record); return the updated entry or `undefined`.
   - `janitor(decayDays)`: the **two-tier lifecycle policy**. For every unpinned entry whose `now − lastActive ≥ decayDays·86400000` (where `lastActive = lastRecalledAt ?? createdAt`):
     - `project` scope → **hard decay**: removed, audited as `remove`/`janitor`;
-    - `global`/`user` scope → **soft decay**: first overdue pass stamps `staleSince = now` and audits `update`/`janitor`; never auto-deleted. Stale entries drop out of injection surfaces (prompt snapshot, index, notes files, auto-recall) but stay searchable; being recalled again clears the stamp.
+    - `global`/`user` scope → **soft decay**: first overdue pass stamps `staleSince = now` and audits `update`/`janitor`; never auto-deleted. Stale entries drop out of injection surfaces (prompt snapshot, index, notes files, auto-recall) but stay searchable; being recalled again clears the stamp. Entries with `importance` 4–5 get a 1.5× grace window (the model's "this matters" judgment extends the tolerable quiet period; recall stays the stronger signal — `stampRecalled` clears the decay stamp outright).
     Returns the count of hard-decayed (removed) project entries.
   - `health()`: `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` — `stale` counts currently soft-decayed entries; `lastExtractionTs` is the newest audit record sourced `review`/`flush`; `backgroundFailures` counts, per site (`audit-append`, `review-drain`, `flush-compaction`, `flush-dispose`, `janitor`, `curator`, `judge`, `row-rewrite`, `compaction-refreeze`, `auto-recall`, `notes-snapshot`, `legacy-cleanup`), the failures swallowed by best-effort background paths — each report also warns once through the host `ctx.logger` channel, so a silently degraded path stays observable (in-process counters; they reset on restart).
   - `listAudit()` returns records newest-first; `exportAuditLog()` oldest-first; both order by `ts`, tie-broken by monotonic `seq`, then id.
@@ -344,8 +350,8 @@ Eight tools registered through `defineTool` (schemastery-parameter schemas), eac
 | Tool | Key parameters | Result | Notable semantics |
 |---|---|---|---|
 | `memory_search` | `scope?`, `category?`, `projectName?`, `query?`, `limit?` | `{ entries[], total }` | BM25 ranking (score → pinned → recency); default limit read **live** from the `memory` namespace; UI card renders up to 10 file-like matches |
-| `memory_add` | `scope`, `content`, `category?`, `summary?`, `projectName?` | `{ entry }` or `{ pending, suggestionId }` | blank-content validation + scanner rejection at the boundary → precise model-readable error; in confirm mode the call queues a proposal instead of writing |
-| `memory_replace` | `id`, `content?`, `category?`, `summary?` | `{ entry?, found }` or `{ pending, suggestionId }` | requires ≥1 updatable field (empty-string `summary` clears it); new content validated + scanned before the store call; in confirm mode a content change queues a proposal carrying `targetEntryId` — the existing entry is untouched until a human adopts |
+| `memory_add` | `scope`, `content`, `category?`, `summary?`, `importance?`, `projectName?` | `{ entry }` or `{ pending, suggestionId }` | blank-content validation + scanner rejection at the boundary → precise model-readable error; `importance` (1–5, optional) is clamped into range on write; in confirm mode the call queues a proposal instead of writing |
+| `memory_replace` | `id`, `content?`, `category?`, `summary?`, `importance?` | `{ entry?, found }` or `{ pending, suggestionId }` | requires ≥1 updatable field (empty-string `summary` clears it; omitted `importance` keeps the stored value); new content validated + scanned before the store call; in confirm mode a content change queues a proposal carrying `targetEntryId` — the existing entry is untouched until a human adopts |
 | `memory_remove` | `id` | `{ removed }` | absent id → `removed: false` (not an error) |
 | `memory_list` | `scope?`, `projectName?`, `since?`, `until?`, `limit?`, `offset?` | `{ entries[], total, earliest?, latest?, hasStale, hint? }` | **smart default view**: newest-first order; `since`/`until` (epoch ms) bound a creation-time window before paging; `earliest`/`latest`/`hasStale` summarize coverage; when filters empty out a non-empty store a hint suggests widening; only the returned page counts as recalled (`markRecalled` on the page) |
 | `memory_get` | `id`, `raw?` | `{ entry?, found }` | reading stamps `lastRecalledAt` (keeps read entries out of decay); `raw: true` returns the unredacted text (break-glass repair path; each call logs one `readRaw` audit record) |

@@ -75,6 +75,8 @@ export interface MemoryEntryJson {
   readonly pinned?: boolean
   readonly lastRecalledAt?: number
   readonly staleSince?: number
+  readonly accessCount?: number
+  readonly importance?: number
 }
 
 function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
@@ -92,6 +94,8 @@ function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
     ...entry.pinned !== undefined ? { pinned: entry.pinned } : {},
     ...entry.lastRecalledAt !== undefined ? { lastRecalledAt: entry.lastRecalledAt } : {},
     ...entry.staleSince !== undefined ? { staleSince: entry.staleSince } : {},
+    ...entry.accessCount !== undefined ? { accessCount: entry.accessCount } : {},
+    ...entry.importance !== undefined ? { importance: entry.importance } : {},
   }
 }
 

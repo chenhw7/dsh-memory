@@ -2,6 +2,21 @@ import { describe, it, expect } from 'vitest'
 import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
+import { DomainMemoryStore } from '../src/store/index.ts'
+import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+
+/** In-memory stand-in for a storage-domain KV table (same shape as health.spec). */
+function memTable<K extends string, V>(): KvTable<K, V> {
+  const map = new Map<K, V>()
+  return {
+    get: key => map.get(key),
+    entries: () => map.entries(),
+    keys: () => map.keys(),
+    get size() { return map.size },
+    put: async (key, value) => { map.set(key, value) },
+    delete: async key => map.delete(key),
+  }
+}
 
 /**
  * A trivial in-memory MemoryStore for unit-testing the provider contract
@@ -253,3 +268,91 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
 
 // Run the shared contract suite against the in-memory TestMemoryStore.
 runStoreContractSuite('TestMemoryStore', () => new TestMemoryStore())
+
+// The importance/accessCount use-signals are a domain-store behavior (recall
+// stamping and the janitor live there), so they are tested against the real
+// implementation rather than the in-memory stand-in.
+describe('importance-signal (DomainMemoryStore)', () => {
+  const makeStore = () => new DomainMemoryStore(memTable(), memTable(), memTable())
+
+  it('stores a clamped add-time importance and leaves absent as absent', async () => {
+    const store = makeStore()
+    const { entry: high } = await store.add({ scope: 'global', content: 'assessed high', importance: 99 })
+    expect(high.importance).toBe(5)
+    const { entry: low } = await store.add({ scope: 'global', content: 'assessed low', importance: 0 })
+    expect(low.importance).toBe(1)
+    const { entry: none } = await store.add({ scope: 'global', content: 'not assessed' })
+    expect(none.importance).toBeUndefined()
+  })
+
+  it('update with importance rewrites it; update without keeps the stored value', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'keep my score', importance: 3 })
+    const raised = await store.update(entry.id, { content: 'keep my score', importance: 99 })
+    expect(raised!.importance).toBe(5)
+    const untouched = await store.update(entry.id, { content: 'keep my score' })
+    expect(untouched!.importance).toBe(5)
+  })
+
+  it('each recall stamp bumps accessCount by one', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'recalled often' })
+    expect(entry.accessCount).toBeUndefined()
+
+    store.markRecalled([entry.id as string])
+    // Fire-and-forget: let the stamp chain settle before asserting.
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    expect(store.get(entry.id)!.accessCount).toBe(1)
+
+    store.markRecalled([entry.id as string])
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    expect(store.get(entry.id)!.accessCount).toBe(2)
+  })
+
+  it('search breaks score ties by importance (desc) before recency', async () => {
+    const store = makeStore()
+    const base = 1_700_000_000_000
+    // All three match the query token; score is equal, so importance decides
+    // ahead of updatedAt (the unimportant entry is the newest).
+    await store.add({ scope: 'global', content: 'tiebreak token' }) // no importance
+    const { entry: important } = await store.add({ scope: 'global', content: 'tiebreak token', importance: 5 })
+    const { entry: mid } = await store.add({ scope: 'global', content: 'tiebreak token', importance: 3 })
+    await store.update(important.id, { updatedAt: base } as never)
+    await store.update(mid.id, { updatedAt: base + 1 } as never)
+
+    const result = store.search({ query: 'tiebreak' })
+    expect(result.total).toBe(3)
+    expect(result.entries[0]!.id).toBe(important.id)
+    expect(result.entries[1]!.id).toBe(mid.id)
+  })
+
+  it('importance 4–5 extends the janitor decay grace window 1.5×', async () => {
+    const store = makeStore()
+    const decayDays = 30
+    const day = 24 * 60 * 60 * 1000
+    const { entry: important } = await store.add({ scope: 'global', content: 'matters a lot', importance: 5 })
+    const { entry: plain } = await store.add({ scope: 'global', content: 'no assessment' })
+    // Advance exactly past the plain window but inside the 1.5× grace window.
+    const now = Date.now() + decayDays * day * 1.2
+    await store.janitor(decayDays, now)
+    expect(store.get(plain.id)!.staleSince).toBeDefined()
+    expect(store.get(important.id)!.staleSince).toBeUndefined()
+
+    // Past 1.5× both are decayed.
+    await store.janitor(decayDays, now + decayDays * day)
+    expect(store.get(important.id)!.staleSince).toBeDefined()
+  })
+
+  it('recall clears a decay stamp regardless of importance', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'revive me', importance: 5 })
+    await store.janitor(1, Date.now() + 40 * 24 * 60 * 60 * 1000)
+    expect(store.get(entry.id)!.staleSince).toBeDefined()
+
+    store.markRecalled([entry.id as string])
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    const revived = store.get(entry.id)!
+    expect(revived.staleSince).toBeUndefined()
+    expect(revived.accessCount).toBe(1)
+  })
+})

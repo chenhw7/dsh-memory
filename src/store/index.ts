@@ -47,6 +47,8 @@ const memoryEntrySchema = z.object({
   pinned: z.boolean().optional(),
   lastRecalledAt: z.number().optional(),
   staleSince: z.number().optional(),
+  accessCount: z.number().optional(),
+  importance: z.number().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
@@ -236,6 +238,7 @@ export class DomainMemoryStore extends MemoryStore {
       projectName: input.projectName,
       createdAt: now,
       updatedAt: now,
+      ...clampImportance(input.importance),
     }
     await this.entries.put(id, entry)
     await this.appendAudit('add', id, entry, input.source, input.sessionId)
@@ -278,6 +281,9 @@ export class DomainMemoryStore extends MemoryStore {
       content: newContent,
       category: input.category ?? existing.category,
       updatedAt: Date.now(),
+      // Only rewrite the field when the caller supplies one; `undefined`
+      // keeps the stored importance (add-time assessment stands).
+      ...clampImportance(input.importance),
     }
     const updated: MemoryEntry = input.summary === ''
       ? (() => { const { summary: _c, ...rest } = base; return rest as MemoryEntry })()
@@ -325,11 +331,19 @@ export class DomainMemoryStore extends MemoryStore {
     } else {
       ranked = candidates.map(entry => ({ entry, score: 0 }))
     }
-    // Rank by BM25 relevance (desc), then pinned entries (desc), then by
-    // recency (updatedAt desc). Pinned entries surface early even among
-    // equal-relevance matches — pin means "the user wants this remembered".
+    // Rank by BM25 relevance (desc), then pinned entries (desc), then the
+    // model-assessed importance (desc; absent reads as mid-range so unassessed
+    // entries are not penalized), then by recency (updatedAt desc). Pinned
+    // entries surface early even among equal-relevance matches — pin means
+    // "the user wants this remembered"; importance is the model's weaker,
+    // optional version of the same judgment.
     const pinOf = (entry: MemoryEntry): number => entry.pinned === true ? 1 : 0
-    ranked.sort((a, b) => b.score - a.score || pinOf(b.entry) - pinOf(a.entry) || b.entry.updatedAt - a.entry.updatedAt)
+    const importanceOf = (entry: MemoryEntry): number => entry.importance ?? 0
+    ranked.sort((a, b) =>
+      b.score - a.score
+      || pinOf(b.entry) - pinOf(a.entry)
+      || importanceOf(b.entry) - importanceOf(a.entry)
+      || b.entry.updatedAt - a.entry.updatedAt)
     let all = ranked.map(r => r.entry)
     const total = all.length
     all = limit > 0 ? all.slice(0, limit) : all
@@ -343,8 +357,10 @@ export class DomainMemoryStore extends MemoryStore {
 
   /**
    * Stamp entries with a recall timestamp (fire-and-forget). Updates
-   * `lastRecalledAt` on each entry so the janitor can track staleness.
-   * `updatedAt` is intentionally left untouched: recalling is not mutating.
+   * `lastRecalledAt` on each entry so the janitor can track staleness, and
+   * bumps `accessCount` — the mechanical use-signal ranking and eviction
+   * weigh. `updatedAt` is intentionally left untouched: recalling is not
+   * mutating.
    */
   private async stampRecalled(entries: readonly MemoryEntry[]): Promise<void> {
     const now = Date.now()
@@ -353,7 +369,11 @@ export class DomainMemoryStore extends MemoryStore {
       // soft-decay stamp, bringing the entry back into injection surfaces.
       if (entry.lastRecalledAt === now && entry.staleSince === undefined) continue
       const { staleSince: _cleared, ...rest } = entry
-      await this.entries.put(entry.id, { ...rest, lastRecalledAt: now })
+      await this.entries.put(entry.id, {
+        ...rest,
+        lastRecalledAt: now,
+        accessCount: (rest.accessCount ?? 0) + 1,
+      })
     }
   }
 
@@ -595,7 +615,13 @@ export class DomainMemoryStore extends MemoryStore {
         }
         continue
       }
-      // global/user: soft decay only — stamp once, never auto-delete.
+      // global/user: soft decay only — stamp once, never auto-delete. A
+      // model-assessed importance of 4–5 extends the grace window 1.5×: a
+      // "this matters" judgment should survive a longer quiet period, while
+      // low or unassessed entries keep the plain clock. Recall (accessCount)
+      // stays the stronger signal — it clears decay outright via stampRecalled.
+      const graceFactor = entry.importance !== undefined && entry.importance >= 4 ? 1.5 : 1
+      if (now - lastActive < decayMs * graceFactor) continue
       if (entry.staleSince !== undefined) continue
       const stamped: MemoryEntry = { ...entry, staleSince: now }
       await this.entries.put(entry.id, stamped)
@@ -704,4 +730,19 @@ export class DomainMemoryStore extends MemoryStore {
 function preview(content: string): string {
   const p = content.slice(0, 100)
   return scanContent(p).allowed ? p : '[content redacted]'
+}
+
+/** Importances land in 1–5 regardless of what the caller passed in. */
+const IMPORTANCE_MIN = 1
+const IMPORTANCE_MAX = 5
+
+/**
+ * Project an optional caller-supplied importance onto the entry-field spread:
+ * absent input spreads nothing (stored value stands); out-of-range input is
+ * clamped rather than rejected — a wrong assessment is not a protocol error.
+ */
+function clampImportance(importance: number | undefined): { importance: number } | Record<string, never> {
+  if (importance === undefined || Number.isNaN(importance)) return {}
+  const clamped = Math.min(IMPORTANCE_MAX, Math.max(IMPORTANCE_MIN, Math.round(importance)))
+  return { importance: clamped }
 }

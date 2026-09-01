@@ -225,6 +225,21 @@ describe('memoryRemote entry projection', () => {
     expect(awake.staleSince).toBeUndefined()
   })
 
+  it('projects accessCount and importance onto the wire entry', () => {
+    const { service } = setup([
+      entry({ scope: 'global', content: 'scored', accessCount: 7, importance: 4 }),
+      entry({ scope: 'global', content: 'unscored' }),
+    ])
+
+    const page = service.list({})
+    const scored = page.entries.find(e => e.content === 'scored') as MemoryEntryJson
+    const unscored = page.entries.find(e => e.content === 'unscored') as MemoryEntryJson
+    expect(scored.accessCount).toBe(7)
+    expect(scored.importance).toBe(4)
+    expect(unscored.accessCount).toBeUndefined()
+    expect(unscored.importance).toBeUndefined()
+  })
+
   it('keeps stale entries searchable (soft decay does not hide them)', () => {
     const { service } = setup([
       entry({ scope: 'global', content: 'always pin the environment before installing', staleSince: BASE }),

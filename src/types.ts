@@ -65,6 +65,21 @@ export interface MemoryEntry {
    * being recalled again clears the stamp. Absent on healthy entries.
    */
   readonly staleSince?: number | undefined
+  /**
+   * How many times this entry has been surfaced to the model through a recall
+   * path (search hit, memory_get, memory_list page). Incremented by the store
+   * on every recall stamp; absent (treated as 0) on entries never recalled.
+   * The mechanical use-signal behind ranking and eviction — it needs no model
+   * cooperation and retroactively reads as 0 for pre-existing entries.
+   */
+  readonly accessCount?: number | undefined
+  /**
+   * Model-supplied importance (1–5) from the `memory_add` `importance`
+   * parameter; absent when the caller did not assess one. Search ranking and
+   * the janitor's decay order weigh it, but it never overrides a recall: an
+   * entry the model keeps surfacing survives through `accessCount` instead.
+   */
+  readonly importance?: number | undefined
 }
 
 /** Input for creating a new memory entry. */
@@ -86,6 +101,12 @@ export interface AddMemoryInput {
   readonly source?: AuditSource | undefined
   /** Session id for the audit trail; omitted by tool writes that lack a session handle. */
   readonly sessionId?: string | undefined
+  /**
+   * Model-supplied importance (1–5); optional. Clamped into range on write.
+   * Absent means "not assessed", not "unimportant" — ranking treats absent
+   * and mid-range alike rather than penalizing unassessed entries.
+   */
+  readonly importance?: number | undefined
 }
 
 /** Input for updating an existing memory entry. */
@@ -96,6 +117,8 @@ export interface UpdateMemoryInput {
   readonly category?: MemoryCategory | undefined
   /** New summary; optional. Pass empty string to clear. */
   readonly summary?: string | undefined
+  /** New model-assessed importance (1–5, clamped); omitted keeps the stored value. */
+  readonly importance?: number | undefined
   /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
   readonly source?: AuditSource | undefined
   /** Session id for the audit trail; omitted by tool writes that lack a session handle. */

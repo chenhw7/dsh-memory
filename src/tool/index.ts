@@ -67,6 +67,8 @@ interface EntryJson {
   readonly category?: MemoryCategory
   readonly projectName?: string
   readonly stale?: boolean
+  readonly importance?: number
+  readonly accessCount?: number
 }
 
 /**
@@ -88,6 +90,8 @@ function toEntryJson(entry: MemoryEntry): EntryJson {
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.staleSince !== undefined ? { stale: true } : {},
+    ...entry.importance !== undefined ? { importance: entry.importance } : {},
+    ...entry.accessCount !== undefined ? { accessCount: entry.accessCount } : {},
   }
 }
 
@@ -108,6 +112,8 @@ function toEntryJsonRaw(entry: MemoryEntry): EntryJson {
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.staleSince !== undefined ? { stale: true } : {},
+    ...entry.importance !== undefined ? { importance: entry.importance } : {},
+    ...entry.accessCount !== undefined ? { accessCount: entry.accessCount } : {},
   }
 }
 
@@ -289,6 +295,8 @@ export function apply(ctx: Context, config: Config): void {
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
                 stale: { type: 'boolean' },
+                importance: { type: 'integer' },
+                accessCount: { type: 'integer' },
               },
             },
           },
@@ -361,6 +369,7 @@ export function apply(ctx: Context, config: Config): void {
       content: { type: 'string', required: true, description: 'Human-readable memory content to persist.' },
       category: { type: 'string', enum: [...CATEGORIES], description: 'Categorized lesson type; omit for plain facts.' },
       summary: { type: 'string', description: 'Optional short summary for index/auto-recall rendering; improves progressive disclosure.' },
+      importance: { type: 'integer', description: 'Self-assessed importance 1–5 (optional). High values extend the decay grace window and break search ties; omit when unsure — ranking treats absent as mid-range, not as unimportant.' },
       projectName: { type: 'string', description: 'Project name; required when scope is `project`.' },
     },
     output: {
@@ -381,6 +390,8 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              importance: { type: 'integer' },
+              accessCount: { type: 'integer' },
             },
           },
           pending: { type: 'boolean' },
@@ -408,6 +419,7 @@ export function apply(ctx: Context, config: Config): void {
         ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
         content: args.content,
         ...args.summary !== undefined && args.summary.length > 0 ? { summary: args.summary } : {},
+        ...args.importance !== undefined ? { importance: args.importance } : {},
         ...args.projectName !== undefined ? { projectName: args.projectName } : {},
         source: 'tool' as const,
       }
@@ -463,6 +475,7 @@ export function apply(ctx: Context, config: Config): void {
       content: { type: 'string', description: 'New content for the entry; at least one updatable field must be present.' },
       category: { type: 'string', enum: [...CATEGORIES], description: 'New category for the entry.' },
       summary: { type: 'string', description: 'New summary for index/auto-recall rendering. Pass empty string to clear.' },
+      importance: { type: 'integer', description: 'New self-assessed importance 1–5; omit to keep the stored value.' },
     },
     output: {
       schema: {
@@ -481,6 +494,8 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              importance: { type: 'integer' },
+              accessCount: { type: 'integer' },
             },
           },
           found: { type: 'boolean', required: true },
@@ -508,8 +523,8 @@ export function apply(ctx: Context, config: Config): void {
     },
     async execute(args) {
       const store = requireMemory(ctx)
-      if (args.content === undefined && args.category === undefined && args.summary === undefined) {
-        throw new Error('memory_replace requires at least one of `content`, `category`, or `summary`')
+      if (args.content === undefined && args.category === undefined && args.summary === undefined && args.importance === undefined) {
+        throw new Error('memory_replace requires at least one of `content`, `category`, `summary`, or `importance`')
       }
       // Empty/blank replacement content is a caller bug: fail with a precise
       // error before any scan or write. Content itself stays optional
@@ -544,6 +559,7 @@ export function apply(ctx: Context, config: Config): void {
         ...args.content !== undefined ? { content: args.content } : {},
         ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
         ...args.summary !== undefined ? { summary: args.summary } : {},
+        ...args.importance !== undefined ? { importance: args.importance } : {},
         source: 'tool' as const,
       })
       if (updated === undefined) {
@@ -639,6 +655,8 @@ export function apply(ctx: Context, config: Config): void {
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
                 stale: { type: 'boolean' },
+                importance: { type: 'integer' },
+                accessCount: { type: 'integer' },
               },
             },
           },
@@ -764,6 +782,8 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              importance: { type: 'integer' },
+              accessCount: { type: 'integer' },
             },
           },
           found: { type: 'boolean', required: true },

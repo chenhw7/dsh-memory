@@ -16,6 +16,8 @@ export interface MemoryEntryJson {
   pinned?: boolean
   lastRecalledAt?: number
   staleSince?: number
+  accessCount?: number
+  importance?: number
 }
 export type AuditSourceJson = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
 export type AuditOpJson = 'add' | 'update' | 'remove' | 'readRaw'

@@ -44,6 +44,7 @@ class TestMemoryStore extends MemoryStore {
       updatedAt: now,
       ...input.category !== undefined ? { category: input.category } : {},
       ...input.projectName !== undefined ? { projectName: input.projectName } : {},
+      ...input.importance !== undefined ? { importance: Math.min(5, Math.max(1, Math.round(input.importance))) } : {},
     }
     this.map.set(id, entry)
     return { entry }
@@ -66,7 +67,7 @@ class TestMemoryStore extends MemoryStore {
 
   override async update(
     id: string,
-    input: { content?: string; category?: MemoryEntry['category'] },
+    input: { content?: string; category?: MemoryEntry['category']; importance?: number },
   ): Promise<MemoryEntry | undefined> {
     const existing = this.map.get(id)
     if (existing === undefined) return undefined
@@ -82,6 +83,7 @@ class TestMemoryStore extends MemoryStore {
       ...(input.category ?? existing.category) !== undefined
         ? { category: input.category ?? existing.category }
         : {},
+      ...input.importance !== undefined ? { importance: Math.min(5, Math.max(1, Math.round(input.importance))) } : {},
     }
     this.map.set(id, updated)
     return updated
@@ -206,6 +208,33 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       expect(result.isError).toBe(true)
       expect(text(result)).toContain('content rejected')
       expect(store.list().length).toBe(0)
+    })
+
+    it('persists an add-time importance and projects it back', async () => {
+      const { ctx, store } = await setup()
+      const result = await callTool(ctx, 'memory_add', { scope: 'global', content: 'vital convention', importance: 4 })
+      expect(result.isError).toBe(false)
+      const value = result.value as { entry: { id: string; importance?: number } }
+      expect(value.entry.importance).toBe(4)
+      expect(store.get(value.entry.id as never)?.importance).toBe(4)
+    })
+
+    it('clamps an out-of-range importance into 1–5 instead of rejecting', async () => {
+      const { ctx } = await setup()
+      const result = await callTool(ctx, 'memory_add', { scope: 'global', content: 'overrated', importance: 42 })
+      const value = result.value as { entry: { importance?: number } }
+      expect(value.entry.importance).toBe(5)
+    })
+
+    it('memory_replace updates importance and omits keep the stored value', async () => {
+      const { ctx, store } = await setup()
+      const add = await callTool(ctx, 'memory_add', { scope: 'global', content: 'scored entry', importance: 3 })
+      const id = (add.value as { entry: { id: string } }).entry.id
+      const raised = await callTool(ctx, 'memory_replace', { id, importance: 99 })
+      expect((raised.value as { entry: { importance?: number } }).entry.importance).toBe(5)
+      const kept = await callTool(ctx, 'memory_replace', { id, summary: 'new summary' })
+      expect((kept.value as { entry: { importance?: number } }).entry.importance).toBe(5)
+      expect(store.get(id as never)?.importance).toBe(5)
     })
 
     it('rejects prompt-injection content through the scanner', async () => {
