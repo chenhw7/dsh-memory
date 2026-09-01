@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
-import { MemoryRemoteService } from '../src/remote/index.ts'
-import type { MemoryEntryJson } from '../src/remote/index.ts'
+import { Config as RemoteServiceConfig, MemoryRemoteService } from '../src/remote/index.ts'
+import type { MemoryEntryJson, RemoteConfig } from '../src/remote/index.ts'
 
 /**
  * Unit tests for the @Remote service wrapping the memory store — the wire
@@ -131,6 +131,23 @@ class TestMemoryStore extends MemoryStore {
     return updated
   }
 
+  override async archiveEntry(id: string): Promise<MemoryEntry | undefined> {
+    const existing = this.map.get(id)
+    if (existing === undefined) return undefined
+    const updated = { ...existing, staleSince: Date.now() }
+    this.map.set(id, updated)
+    return updated
+  }
+
+  override async unarchiveEntry(id: string): Promise<MemoryEntry | undefined> {
+    const existing = this.map.get(id)
+    if (existing === undefined) return undefined
+    const { staleSince: _cleared, ...rest } = existing
+    const updated = rest as MemoryEntry
+    this.map.set(id, updated)
+    return updated
+  }
+
   private readonly failures = new Map<string, number>()
 
   override reportFailure(site: string): void {
@@ -162,12 +179,15 @@ class TestMemoryStore extends MemoryStore {
 }
 
 /** Mount the remote service over a seeded store; returns both handles. */
-function setup(entries: Array<Omit<MemoryEntry, 'id'> & { id?: string }> = []) {
+function setup(
+  entries: Array<Omit<MemoryEntry, 'id'> & { id?: string }> = [],
+  config: RemoteConfig = { remoteWritesEnabled: false },
+) {
   const ctx = new Context()
   const store = new TestMemoryStore()
   for (const entry of entries) store.seed(entry)
   ctx.provide('memory', store)
-  const service = new MemoryRemoteService(ctx)
+  const service = new MemoryRemoteService(ctx, config)
   return { ctx, store, service: ctx.memoryRemote ?? service }
 }
 
@@ -388,5 +408,101 @@ describe('memoryRemote.search recall suppression', () => {
     const found = service.search({ query: 'needle' })
     expect(found.total).toBe(1)
     expect(seen[0]?.recordRecall).toBe(false)
+  })
+})
+
+describe('memoryRemote write guard (SEC-04)', () => {
+  const WRITE_CALLS = [
+    { method: 'add', call: (s: MemoryRemoteService) => s.add({ scope: 'global', content: 'x' }), expectError: true },
+    { method: 'update', call: (s: MemoryRemoteService) => s.update({ id: 'mem-1', content: 'x' }), expectError: true },
+    { method: 'removeEntry', call: (s: MemoryRemoteService) => s.removeEntry({ id: 'mem-1' }), expectError: false },
+    { method: 'pin', call: (s: MemoryRemoteService) => s.pin({ id: 'mem-1', pinned: true }), expectError: false },
+    { method: 'archive', call: (s: MemoryRemoteService) => s.archive({ id: 'mem-1', archived: true }), expectError: false },
+    { method: 'suggestAdopt', call: (s: MemoryRemoteService) => s.suggestAdopt({ id: 'sug-1' }), expectError: true },
+    { method: 'suggestReject', call: (s: MemoryRemoteService) => s.suggestReject({ id: 'sug-1' }), expectError: false },
+  ] as const
+
+  it('the deployed schema default denies remote writes even with no config row', async () => {
+    // Production resolves the config through the schemastery schema, not the
+    // constructor's fallback parameter — this pins the schema default itself,
+    // so deleting `.default(false)` from Config fails here exactly as a
+    // fresh deployment would experience it.
+    const result = (RemoteServiceConfig as { '~standard': { validate(v: unknown): { value?: RemoteConfig } } })['~standard'].validate(undefined)
+    expect(result.value?.remoteWritesEnabled).toBe(false)
+  })
+
+  it('rejects every write method by default while reads keep working', async () => {
+    const { store, service } = setup([entry({ scope: 'global', content: 'untouched', id: 'mem-1' })])
+
+    for (const { call } of WRITE_CALLS) {
+      // The guard returns the wire-shaped refusal instead of throwing —
+      // a rejected write must never surface as a transport-level error.
+      await expect(call(service)).resolves.toBeDefined()
+    }
+    // Nothing got through: the one seeded entry is still there, unmutated.
+    expect(store.get('mem-1' as never)?.content).toBe('untouched')
+    expect(store.list()).toHaveLength(1)
+    // Reads are unaffected — the management UI still works under the fence.
+    expect(service.list({}).total).toBe(1)
+    expect(service.health().totalEntries).toBe(1)
+    expect(service.projects()).toEqual({ projects: [] })
+    expect(service.suggestList()).toEqual({ suggestions: [] })
+  })
+
+  it('carries the deployment-disabled error message on the methods that have an error field', async () => {
+    const { service } = setup([entry({ scope: 'global', content: 'a', id: 'mem-1' })])
+
+    const added = await service.add({ scope: 'global', content: 'x' })
+    expect(added).toEqual({ error: 'remote writes are disabled on this deployment' })
+    const updated = await service.update({ id: 'mem-1', content: 'x' })
+    expect(updated).toEqual({ found: false, error: 'remote writes are disabled on this deployment' })
+    const adopted = await service.suggestAdopt({ id: 'sug-1' })
+    expect(adopted).toEqual({ found: false, error: 'remote writes are disabled on this deployment' })
+  })
+
+  it('admits every write method once the deployment enables remote writes', async () => {
+    const { store, service } = setup(
+      [entry({ scope: 'global', content: 'editable', id: 'mem-1' })],
+      { remoteWritesEnabled: true },
+    )
+
+    await expect(service.add({ scope: 'global', content: 'fresh write' })).resolves.toMatchObject({
+      entry: { content: 'fresh write' },
+    })
+    await expect(service.update({ id: 'mem-1', content: 'edited' })).resolves.toMatchObject({
+      entry: { content: 'edited' },
+      found: true,
+    })
+    await expect(service.pin({ id: 'mem-1', pinned: true })).resolves.toMatchObject({ found: true })
+    // Archive/unarchive round-trip: the guard must be the only thing between
+    // the wire method and the store toggle (the store contract itself — the
+    // staleSince stamp semantics — is covered by the store specs).
+    const archived = await service.archive({ id: 'mem-1', archived: true })
+    expect(archived.found).toBe(true)
+    expect(archived.entry?.staleSince).toBeGreaterThan(0)
+    const unarchived = await service.archive({ id: 'mem-1', archived: false })
+    expect(unarchived.found).toBe(true)
+    expect(unarchived.entry?.staleSince).toBeUndefined()
+    await expect(service.removeEntry({ id: 'mem-1' })).resolves.toEqual({ removed: true })
+    expect(store.list()).toHaveLength(1)
+  })
+
+  it("refuses removeEntry/pin/archive/suggestReject with the method's own no-op shape, not an error field", async () => {
+    const { service } = setup([entry({ scope: 'global', content: 'a', id: 'mem-1' })])
+
+    await expect(service.removeEntry({ id: 'mem-1' })).resolves.toEqual({ removed: false })
+    await expect(service.pin({ id: 'mem-1', pinned: true })).resolves.toEqual({ found: false })
+    await expect(service.archive({ id: 'mem-1', archived: true })).resolves.toEqual({ found: false })
+    await expect(service.suggestReject({ id: 'sug-1' })).resolves.toEqual({ rejected: false })
+  })
+
+  it('checks the store only after the guard — a refused write never reaches the store', async () => {
+    const { store, service } = setup([entry({ scope: 'global', content: 'keep me', id: 'mem-1' })])
+    const addSpy = vi.fn(() => Promise.resolve({ entry: store.get('mem-1' as never)! }))
+    Object.defineProperty(store, 'add', { value: addSpy })
+
+    await service.add({ scope: 'global', content: 'should not land' })
+    expect(addSpy).not.toHaveBeenCalled()
+    expect(store.list()).toHaveLength(1)
   })
 })

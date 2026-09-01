@@ -72,13 +72,13 @@ export interface MemoryRemoteApi {
   }): Rpc<{ entries: readonly MemoryEntryJson[]; total: number }>
   projects(): Rpc<MemoryProjectsResult>
   health(): Rpc<MemoryHealthResult>
-  update(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
-  removeEntry(request: { id: string }): Rpc<{ removed: boolean }>
-  pin(request: { id: string; pinned: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
-  archive(request: { id: string; archived: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  update(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
+  removeEntry(request: { id: string }): Rpc<{ removed: boolean; error?: string }>
+  pin(request: { id: string; pinned: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
+  archive(request: { id: string; archived: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
   suggestList(): Rpc<{ suggestions: readonly MemorySuggestionJson[] }>
-  suggestAdopt(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
-  suggestReject(request: { id: string }): Rpc<{ rejected: boolean }>
+  suggestAdopt(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
+  suggestReject(request: { id: string }): Rpc<{ rejected: boolean; error?: string }>
   getRaw(request: { id: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
 }
 
@@ -403,7 +403,7 @@ export class MemorySectionController {
         ...(edits.summary !== undefined ? { summary: edits.summary ?? '' } : {}),
       })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      if (!response.result.value.found) return { ok: false, message: 'entry vanished before it could be saved' }
+      if (!response.result.value.found) return { ok: false, message: response.result.value.error ?? 'entry vanished before it could be saved' }
       await this.refreshAfterMutation()
       return { ok: true }
     })
@@ -429,7 +429,7 @@ export class MemorySectionController {
     return this.act(async api => {
       const response = await api.removeEntry({ id })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      if (!response.result.value.removed) return { ok: false, message: 'entry was already gone' }
+      if (!response.result.value.removed) return { ok: false, message: response.result.value.error ?? 'entry was already gone' }
       await this.refreshAfterMutation()
       return { ok: true }
     })
@@ -440,7 +440,7 @@ export class MemorySectionController {
     return this.act(async api => {
       const response = await api.pin({ id: entry.id, pinned: entry.pinned !== true })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      if (!response.result.value.found) return { ok: false, message: 'entry was already gone' }
+      if (!response.result.value.found) return { ok: false, message: response.result.value.error ?? 'entry was already gone' }
       await this.refreshAfterMutation()
       return { ok: true }
     })
@@ -451,7 +451,7 @@ export class MemorySectionController {
     return this.act(async api => {
       const response = await api.archive({ id: entry.id, archived: entry.staleSince === undefined })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      if (!response.result.value.found) return { ok: false, message: 'entry was already gone' }
+      if (!response.result.value.found) return { ok: false, message: response.result.value.error ?? 'entry was already gone' }
       await this.refreshAfterMutation()
       return { ok: true }
     })
@@ -480,7 +480,7 @@ export class MemorySectionController {
         ...(edits?.category !== undefined && edits.category !== '' ? { category: edits.category } : {}),
       })
       if (!response.result.ok) return { ok: false, message: response.result.error.message }
-      if (!response.result.value.found) return { ok: false, message: 'proposal was already decided' }
+      if (!response.result.value.found) return { ok: false, message: response.result.value.error ?? 'proposal was already decided' }
       return { ok: true }
     })
     if (done) {
@@ -498,7 +498,7 @@ export class MemorySectionController {
       // Keep the success message conditional so it never becomes `string | undefined`.
       return response.result.value.rejected
         ? { ok: true }
-        : { ok: false, message: 'proposal was already decided' }
+        : { ok: false, message: response.result.value.error ?? 'proposal was already decided' }
     })
     if (done) this.set({ pending: this.store.getSnapshot().pending.filter(s => s.id !== id), actionError: null })
     return done

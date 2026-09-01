@@ -15,15 +15,24 @@
  * level. Every `/api` request passes `api-request-trust`
  * (`packages/client/connection/src/api-request-trust.ts`), which admits
  * loopback / deployment-derived LAN literals / declared `trustedHosts` hosts
- * and rejects DNS-rebinding and cross-site requests before any RPC runs. So a
- * non-loopback caller cannot reach `add`/`update`/`remove` at all; nothing to
- * pin per method.
+ * and rejects DNS-rebinding and cross-site requests before any RPC runs.
+ * `trustedHosts` itself is a host-layer composition setting (`dsh-web-app`'s
+ * client-connection row) — this bundle cannot read or tighten it, and the
+ * gateway hands `@Remote` methods no request headers to judge origin from
+ * (`InvokeRemoteRequest` carries only namespace/method/args/signal). What this
+ * bundle CAN gate is its own methods: the write methods below check a
+ * deployment `remoteWritesEnabled` flag (this module's `Config`, default
+ * `false`) before touching the store, so a wide `trustedHosts` no longer
+ * silently grants write access to the whole memory store (the
+ * prompt-injection persistence channel from the archived SEC-04); reads stay
+ * open for the management UI.
  *
  * @module @chenhw7/dsh-memory/remote
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
+import z from '@deepseek-ai/schemastery'
 import { redactBlocked } from '../scanner.ts'
 import type { MemoryId } from '../brand.ts'
 import type {
@@ -44,6 +53,29 @@ export const name = 'memory-remote'
 /** The memory service is required. */
 export const inject = ['memory']
 
+/**
+ * Configuration for the memory remote service, settable from a `config:`
+ * entry on the `memory-remote` composition row.
+ */
+export interface RemoteConfig {
+  /**
+   * Whether the `@Remote` write methods (`add`, `update`, `removeEntry`,
+   * `pin`, `archive`, `suggestAdopt`, `suggestReject`) may mutate the store.
+   * Default `false` (deny by default): the transport fence admits every
+   * configured `trustedHosts` host — including a deployment that widened the
+   * fence to serve the UI over LAN — and those hosts then reach these
+   * methods with no further check; written content re-enters later sessions'
+   * system prompts, so an untrusted network must opt in explicitly. Reads
+   * (the management UI's browsing surfaces) stay open.
+   */
+  remoteWritesEnabled: boolean
+}
+
+/** Schemastery configuration for the `memory-remote` composition row. */
+export const Config = z.object({
+  remoteWritesEnabled: z.boolean().default(false),
+})
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     memoryRemote: MemoryRemoteService
@@ -54,10 +86,11 @@ declare module '@deepseek-ai/cordis' {
  * Cordis function-plugin apply: instantiate the MemoryRemoteService. The
  * TypertRemoteService constructor calls super(ctx, 'memoryRemote') which
  * registers the service on ctx.memoryRemote via Cordis Service.provide.
- * Called by the cordis.patch.yml fifth row.
+ * Called by the cordis.patch.yml fifth row. The validated `config` (row
+ * `config:` entry, defaults filled by the schema) carries the write policy.
  */
-export function apply(ctx: Context): void {
-  new MemoryRemoteService(ctx)
+export function apply(ctx: Context, config: RemoteConfig): void {
+  new MemoryRemoteService(ctx, config)
 }
 
 // ─── Wire request/result types ─────────────────────────────────────────────
@@ -284,6 +317,13 @@ export interface MemoryArchiveRequest {
 // ─── Service class ──────────────────────────────────────────────────────────
 
 /**
+ * Message carried in the `error` field when a write method is refused under
+ * the default `remoteWritesEnabled: false` policy. One constant so the wire
+ * answer stays identical across all seven guarded methods.
+ */
+const REMOTE_WRITES_DISABLED = 'remote writes are disabled on this deployment'
+
+/**
  * Remote service exposing the memory store to the client UI. Extends
  * `TypertRemoteService` so the host Typert generator discovers the `@Remote`
  * methods and generates the `./typert` and `./remote` artifacts.
@@ -292,13 +332,28 @@ export class MemoryRemoteService extends TypertRemoteService {
   /** Store the context for internal access (Service.ctx is protected). */
   private readonly _ctx: Context
 
-  constructor(ctx: Context) {
+  /** Deployment write policy (Config), read at construction. */
+  private readonly _remoteWritesEnabled: boolean
+
+  constructor(ctx: Context, config: RemoteConfig = { remoteWritesEnabled: false }) {
     super(ctx, 'memoryRemote')
     this._ctx = ctx
+    this._remoteWritesEnabled = config.remoteWritesEnabled
   }
 
   private memory() {
     return this._ctx.get('memory')
+  }
+
+  /**
+   * Whether a `@Remote` write method may run. The transport fence cannot
+   * distinguish "the operator's own browser" from "any host a wide
+   * `trustedHosts` admits" — and the gateway hands this method no request
+   * headers to try — so the deployment decides once, at composition time,
+   * and every write method honors the same answer.
+   */
+  private writesAllowed(): boolean {
+    return this._remoteWritesEnabled
   }
 
   @Remote('list')
@@ -370,6 +425,7 @@ export class MemoryRemoteService extends TypertRemoteService {
 
   @Remote('add')
   async add(request: MemoryAddRequest): Promise<MemoryAddResult> {
+    if (!this.writesAllowed()) return { error: REMOTE_WRITES_DISABLED }
     const store = this.memory()
     if (store === undefined) return { error: 'memory service not available' }
     try {
@@ -389,6 +445,7 @@ export class MemoryRemoteService extends TypertRemoteService {
 
   @Remote('update')
   async update(request: MemoryUpdateRequest): Promise<MemoryUpdateResult> {
+    if (!this.writesAllowed()) return { found: false, error: REMOTE_WRITES_DISABLED }
     const store = this.memory()
     if (store === undefined) return { found: false, error: 'memory service not available' }
     try {
@@ -414,6 +471,7 @@ export class MemoryRemoteService extends TypertRemoteService {
    */
   @Remote('removeEntry')
   async removeEntry(request: MemoryRemoveRequest): Promise<MemoryRemoveResult> {
+    if (!this.writesAllowed()) return { removed: false }
     const store = this.memory()
     if (store === undefined) return { removed: false }
     const removed = await store.remove(request.id as MemoryId)
@@ -422,6 +480,7 @@ export class MemoryRemoteService extends TypertRemoteService {
 
   @Remote('pin')
   async pin(request: MemoryPinRequest): Promise<MemoryPinResult> {
+    if (!this.writesAllowed()) return { found: false }
     const store = this.memory()
     if (store === undefined) return { found: false }
     const entry = request.pinned
@@ -449,6 +508,7 @@ export class MemoryRemoteService extends TypertRemoteService {
    */
   @Remote('suggestAdopt')
   async suggestAdopt(request: MemorySuggestAdoptRequest): Promise<MemorySuggestAdoptResult> {
+    if (!this.writesAllowed()) return { found: false, error: REMOTE_WRITES_DISABLED }
     const store = this.memory()
     if (store === undefined) return { found: false, error: 'memory service not available' }
     try {
@@ -467,6 +527,7 @@ export class MemoryRemoteService extends TypertRemoteService {
   /** Reject one pending proposal: the row leaves the queue, nothing is written. */
   @Remote('suggestReject')
   async suggestReject(request: MemorySuggestRejectRequest): Promise<MemorySuggestRejectResult> {
+    if (!this.writesAllowed()) return { rejected: false }
     const store = this.memory()
     if (store === undefined) return { rejected: false }
     const rejected = await store.rejectSuggestion(request.id as never)
@@ -481,6 +542,7 @@ export class MemoryRemoteService extends TypertRemoteService {
    */
   @Remote('archive')
   async archive(request: MemoryArchiveRequest): Promise<MemoryPinResult> {
+    if (!this.writesAllowed()) return { found: false }
     const store = this.memory()
     if (store === undefined) return { found: false }
     const entry = request.archived

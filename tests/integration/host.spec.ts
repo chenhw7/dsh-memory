@@ -258,7 +258,10 @@ describe('integration: host services (P1-3)', () => {
     let remote: memoryRemote.MemoryRemoteService
 
     beforeEach(async () => {
-      await ctx.plugin(memoryRemote)
+      // The write guard defaults to denied; these round-trips exercise the
+      // write path itself, so the composition under test opts in exactly the
+      // way a deployment enabling remote writes would.
+      await ctx.plugin(memoryRemote, { remoteWritesEnabled: true })
       remote = ctx.get('memoryRemote')
       expect(remote).toBeInstanceOf(memoryRemote.MemoryRemoteService)
     })
