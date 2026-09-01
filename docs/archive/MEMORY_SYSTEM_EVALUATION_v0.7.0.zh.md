@@ -4,6 +4,7 @@
 **性质**：只读代码评估，评估过程未修改任何代码。本文是冻结的分析快照，归档后不随代码演进更新；当前事实以 [TECH_DESIGN](../TECH_DESIGN.zh.md) 与源码为准。本文是 [MEMORY_SYSTEM_ANALYSIS.zh.md](MEMORY_SYSTEM_ANALYSIS.zh.md)（基于 v0.2.x 撰写）的继任评估。
 **方法**：三路并行只读代码审查（存储检索 / 架构工程 / 安全），覆盖 src 核心模块、宿主依赖实际安装源码（@deepseek-ai/dsh-storage-json、@deepseek-ai/dsh-storage-domain）、测试契约与文档；归档文档结论逐项与当前代码交叉核验。
 **标注约定**：未标注者为代码事实（附文件与行号）；推测处显式标注（推断）。
+> **时点修正（2026-08-31，归档时补记）**：SEC-01 的泄漏 key 已于 2026-08-31 在网关侧吊销，§四"已记录待办"中该项已完成；本文其余评估基于吊销前的快照，不受影响。
 
 ## 一、总体评价与核心结论
 
@@ -68,7 +69,7 @@
 | 词形归一（stemming） | 无 | 见 2.3 |
 | 零命中降级（LIKE 兜底 / 放宽过滤 / 最近条目回退） | **无** | 零重叠 → 直接空结果（[src/store/index.ts L300-303](../../src/store/index.ts#L300-L303)） |
 
-**对现有质量证据的正确解读**：golden set（24 条目 × 24 查询）上 success@5 = 100%、MRR = 0.958 很亮眼，但该集合是主题互异的小库 + 关键词式查询，测量的是"能搜到"，对同义/长尾场景**无代表性**（实验设计自身在 [INDEX_MODE_EVALUATION.zh.md](../INDEX_MODE_EVALUATION.zh.md) 交代过）。golden 指标是回归护栏，不是能力证明（代表性评价为推断）。
+**对现有质量证据的正确解读**：golden set（24 条目 × 24 查询）上 success@5 = 100%、MRR = 0.958 很亮眼，但该集合是主题互异的小库 + 关键词式查询，测量的是"能搜到"，对同义/长尾场景**无代表性**（实验设计自身在 [archive/INDEX_MODE_EVALUATION.zh.md](INDEX_MODE_EVALUATION.zh.md) 交代过）。golden 指标是回归护栏，不是能力证明（代表性评价为推断）。
 
 ### 2.5 效率与准确性瓶颈（按影响排序）
 
@@ -175,7 +176,7 @@
 | 4 | store.add/update 补扫 `summary` | 修补方向反了的字段 |
 | 5 | allowlist 生产接线或删除休眠特性 | 减少维护面 |
 | 6 | 部署文档注明 `extractionModel` / `trustedHosts` 的数据流向含义 | 配置面风险显性化 |
-| 已记录待办 | SEC-01 密钥吊销与 git 历史清除（**待所有者人工处理，最高优先级**）、SEC-04 trustedHosts 收紧、SEC-06/SEC-08 文档站修复 | [SECURITY_AUDIT.zh.md](../SECURITY_AUDIT.zh.md) 记载 |
+| 已记录待办 | SEC-01 密钥吊销与 git 历史清除（**已于 2026-08-31 吊销完成**，见本文头部时点修正）、SEC-04 trustedHosts 收紧、SEC-06/SEC-08 文档站修复 | [SECURITY_AUDIT.zh.md](SECURITY_AUDIT.zh.md) 记载 |
 
 ## 五、结论
 
