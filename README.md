@@ -267,7 +267,7 @@ memory:
     maxSearchResults: 100
 ```
 
-By default, extraction, judging, and curation use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` (in the composition config or the UI — the UI offers dropdowns fed by the host model catalog):
+By default, extraction, judging, and curation use the **same model the user is chatting with** — the session's provider/model route. To run them on a dedicated cheaper model, set `extractionModelProvider` and `extractionModelModel` (in the composition config or the UI — the UI offers dropdowns fed by the host model catalog). Naming a provider here sends conversation excerpts and stored entries to it, so pick one you trust with conversation content; leaving both empty adds no data path beyond the model you are already talking to:
 
 ```yaml
 memory-review:
@@ -369,6 +369,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 - **No semantic/vector retrieval** — `memory_search` is BM25 lexical ranking over structured KV entries (Latin word tokens, CJK unigrams + bigrams), not embeddings; synonyms that share no tokens will not match.
 - **Extraction quality tracks the session model** — review/flush/curator reuse the session's routed provider/model unless explicitly overridden.
 - **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected snapshot is frozen for KV-cache stability; step-level auto recall (opt-in) covers per-step freshness instead.
+- **Memory read/write is gated only at the transport layer** — the management UI's RPC methods carry no per-method authorization, so any host the dsh host admits through its `trustedHosts` setting can read and write the whole memory store, and written content reaches later sessions' system prompts. Keep the fence at loopback unless every admitted host is trusted ([threat model](docs/TECH_DESIGN.md)).
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
 - **Alpha channel (0.1.2-alpha.x) required** — the bundle uses the 0.1.2-alpha settings API (`ctx.settings.installSection`, host-only projection registrations) and declares `^0.1.2-alpha.2` peers. The rc (`next`) line still ships the removed module-level `installSettingsSection` helper and cannot load this bundle; install dsh from the `alpha` dist-tag. The client bundle likewise targets the alpha client packages (`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`), which replaced the removed `dsh-client-runtime`.
 

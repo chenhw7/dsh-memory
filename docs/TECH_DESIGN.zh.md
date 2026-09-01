@@ -699,6 +699,8 @@ memory:
 | 存储无限增长 / prompt 膨胀 | `memoryCharLimit` + `memoryMaxEntries` + notes 字符预算 + 1200 字符自动召回上限；`MERGE_CHAR_LIMIT`（600）限制合并增长；`limit`/`offset` 分页；审计日志封顶 200；建议队列封顶 200；两层 janitor 衰减；curator 收缩超长条目 |
 | 冲突记忆被当作事实提供 | 冻结时刻的冲突标注 inline 标记矛盾/陈旧行；软衰减条目在再次召回前退出常驻视图；三个记忆表面均带写时真实性免责 |
 | 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
+| 对话内容流向第三方 provider | `extractionModelProvider`/`extractionModelModel` 把提取、去重裁决与 curator 调用——连同对话摘录与已存条目——路由到它们指定的 provider。两者默认为 `""`，即复用会话自身的路由，因此只有显式覆盖才会出现这条数据通路；指定 provider 等同于把对话内容授予它 |
+| 同网段其他主机读写记忆库 | 记忆 RPC 没有方法级鉴权（见 §7.7）：宿主的传输层信任围栏是唯一闸门。任何经宿主侧 `trustedHosts` 放行的主机都获得记忆库的完整读写权，而写入的内容会进入后续会话的 system prompt——一条持久注入通道。除非放行的每台主机都可信，否则把围栏保持在 loopback |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
 
 ### 9.2 失效矩阵

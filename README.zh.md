@@ -264,7 +264,7 @@ memory:
     maxSearchResults: 100
 ```
 
-默认情况下，提取、去重裁决和 curation 使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可——UI 提供由宿主模型目录驱动的下拉框）：
+默认情况下，提取、去重裁决和 curation 使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可——UI 提供由宿主模型目录驱动的下拉框）。在此指定 provider 会把对话摘录与已存条目发送给它，因此请选择你愿意托付对话内容的一方；两者留空则不会新增任何数据通路，只用你本来就在对话的模型：
 
 ```yaml
 memory-review:
@@ -366,6 +366,7 @@ memory:
 - **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的 BM25 词法排序（Latin 逐词、CJK 一元 + 二元分词），不是 embeddings；不含相同词元的同义表述无法命中。
 - **提取质量跟随会话模型** — review/flush/curator 复用会话当前路由的 provider/model，除非显式覆盖。
 - **会话中途的提取在下次压缩或新会话前不会出现在提示里** — 注入快照为 KV-cache 稳定性而冻结；步级自动召回（可选）提供逐步新鲜度。
+- **记忆的读写只在传输层设闸** — 管理 UI 的 RPC 方法没有方法级鉴权，因此任何被 dsh 宿主 `trustedHosts` 放行的主机都能读写整个记忆库，而写入的内容会进入后续会话的 system prompt。除非放行的每台主机都可信，否则把围栏保持在 loopback（见[威胁模型](docs/TECH_DESIGN.zh.md)）。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
 - **要求 alpha 渠道（0.1.2-alpha.x）** — 本 bundle 使用 0.1.2-alpha 的 settings API（`ctx.settings.installSection`、host-only 投影注册），peer 范围为 `^0.1.2-alpha.2`。rc（`next`）线仍是旧的模块级 `installSettingsSection` helper，无法加载本 bundle；请从 `alpha` dist-tag 安装 dsh。client bundle 同样对齐 alpha 客户端包（`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`），它们取代了已移除的 `dsh-client-runtime`。
 
