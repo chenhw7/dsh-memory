@@ -569,7 +569,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 线上类型在 `src/remote/index.ts`；客户端镜像为手写的 `typert.remote-client.*` 产物（以 `./remote` 导出，需随方法变更手动同步）。
 
-**部署安全（已核实宿主源码）：** 不存在按方法的 `PRIVILEGED_METHODS` 注册表——信任门在传输层。所有 `/api` 请求统一过 `api-request-trust` 栅栏（loopback / 部署派生 LAN 字面量 / 声明式 `trustedHosts`，防 DNS rebinding 与跨站请求），非本机调用方根本到不了任何方法。
+**部署安全（已核实宿主源码）：** 服务自身携带一个部署级写开关——`remoteWritesEnabled`（`memory-remote` row 的 Config，schemastery 缺省 `false`）：七个写方法（`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`）在触碰 store 前检查该开关，关闭时以各方法的 wire 形态拒绝（有 error 字段的返回 `{ error }`，其余返回 no-op），读方法不受影响；客户端把拒绝经 `actionError` 透传。这不是按请求鉴权——`trustedHosts` 是宿主侧配置本包读不到、网关也不向 `@Remote` 方法传请求头——所以传输层的 `api-request-trust` 栅栏（loopback / 部署派生 LAN 字面量 / 声明式 `trustedHosts`，防 DNS rebinding 与跨站请求）仍是第一道门，写开关是第二道：缺省部署下非本机调用方即使过了传输栅栏也写不进记忆库。
 
 ### 7.8 客户端 UI — `/client`（`src/client/`）
 
@@ -707,7 +707,7 @@ memory:
 | 冲突记忆被当作事实提供 | 冻结时刻的冲突标注 inline 标记矛盾/陈旧行；软衰减条目在再次召回前退出常驻视图；三个记忆表面均带写时真实性免责 |
 | 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
 | 对话内容流向第三方 provider | `extractionModelProvider`/`extractionModelModel` 把提取、去重裁决与 curator 调用——连同对话摘录与已存条目——路由到它们指定的 provider。两者默认为 `""`，即复用会话自身的路由，因此只有显式覆盖才会出现这条数据通路；指定 provider 等同于把对话内容授予它 |
-| 同网段其他主机读写记忆库 | 记忆 RPC 没有方法级鉴权（见 §7.7）：宿主的传输层信任围栏是唯一闸门。任何经宿主侧 `trustedHosts` 放行的主机都获得记忆库的完整读写权，而写入的内容会进入后续会话的 system prompt——一条持久注入通道。除非放行的每台主机都可信，否则把围栏保持在 loopback |
+| 同网段其他主机读写记忆库 | 双层闸门（见 §7.7）：宿主的传输层信任围栏（`trustedHosts`）仍是第一道门；其后的 `remoteWritesEnabled`（缺省 `false`）让远程**写**方法缺省拒绝——过宽的 `trustedHosts` 配置下写入通道缺省关闭，读仍放行（浏览器管理需部署显式开启写开关）。写入内容进入后续会话 system prompt 的持久注入通道因此需要两个条件同时成立：栅栏放行 + 部署显式开启写 |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
 
 ### 9.2 失效矩阵
