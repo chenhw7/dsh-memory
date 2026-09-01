@@ -79,6 +79,7 @@ export interface MemoryRemoteApi {
   suggestList(): Rpc<{ suggestions: readonly MemorySuggestionJson[] }>
   suggestAdopt(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
   suggestReject(request: { id: string }): Rpc<{ rejected: boolean }>
+  getRaw(request: { id: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
 }
 
 /** Page snapshot. */
@@ -406,6 +407,21 @@ export class MemorySectionController {
       await this.refreshAfterMutation()
       return { ok: true }
     })
+  }
+
+  /**
+   * Fetch one entry's unredacted content through the break-glass `getRaw`
+   * RPC (audit-logged server-side). Returns undefined when the entry is gone
+   * or the read fails — the editor keeps the redacted draft either way.
+   */
+  async loadRawContent(id: string): Promise<string | undefined> {
+    try {
+      const response = await this.requireApi().getRaw({ id })
+      if (!response.result.ok) return undefined
+      return response.result.value.entry?.content
+    } catch {
+      return undefined
+    }
   }
 
   /** Delete one entry after the component-level confirmation. */

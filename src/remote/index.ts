@@ -24,6 +24,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
+import { redactBlocked } from '../scanner.ts'
 import type { MemoryId } from '../brand.ts'
 import type {
   AddMemoryInput,
@@ -80,11 +81,13 @@ function toEntryJson(entry: MemoryEntry): MemoryEntryJson {
   return {
     id: entry.id as string,
     scope: entry.scope,
-    content: entry.content,
+    // Display redaction: scanner-blocked payloads surface as [BLOCKED: …].
+    // The management UI reads the unredacted text through `getRaw`.
+    content: redactBlocked(entry.content),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     ...entry.category !== undefined ? { category: entry.category } : {},
-    ...entry.summary !== undefined ? { summary: entry.summary } : {},
+    ...entry.summary !== undefined ? { summary: redactBlocked(entry.summary) } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.pinned !== undefined ? { pinned: entry.pinned } : {},
     ...entry.lastRecalledAt !== undefined ? { lastRecalledAt: entry.lastRecalledAt } : {},
@@ -135,6 +138,17 @@ export interface MemoryGetRequest {
 }
 
 export interface MemoryGetResult {
+  readonly entry?: MemoryEntryJson
+  readonly found: boolean
+}
+
+/** Request for the break-glass raw-content read (audit-logged per call). */
+export interface MemoryGetRawRequest {
+  readonly id: string
+}
+
+/** Result of the raw read: the unredacted entry, absent when not found. */
+export interface MemoryGetRawResult {
   readonly entry?: MemoryEntryJson
   readonly found: boolean
 }
@@ -320,6 +334,34 @@ export class MemoryRemoteService extends TypertRemoteService {
     const entry = store.get(request.id as MemoryId)
     if (entry === undefined) return { found: false }
     return { entry: toEntryJson(entry), found: true }
+  }
+
+  /**
+   * Break-glass read of the unredacted entry for human review and repair.
+   * The store appends a `readRaw` audit record per call, so every raw read is
+   * visible in the audit log alongside the mutations.
+   */
+  @Remote('getRaw')
+  async getRaw(request: MemoryGetRawRequest): Promise<MemoryGetRawResult> {
+    const store = this.memory()
+    if (store === undefined) return { found: false }
+    const entry = await store.getRaw(request.id as MemoryId)
+    if (entry === undefined) return { found: false }
+    // Raw means raw: project without the display redaction.
+    return {
+      entry: {
+        id: entry.id as string,
+        scope: entry.scope,
+        content: entry.content,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        ...entry.category !== undefined ? { category: entry.category } : {},
+        ...entry.summary !== undefined ? { summary: entry.summary } : {},
+        ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
+        ...entry.pinned !== undefined ? { pinned: entry.pinned } : {},
+      },
+      found: true,
+    }
   }
 
   @Remote('add')

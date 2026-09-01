@@ -190,6 +190,28 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       expect(store.listAudit()).toHaveLength(0)
     })
 
+    it('getRaw returns the entry and appends a readRaw audit record per call', async () => {
+      const { entry } = await store.add({ scope: 'global', content: 'a sensitive fact' })
+      expect(store.listAudit()).toHaveLength(1) // the add
+
+      const raw = await store.getRaw(entry.id)
+      expect(raw?.content).toBe('a sensitive fact')
+
+      await store.getRaw(entry.id)
+      const audit = store.listAudit()
+      expect(audit).toHaveLength(3) // add + two raw reads
+      expect(audit[0]!.op).toBe('readRaw')
+      expect(audit[0]!.source).toBe('ui')
+      expect(audit[0]!.entryId).toBe(entry.id)
+      expect(audit[1]!.op).toBe('readRaw')
+    })
+
+    it('getRaw of an absent id returns undefined and appends no audit record', async () => {
+      const raw = await store.getRaw(MemoryId('missing-id') as never)
+      expect(raw).toBeUndefined()
+      expect(store.listAudit()).toHaveLength(0)
+    })
+
     it('records extraction source and sessionId when provided', async () => {
       const { entry } = await store.add({
         scope: 'global',

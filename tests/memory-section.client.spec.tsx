@@ -101,6 +101,10 @@ function fakeApi(script: ApiScript = {}): MemoryRemoteApi {
     suggestList: vi.fn(async () => ok({ suggestions: script.pending ?? [] })),
     suggestAdopt: vi.fn(async () => ok({ entry: ROWS[0]!, found: true })),
     suggestReject: vi.fn(async () => ok({ rejected: true })),
+    getRaw: vi.fn(async ({ id }: { id: string }) => {
+      const entry = pool.find(e => e.id === id)
+      return entry === undefined ? { found: false } : ok({ entry, found: true })
+    }),
   }
 }
 
@@ -136,6 +140,7 @@ function wire(api: MemoryRemoteApi): {
     toggleCategory: (category: string) => { controller.toggleCategory(category) },
     loadMore: () => { void controller.loadMore() },
     saveEntryEdits: (id: string, edits: { content?: string; category?: string | null; summary?: string | null }) => controller.saveEntryEdits(id, edits),
+    loadRawContent: (id: string) => controller.loadRawContent(id),
     deleteEntry: (id: string) => controller.deleteEntry(id),
     togglePin: (entry: MemoryEntryJson) => controller.togglePin(entry),
     toggleArchive: (entry: MemoryEntryJson) => controller.toggleArchive(entry),

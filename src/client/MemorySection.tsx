@@ -45,6 +45,8 @@ export interface MemorySectionInjected {
   loadMore: () => void
   /** Save human edits to one entry (content/category/summary; null clears). */
   saveEntryEdits: (id: string, edits: { content?: string; category?: string | null; summary?: string | null }) => Promise<boolean>
+  /** Fetch the unredacted content of one entry (break-glass raw read, audit-logged). */
+  loadRawContent: (id: string) => Promise<string | undefined>
   /** Delete one entry (the row owns its confirm step). */
   deleteEntry: (id: string) => Promise<boolean>
   /** Toggle one entry's decay immunity pin. */
@@ -103,16 +105,26 @@ function emptyKeyOf(state: MemorySectionState): 'emptyFiltered' | 'emptyAll' | '
 /**
  * One entry's inline editor: content textarea over category select over
  * summary input, with Save/Cancel. Local draft state only — Save hands the
- * edits to the controller and collapses.
+ * edits to the controller and collapses. On mount it fetches the unredacted
+ * content through the break-glass `getRaw` RPC so a scanner-blocked entry
+ * can be read and repaired instead of editing the `[BLOCKED: …]` placeholder.
  */
 function EntryEditor(props: {
   entry: MemoryEntryJson
   translate: (key: LocaleKey) => string
+  loadRaw: (id: string) => Promise<string | undefined>
   onSave: (edits: { content?: string; category?: string | null; summary?: string | null }) => void
   onCancel: () => void
 }): ReactNode {
-  const { entry, translate, onSave, onCancel } = props
+  const { entry, translate, loadRaw, onSave, onCancel } = props
   const [draftContent, setDraftContent] = useState(entry.content)
+  useEffect(() => {
+    let alive = true
+    loadRaw(entry.id).then(raw => {
+      if (alive && raw !== undefined) setDraftContent(raw)
+    }).catch(() => { /* keep the redacted draft; editing stays possible */ })
+    return () => { alive = false }
+  }, [entry.id, loadRaw])
   const [draftCategory, setDraftCategory] = useState<string>(entry.category ?? NO_CATEGORY)
   const [draftSummary, setDraftSummary] = useState<string>(entry.summary ?? '')
   return (
@@ -184,12 +196,13 @@ function EntryRow(props: {
   scopeLabels: Readonly<Record<'global' | 'project' | 'user', string>>
   translate: (key: LocaleKey) => string
   onToggle: () => void
+  loadRaw: (id: string) => Promise<string | undefined>
   onSaveEdits: (edits: { content?: string; category?: string | null; summary?: string | null }) => void
   onDelete: () => void
   onTogglePin: () => void
   onToggleArchive: () => void
 }): ReactNode {
-  const { entry, expanded, staleLabel, staleHint, pinnedLabel, neverRecalledLabel, scopeLabels, translate, onToggle, onSaveEdits, onDelete, onTogglePin, onToggleArchive } = props
+  const { entry, expanded, staleLabel, staleHint, pinnedLabel, neverRecalledLabel, scopeLabels, translate, onToggle, loadRaw, onSaveEdits, onDelete, onTogglePin, onToggleArchive } = props
   // Boolean-guard extraction: read each optional field ONCE into a constant
   // before branching (the double bare access crashed a card once).
   const category = entry.category
@@ -222,6 +235,7 @@ function EntryRow(props: {
           <EntryEditor
             entry={entry}
             translate={translate}
+            loadRaw={loadRaw}
             onSave={(edits) => { setEditing(false); onSaveEdits(edits) }}
             onCancel={() => { setEditing(false) }}
           />
@@ -666,6 +680,7 @@ export function MemorySection(props: MemorySectionProps): ReactNode {
                         scopeLabels={scopeLabels}
                         translate={t}
                         onToggle={() => { toggleExpanded(entry.id) }}
+                        loadRaw={props.loadRawContent}
                         onSaveEdits={(edits) => { void props.saveEntryEdits(entry.id, edits) }}
                         onDelete={() => { void props.deleteEntry(entry.id) }}
                         onTogglePin={() => { void props.togglePin(entry) }}

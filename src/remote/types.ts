@@ -13,6 +13,8 @@ export type {
   MemorySearchRequest,
   MemoryGetRequest,
   MemoryGetResult,
+  MemoryGetRawRequest,
+  MemoryGetRawResult,
   MemoryAddRequest,
   MemoryAddResult,
   MemoryUpdateRequest,

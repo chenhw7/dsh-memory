@@ -29,7 +29,7 @@ export type MemoryCategory =
 export type AuditSource = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
 
 /** The operation kind recorded in one audit entry. */
-export type AuditOp = 'add' | 'update' | 'remove'
+export type AuditOp = 'add' | 'update' | 'remove' | 'readRaw'
 
 /** One durable memory entry. */
 export interface MemoryEntry {

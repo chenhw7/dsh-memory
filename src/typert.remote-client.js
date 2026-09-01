@@ -23,6 +23,8 @@ const _search_param = z.object({}).passthrough()
 const _search_result = z.object({}).passthrough()
 const _get_param = z.object({}).passthrough()
 const _get_result = z.object({}).passthrough()
+const _getRaw_param = z.object({}).passthrough()
+const _getRaw_result = z.object({}).passthrough()
 const _add_param = z.object({}).passthrough()
 const _add_result = z.object({}).passthrough()
 const _update_param = z.object({}).passthrough()
@@ -52,6 +54,10 @@ const descriptors = [
   { id: `${pkg}#${ns}/get`, service: ns, namespace: ns, method: 'get', invocation: { kind: 'direct' },
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryGetRequest`, schema: _get_param } }],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryGetResult`, schema: _get_result },
+    sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
+  { id: `${pkg}#${ns}/getRaw`, service: ns, namespace: ns, method: 'getRaw', invocation: { kind: 'direct' },
+    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryGetRawRequest`, schema: _getRaw_param } }],
+    result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryGetRawResult`, schema: _getRaw_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
   { id: `${pkg}#${ns}/add`, service: ns, namespace: ns, method: 'add', invocation: { kind: 'direct' },
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryAddRequest`, schema: _add_param } }],

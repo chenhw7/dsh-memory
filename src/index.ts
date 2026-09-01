@@ -232,6 +232,17 @@ export abstract class MemoryStore {
    * @returns all audit entries, oldest first.
    */
   abstract exportAuditLog(): readonly AuditEntry[]
+
+  /**
+   * Read one entry's unredacted content — the deliberate break-glass path for
+   * human review and repair (memory_replace) after the display layers redact
+   * scanner-blocked payloads to `[BLOCKED: …]`. Every call appends a
+   * `readRaw` audit record (best-effort, source `'ui'`), so raw reads are as
+   * observable as mutations. Returns `undefined` when the id does not exist.
+   * The default is a no-op returning `undefined`, so providers without raw
+   * support stay contract-conformant.
+   */
+  getRaw(_id: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
 }
 
 /**

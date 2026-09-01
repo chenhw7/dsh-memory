@@ -313,6 +313,7 @@ export function apply(ctx: ClientContext): void {
     toggleCategory: (category) => { controller.toggleCategory(category) },
     loadMore: () => { void controller.loadMore() },
     saveEntryEdits: (id, edits) => controller.saveEntryEdits(id, edits),
+    loadRawContent: (id) => controller.loadRawContent(id),
     deleteEntry: (id) => controller.deleteEntry(id),
     togglePin: (entry) => controller.togglePin(entry),
     toggleArchive: (entry) => controller.toggleArchive(entry),

@@ -348,7 +348,7 @@ interface MemorySuggestion {
 | `memory_replace` | `id`, `content?`, `category?`, `summary?` | `{ entry?, found }` 或 `{ pending, suggestionId }` | 至少需要一个可更新字段（空字符串 `summary` 即清除）；新内容先验证 + 扫描再进 store；人审模式下内容变更登记携带 `targetEntryId` 的提议——既有条目在有人类采纳前原封不动 |
 | `memory_remove` | `id` | `{ removed }` | id 不存在 → `removed: false`（不是错误） |
 | `memory_list` | `scope?`, `projectName?`, `since?`, `until?`, `limit?`, `offset?` | `{ entries[], total, earliest?, latest?, hasStale, hint? }` | **智能默认视图**：最新优先排序；`since`/`until`（epoch ms）在分页之前界定创建时间窗；`earliest`/`latest`/`hasStale` 汇总覆盖范围；窄化过滤把非空 store 清空时给出放宽提示；只有返回页算作已召回（对该页 `markRecalled`） |
-| `memory_get` | `id` | `{ entry?, found }` | 读取即盖 `lastRecalledAt` 戳（避免读到一半就被衰减） |
+| `memory_get` | `id`, `raw?` | `{ entry?, found }` | 读取即盖 `lastRecalledAt` 戳（避免读到一半就被衰减）；`raw: true` 返回未脱敏原文（破窗修复路径，每次调用记一条 `readRaw` 审计） |
 | `memory_pin` | `id` | `{ pinned }` | id 不存在 → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | id 不存在 → `unpinned: false` |
 
@@ -531,7 +531,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 命中即 fail closed：以 `"<kind>: <pattern>"` reasons 拒绝写入。
 
 - **白名单：** `setAllowlist({ patternName: [expectedValues…] })` 在模式名匹配*且*内容包含期望值时压制该命中——文档/夹具中的脱敏样例 key 可存，同形状的真 key 依然被抓。
-- **读取时脱敏：** `redactBlocked(content)` 在存量内容将重新进入 LLM 上下文的每一处（prompt 快照、索引、自动召回围栏、notes 相关判断、提取快照）重跑扫描，未通过则替换为 `[BLOCKED: reasons]`。原件留在 store 里供用户检查——静默删除只会掩盖攻击。
+- **读取时脱敏：** `redactBlocked(content)` 在存量内容将重新进入 LLM 上下文的每一处（prompt 快照、索引、自动召回围栏、notes 相关判断、提取快照）重跑扫描，未通过则替换为 `[BLOCKED: reasons]`。工具读面（`memory_search`/`memory_list`/`memory_get` 投影与渲染）与管理 UI 读面（remote 条目投影）同样脱敏展示。原件留在 store 里供用户检查——静默删除只会掩盖攻击；取原文走显式破窗路径：`memory_get` 传 `raw: true`（模型修复用）或 remote `getRaw`（UI 编辑器用），两者每次调用都由 store 追加一条 `readRaw` 审计记录（`source: 'ui'`）。
 
 ### 7.6 Invariant 伴生件（`src/invariant.ts`）
 
@@ -539,13 +539,14 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 ### 7.7 `@Remote` 服务 — `/remote-service`（`src/remote/`）
 
-`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露十四个可从浏览器调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
+`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露十五个可从浏览器调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
 
 | 方法 | 线上请求 | 线上结果 | 说明 |
 |---|---|---|---|
 | `list` | `MemoryListRequest` (scope?, projectName?, limit?, offset?) | `{ entries[], total }` | 分页，默认 limit 100，**在 remote 层按最新优先排序**（UI 是面向新近度的收件箱；`store.list` 对其他消费方保留创建序契约） |
 | `search` | `MemorySearchRequest` (scope?, category?, projectName?, query?, limit?) | `{ entries[], total }` | 委托 `store.search`（BM25），统一盖上 `recordRecall: false`——浏览不得改写召回元数据，也不得复活休眠条目 |
 | `get` | `MemoryGetRequest` (id) | `{ entry?, found }` | — |
+| `getRaw` | `MemoryGetRawRequest` (id) | `{ entry?, found }` | async；**破窗原文读取**——返回未脱敏条目，store 每次调用追加一条 `readRaw` 审计记录；UI 编辑器据此把被拦截条目的原文装进编辑草稿 |
 | `add` | `MemoryAddRequest` (scope, content, category?, projectName?) | `{ entry?, error? }` | async；`source: 'ui'` |
 | `update` | `MemoryUpdateRequest` (id, content?, category?, summary?) | `{ entry?, found, error? }` | async；`source: 'ui'`；空字符串 `summary` 即清除 |
 | `removeEntry` | `MemoryRemoveRequest` (id) | `{ removed }` | async。不叫 `remove`：gateway 客户端把贡献物方法名与命名空间服务自有成员做保留字校验，`remove` 是其内部卸载方法名，撞名即挂载失败 |

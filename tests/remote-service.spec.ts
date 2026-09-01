@@ -51,6 +51,21 @@ class TestMemoryStore extends MemoryStore {
     return this.map.get(id)
   }
 
+  override async getRaw(id: string): Promise<MemoryEntry | undefined> {
+    const entry = this.map.get(id)
+    if (entry === undefined) return undefined
+    this.auditLog.push({
+      id: `audit-${this.auditLog.length + 1}` as never,
+      op: 'readRaw',
+      entryId: entry.id,
+      scope: entry.scope,
+      source: 'ui',
+      ts: Date.now(),
+      contentPreview: entry.content.slice(0, 100),
+    })
+    return entry
+  }
+
   override list(scope?: MemoryEntry['scope'], projectName?: string): readonly MemoryEntry[] {
     return [...this.map.values()]
       .filter(e => scope === undefined || e.scope === scope)
@@ -218,6 +233,42 @@ describe('memoryRemote entry projection', () => {
     const found = service.search({ query: 'environment' })
     expect(found.total).toBe(1)
     expect(found.entries[0]?.staleSince).toBe(BASE)
+  })
+
+  it('redacts scanner-blocked content and summary in the display projection', () => {
+    const secret = 'my key is sk-' + 'a'.repeat(48)
+    const { service } = setup([
+      entry({ scope: 'global', content: secret, summary: 'leaks ' + secret }),
+    ])
+
+    const page = service.list({})
+    expect(page.entries[0]?.content).toContain('[BLOCKED')
+    expect(page.entries[0]?.content).not.toContain('sk-')
+    expect(page.entries[0]?.summary).toContain('[BLOCKED')
+  })
+
+  it('getRaw returns the unredacted entry and appends a readRaw audit record', async () => {
+    const secret = 'my key is sk-' + 'a'.repeat(48)
+    const { service, store } = setup([
+      entry({ scope: 'global', content: secret, id: 'mem-raw-1' }),
+    ])
+    expect(store.exportAuditLog()).toHaveLength(0)
+
+    const result = await service.getRaw({ id: 'mem-raw-1' })
+    expect(result.found).toBe(true)
+    expect(result.entry?.content).toBe(secret)
+
+    const audit = store.exportAuditLog()
+    expect(audit).toHaveLength(1)
+    expect(audit[0]?.op).toBe('readRaw')
+    expect(audit[0]?.source).toBe('ui')
+  })
+
+  it('getRaw reports found: false for an absent id and logs nothing', async () => {
+    const { service, store } = setup()
+    const result = await service.getRaw({ id: 'missing' })
+    expect(result.found).toBe(false)
+    expect(store.exportAuditLog()).toHaveLength(0)
   })
 })
 

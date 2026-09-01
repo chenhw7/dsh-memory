@@ -52,7 +52,7 @@ const memoryEntrySchema = z.object({
 /** Zod schema for one audit-record entry on the durable medium. */
 const auditEntrySchema = z.object({
   id: z.string().min(1),
-  op: z.enum(['add', 'update', 'remove']),
+  op: z.enum(['add', 'update', 'remove', 'readRaw']),
   entryId: z.string().min(1),
   scope: z.enum(['global', 'project', 'user']),
   category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
@@ -638,6 +638,13 @@ export class DomainMemoryStore extends MemoryStore {
       ...lastExtractionTs !== undefined ? { lastExtractionTs } : {},
       ...this.failureCounts.size > 0 ? { backgroundFailures: Object.fromEntries(this.failureCounts) } : {},
     }
+  }
+
+  override async getRaw(id: MemoryId): Promise<MemoryEntry | undefined> {
+    const entry = this.entries.get(id)
+    if (entry === undefined) return undefined
+    await this.appendAudit('readRaw', id, entry, 'ui', undefined)
+    return entry
   }
 
   override exportAuditLog(): readonly AuditEntry[] {

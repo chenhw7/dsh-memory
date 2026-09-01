@@ -348,7 +348,7 @@ Eight tools registered through `defineTool` (schemastery-parameter schemas), eac
 | `memory_replace` | `id`, `content?`, `category?`, `summary?` | `{ entry?, found }` or `{ pending, suggestionId }` | requires ≥1 updatable field (empty-string `summary` clears it); new content validated + scanned before the store call; in confirm mode a content change queues a proposal carrying `targetEntryId` — the existing entry is untouched until a human adopts |
 | `memory_remove` | `id` | `{ removed }` | absent id → `removed: false` (not an error) |
 | `memory_list` | `scope?`, `projectName?`, `since?`, `until?`, `limit?`, `offset?` | `{ entries[], total, earliest?, latest?, hasStale, hint? }` | **smart default view**: newest-first order; `since`/`until` (epoch ms) bound a creation-time window before paging; `earliest`/`latest`/`hasStale` summarize coverage; when filters empty out a non-empty store a hint suggests widening; only the returned page counts as recalled (`markRecalled` on the page) |
-| `memory_get` | `id` | `{ entry?, found }` | reading stamps `lastRecalledAt` (keeps read entries out of decay) |
+| `memory_get` | `id`, `raw?` | `{ entry?, found }` | reading stamps `lastRecalledAt` (keeps read entries out of decay); `raw: true` returns the unredacted text (break-glass repair path; each call logs one `readRaw` audit record) |
 | `memory_pin` | `id` | `{ pinned }` | absent id → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | absent id → `unpinned: false` |
 
@@ -531,7 +531,7 @@ Three pattern classes (29 regexes total):
 A hit fails closed: the write is rejected with `"<kind>: <pattern>"` reasons.
 
 - **Allowlist:** `setAllowlist({ patternName: [expectedValues…] })` suppresses a hit when its pattern name matches *and* the content contains one of the expected values — documentation/fixtures with redacted sample keys stay storable while real keys of the same shape are caught.
-- **Load-time redaction:** `redactBlocked(content)` re-runs the scan on stored content wherever it would re-enter an LLM context (prompt snapshot, index, auto-recall fence, notes-boundary decisions, extraction snapshots) and substitutes `[BLOCKED: reasons]`. The original stays in the store for user inspection — silent deletion would only hide the attack.
+- **Load-time redaction:** `redactBlocked(content)` re-runs the scan on stored content wherever it would re-enter an LLM context (prompt snapshot, index, auto-recall fence, notes-boundary decisions, extraction snapshots) and substitutes `[BLOCKED: reasons]`. The tool read face (`memory_search`/`memory_list`/`memory_get` projection and rendering) and the management-UI read face (remote entry projection) redact their display the same way. The original stays in the store for user inspection — silent deletion would only hide the attack; reading it back goes through an explicit break-glass path: `memory_get` with `raw: true` (model-side repair) or the remote `getRaw` method (UI editor), each call appending a `readRaw` audit record (`source: 'ui'`) through the store.
 
 ### 7.6 Invariant companion (`src/invariant.ts`)
 
@@ -539,13 +539,14 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 
 ### 7.7 `@Remote` service — `/remote-service` (`src/remote/`)
 
-`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes fourteen `@Remote` methods callable from a browser. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
+`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes fifteen `@Remote` methods callable from a browser. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
 
 | Method | Wire request | Wire result | Notes |
 |---|---|---|---|
 | `list` | `MemoryListRequest` (scope?, projectName?, limit?, offset?) | `{ entries[], total }` | paginated, default limit 100, **sorted newest-first in the remote layer** (the UI is a recency-oriented inbox; `store.list` keeps its creation-order contract for other consumers) |
 | `search` | `MemorySearchRequest` (scope?, category?, projectName?, query?, limit?) | `{ entries[], total }` | delegates to `store.search` (BM25) with `recordRecall: false` stamped in — browsing must not rewrite recall metadata or revive dormant entries |
 | `get` | `MemoryGetRequest` (id) | `{ entry?, found }` | — |
+| `getRaw` | `MemoryGetRawRequest` (id) | `{ entry?, found }` | async; **break-glass raw read** — returns the unredacted entry, the store appending one `readRaw` audit record per call; the UI editor loads a blocked entry's original text into the edit draft through it |
 | `add` | `MemoryAddRequest` (scope, content, category?, projectName?) | `{ entry?, error? }` | async; `source: 'ui'` |
 | `update` | `MemoryUpdateRequest` (id, content?, category?, summary?) | `{ entry?, found, error? }` | async; `source: 'ui'`; empty-string `summary` clears it |
 | `removeEntry` | `MemoryRemoveRequest` (id) | `{ removed }` | async. Not named `remove`: the gateway client validates contribution method names against the namespace service's own members — `remove` is its internal uninstall method, and a collision fails the mount |

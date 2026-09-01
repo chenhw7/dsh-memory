@@ -18,6 +18,7 @@ export interface MemoryEntryJson {
   staleSince?: number
 }
 export type AuditSourceJson = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
+export type AuditOpJson = 'add' | 'update' | 'remove' | 'readRaw'
 export interface MemorySuggestionJson {
   id: string
   scope: 'global' | 'project' | 'user'
@@ -35,6 +36,7 @@ export interface MemorySuggestionJson {
 export interface MemoryListResult { entries: readonly MemoryEntryJson[]; total: number }
 export interface MemorySearchResult { entries: readonly MemoryEntryJson[]; total: number }
 export interface MemoryGetResult { entry?: MemoryEntryJson; found: boolean }
+export interface MemoryGetRawResult { entry?: MemoryEntryJson; found: boolean }
 export interface MemoryAddResult { entry?: MemoryEntryJson; error?: string }
 export interface MemoryUpdateResult { entry?: MemoryEntryJson; found: boolean; error?: string }
 export interface MemoryRemoveResult { removed: boolean }
@@ -56,7 +58,7 @@ export interface MemoryHealthResult {
 export interface MemoryProjectsResult { projects: readonly string[] }
 export interface AuditEntryJson {
   id: string
-  op: 'add' | 'update' | 'remove'
+  op: AuditOpJson
   entryId: string
   scope: 'global' | 'project' | 'user'
   category?: string
@@ -72,6 +74,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     list: (request: { scope?: string; projectName?: string; limit?: number; offset?: number }) => Promise<RemoteResult<MemoryListResult>>
     search: (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     get: (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
+    getRaw: (request: { id: string }) => Promise<RemoteResult<MemoryGetRawResult>>
     add: (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     update: (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     removeEntry: (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
@@ -88,6 +91,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/list': (request: { scope?: string; projectName?: string; limit?: number; offset?: number }) => Promise<RemoteResult<MemoryListResult>>
     'memoryRemote/search': (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     'memoryRemote/get': (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
+    'memoryRemote/getRaw': (request: { id: string }) => Promise<RemoteResult<MemoryGetRawResult>>
     'memoryRemote/add': (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     'memoryRemote/update': (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     'memoryRemote/removeEntry': (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
