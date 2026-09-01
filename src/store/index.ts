@@ -18,6 +18,15 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
+import {
+  CrossProcessGuard,
+  DEFAULT_CROSS_PROCESS_PROBE_MS,
+  EMPTY_OWNER,
+  currentBootOwner,
+  mediumOwnerReader,
+  mediumGoodbyeWriter,
+  ownerStampSchema,
+} from './cross-process.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -83,14 +92,26 @@ const suggestionSchema = zod.object({
 
 /**
  * The memory domain spec: `entries` (memory records keyed by id) plus `audit`
- * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue).
- * Domain version stays at 0 — both later tables are forward-compatible
- * additions: storage-json reads only declared tables and initializes any
- * absent table as an empty map, so existing v0 media reopen without migration.
+ * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue), plus
+ * a global singleton carrying the single-writer owner stamp (P3
+ * cross-process detection). Domain version stays at 0 — all three later
+ * additions are forward-compatible: storage-json reads only declared tables
+ * and initializes any absent table as an empty map, and a medium whose global
+ * slot was never written reads as `null`, which the domain replaces with the
+ * spec's `initial` without materializing it, so existing v0 media reopen
+ * without migration.
+ *
+ * The stamp schema accepts extra keys on purpose (`looseObject`): the medium
+ * holds the global as opaque JSON, and a future extension of the stamp shape
+ * must reopen cleanly on today's readers.
  */
 const memoryDomainSpec = defineDomain({
   name: 'memory',
   version: 0,
+  global: {
+    schema: ownerStampSchema,
+    initial: EMPTY_OWNER,
+  },
   tables: {
     entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as zod.ZodType<MemoryEntry>),
     audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as zod.ZodType<AuditEntry>),
@@ -185,28 +206,118 @@ export interface StoreConfig {
    * "no hardcoded tunables" rule.
    */
   entriesCap: number
+  /**
+   * Interval in milliseconds between medium owner-stamp read-backs for
+   * cross-process single-writer detection; `0` disables the periodic probe
+   * (the startup check and the dispose goodbye still run). Default
+   * {@link DEFAULT_CROSS_PROCESS_PROBE_MS}. Settable from `cordis.patch.yml`
+   * under the "no hardcoded tunables" rule.
+   */
+  crossProcessProbeMs: number
 }
 
 /** Schemastery configuration for the `memory-store` composition row. */
 export const Config = z.object({
   entriesCap: z.number().step(1).min(1).default(DEFAULT_ENTRIES_CAP),
+  crossProcessProbeMs: z.number().step(1).min(0).default(DEFAULT_CROSS_PROCESS_PROBE_MS),
 })
 
 /**
  * Mount the storage-domain memory store provider. Opens the `memory` domain
- * and registers a {@link MemoryStore} subclass on `ctx.memory`.
+ * and registers a {@link MemoryStore} subclass on `ctx.memory`. On open, a
+ * {@link CrossProcessGuard} claims the medium's owner stamp (the domain's
+ * global slot) and starts the configured read-back probe; the dispose path
+ * stamps `closedAt` so the next boot does not warn about this one.
  * @param ctx - Cordis context with `storageDomain` injected.
- * @param config - row config; only `entriesCap` is read here.
+ * @param config - row config; `entriesCap` and `crossProcessProbeMs` are read here.
  */
-export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DEFAULT_ENTRIES_CAP }): Promise<void> {
+export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS }): Promise<void> {
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
   const suggestions: SuggestionsTable = domain.table('suggestions')
 
-  ctx.effect(() => async () => { await domain.close() })
+  // Cross-process single-writer detection (host storage-json is
+  // last-writer-wins across processes, silently): claim the medium's owner
+  // stamp at open, re-read it on a lightweight interval, stamp `closedAt` on
+  // dispose. The medium path comes from the harness-home resolver the boot
+  // provides to composition `!!js` expressions; when absent (unit tests,
+  // exotic hosts) the medium read-back seam is undefined and only the
+  // in-memory startup judgment + goodbye stamps run.
+  // One boot identity per mount, shared by the claim and the goodbye: a
+  // second `currentBootOwner()` would mint a fresh random bootId that the
+  // goodbye writer would (correctly) refuse to stamp.
+  const own = currentBootOwner()
+  const mediumReader = resolveMediumReader(ctx)
+  const mediumGoodbye = resolveMediumGoodbye(ctx, own.bootId)
+  const store = new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap)
+  const guard = new CrossProcessGuard(
+    own,
+    mediumReader,
+    owner => domain.global.set(owner),
+    (site, error) => store.reportFailure(site, error),
+    undefined,
+    mediumGoodbye,
+  )
+  try {
+    // Startup judgment + claim: judge the open-time global (loaded from the
+    // medium), then stamp this boot as owner so later starters see us. A
+    // failed claim cannot run detection, but the store itself may still be
+    // usable — fail loud in the log, keep mounting.
+    await guard.startup(domain.global.get())
+  } catch (error) {
+    // Detection is a background safety net, not the write path: an unwritable
+    // global slot degrades to no cross-process visibility, so the mount
+    // continues and only this warn marks the gap.
+    ctx.logger.warn(`dsh-memory: cross-process owner claim failed: ${String(error)}`)
+  }
 
-  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap))
+  ctx.effect(() => {
+    // The cordis-plugin-timer mixin is not a dependency of this package, so
+    // the probe uses the platform interval directly — registered inside the
+    // effect so the disposer below clears it on stop/update/undefine.
+    const probeTimer = config.crossProcessProbeMs > 0
+      ? setInterval(() => { void guard.probe() }, config.crossProcessProbeMs)
+      : undefined
+    return async () => {
+      if (probeTimer !== undefined) clearInterval(probeTimer)
+      await guard.sayGoodbye()
+      await domain.close()
+    }
+  })
+
+  ctx.provide('memory', store)
+}
+
+/**
+ * Resolve the unit-file read seam for cross-process detection from the
+ * harness-home path resolver the boot exposes to `!!js` config expressions.
+ * Compositions derive the storage root from the same service, so the
+ * resolution agrees with where storage-json actually writes. Returns
+ * `undefined` when the service is absent.
+ * @param ctx - Cordis context that may carry `dshHomePath`.
+ * @returns an async medium reader, or `undefined` when unresolvable.
+ */
+function resolveMediumReader(ctx: Context): (() => Promise<unknown>) | undefined {
+  const homePath = (ctx as unknown as { get(name: string): unknown }).get('dshHomePath')
+  if (typeof homePath !== 'function') return undefined
+  return mediumOwnerReader(homePath('storages', 'memory.json'))
+}
+
+/**
+ * Resolve the direct medium-file goodbye writer (same derivation as
+ * {@link resolveMediumReader}). The goodbye must not go through the domain's
+ * global slot: the storage facility's own unmount closes the domain
+ * concurrently with our disposer, so the domain write rejects with `closed`
+ * most dispose runs — the medium file is the only teardown-valid seam.
+ * @param ctx - Cordis context that may carry `dshHomePath`.
+ * @param bootId - This mount's boot identity, matching the claim the guard writes.
+ * @returns an async goodbye writer, or `undefined` when unresolvable.
+ */
+function resolveMediumGoodbye(ctx: Context, bootId: string): (() => Promise<void>) | undefined {
+  const homePath = (ctx as unknown as { get(name: string): unknown }).get('dshHomePath')
+  if (typeof homePath !== 'function') return undefined
+  return mediumGoodbyeWriter(homePath('storages', 'memory.json'), bootId)
 }
 
 /**
