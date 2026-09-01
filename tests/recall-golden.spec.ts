@@ -1,6 +1,7 @@
 /**
- * Recall evaluation baseline: runs the fixed golden set (24 entries,
- * 24 queries, en+zh) through the REAL DomainMemoryStore BM25 search and
+ * Recall evaluation baseline: runs the fixed golden set (35 entries,
+ * 35 queries, en+zh; the original 24 plus the wave-3 synonym and inflection
+ * slices) through the REAL DomainMemoryStore BM25 search and
  * asserts precision/recall floors so any future retrieval change (tokenizer,
  * weights, budgets) is judged against numbers instead of vibes.
  *
@@ -74,8 +75,14 @@ describe('recall evaluation baseline (P1-4)', () => {
       }
     }
 
-    // Floors sit just under the measured baseline at introduction time; they
-    // exist to catch regressions, not to celebrate absolute numbers.
+    // Floors sit just under the measured post-wave-3 baseline (35 cases with
+    // the synonym + inflection slices, BM25 stemming + summary indexing
+    // landed): success@5=100.0% P@1=82.9% MRR=0.902 zh=100.0%. The expanded
+    // fixture diluted P@1 from the original 24-case baseline (91.7%) because
+    // the paraphrase slice puts several summary-bearing entries in play for
+    // the same query topic (e.g. 缓存 queries now rank s4/s4b alongside g6) —
+    // MRR stays high since the relevant entry is always within the top two.
+    // Floors exist to catch regressions, not to celebrate absolute numbers.
     expect(report.recallAtK).toBeGreaterThanOrEqual(0.85)
     expect(report.mrr).toBeGreaterThanOrEqual(0.75)
     expect(report.precisionAtOne).toBeGreaterThanOrEqual(0.6)
@@ -109,7 +116,7 @@ describe('recall evaluation baseline (P1-4)', () => {
       measureInjectionCost('full', sectionOf('full'), { entriesRendered: fullEntryCount }),
     ]
 
-    console.log('\n[standing injection cost @24-entry fixture, charLimit=5000]')
+    console.log('\n[standing injection cost @35-entry fixture, charLimit=5000]')
     console.log(`mode          chars     approxTokens entriesRendered indexLines`)
     for (const row of rows) console.log(formatCostRow(row))
     console.log(`\nindex awareness coverage: ${indexLineCount}/${GOLDEN_ENTRIES.length} entries visible as existence lines`)

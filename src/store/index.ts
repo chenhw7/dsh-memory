@@ -17,7 +17,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
-import { Bm25Index, tokenizeForSearch, buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
+import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -210,6 +210,28 @@ export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DE
 }
 
 /**
+ * Token bags per entry: content tokens plus — when the entry carries a
+ * summary — the summary's tokens. Merging both fields into ONE bag (summary
+ * tokens simply repeat into tf) is the deliberately simple stand-in for
+ * BM25F: summary is a human-written high-signal distillation, so its terms
+ * earning the same tf boost as content terms IS the desired emphasis, and a
+ * matched summary keyword pushes an entry above content-only competitors.
+ * Explicit BM25F (per-field lengths + b-field + weight w_f) was considered
+ * and rejected for now: it adds per-field length bookkeeping and a weight
+ * tunable (against the "no hardcoded tunables" rule, another Config field)
+ * for a gain this merged bag already captures at fixture scale; revisit if
+ * the floors slip with real-corpus summaries. Empty-string summaries count
+ * as absent (add() already refuses to store them, but direct table seeds
+ * can still carry `summary: ''`).
+ */
+function entryIndexTokens(entry: MemoryEntry): string[] {
+  const contentTokens = tokenizeForSearch(entry.content)
+  return entry.summary === undefined || entry.summary === ''
+    ? contentTokens
+    : [...contentTokens, ...tokenizeForSearch(entry.summary)]
+}
+
+/**
  * MemoryStore implementation backed by a storage-domain KV table. Reads are
  * synchronous from memory; writes serialize on the domain chain. Every
  * successful mutation appends one record to the `audit` table (best-effort:
@@ -377,9 +399,13 @@ export class DomainMemoryStore extends MemoryStore {
       // function word present in 2 of 3 candidates earn the same IDF as a
       // genuinely distinctive term, and the resulting noise reorders results.
       // Full-corpus stats cost one tokenize pass over all entries per search
-      // — the same order as the candidate-set tokenization itself.
-      const corpus = buildCorpusStats([...this.entries.entries()].map(([, entry]) => entry.content))
-      const index = new Bm25Index(candidates.map(entry => tokenizeForSearch(entry.content)), corpus)
+      // — the same order as the candidate-set tokenization itself. Both
+      // corpus and index see the SAME merged content+summary bag, so df and
+      // tf stay consistent.
+      const corpus = buildCorpusStatsFromTokens(
+        [...this.entries.entries()].map(([, entry]) => entryIndexTokens(entry)),
+      )
+      const index = new Bm25Index(candidates.map(entry => entryIndexTokens(entry)), corpus)
       const scores = index.scores(queryTokens)
       ranked = []
       candidates.forEach((entry, i) => {

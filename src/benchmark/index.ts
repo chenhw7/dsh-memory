@@ -1,12 +1,13 @@
 /**
  * Recall evaluation baseline (P1-4) and injection-cost comparison (P1-8).
  *
- * A fixed golden-set fixture — 24 topically distinct entries across the three
- * scopes (English + CJK), each with one known relevant query — turns "the
- * retrieval is strong" from a structural claim into numbers: precision@k,
- * recall@k, and MRR over the shipping BM25 search, plus per-mode standing
- * injection cost (characters ≈ tokens). Any future retrieval change
- * (tokenization, weights, budgets) must run against this baseline first.
+ * A fixed golden-set fixture — 35 topically distinct entries across the three
+ * scopes (English + CJK; the original 24 plus the wave-3 synonym and inflection
+ * slices) with 35 known relevant queries — turns "the retrieval is strong"
+ * from a structural claim into numbers: precision@k, recall@k, and MRR over
+ * the shipping BM25 search, plus per-mode standing injection cost (characters
+ * ≈ tokens). Any future retrieval change (tokenization, weights, budgets) must
+ * run against this baseline first.
  *
  * Pure module: builds its own store-shaped searcher via a callback, so both
  * the real DomainMemoryStore (spec) and offline copies can be evaluated.
@@ -38,6 +39,20 @@ export interface GoldenCase {
  * The fixed memory fixture. Entries are deliberately topically separated so
  * BM25 can discriminate them; several share a few decoy tokens (e.g. two
  * entries mention 端口/port) to keep precision honest.
+ *
+ * Fixture growth history: the original 24 entries (g1–g8, p1–p8, u1–u8) are
+ * topically disjoint with keyword-style queries — they measure "can find",
+ * not synonym/inflection behavior. Wave-3 retrieval work (conservative Latin
+ * stemming, summary indexing) needed adversarial cases, so two groups were
+ * APPENDED without touching the original block:
+ * - synonym/paraphrase pairs (s1–s4b): the query words never appear verbatim
+ *   in the entry — recall comes only from the summary field, which is why
+ *   summary indexing is load-bearing for this slice; s4/s4b are a mirrored
+ *   pair (zh content + en summary / en content + zh summary) that also pins
+ *   the summary path's cross-language direction;
+ * - Latin inflection pairs (f1–f4): query and content share a stem but not a
+ *   surface form (test/tests/testing, configure/configuration, build/builds,
+ *   deploy/deployment) — these miss without conservative stemming.
  */
 export const GOLDEN_ENTRIES: readonly GoldenEntry[] = [
   // ── global (8) ──
@@ -66,12 +81,32 @@ export const GOLDEN_ENTRIES: readonly GoldenEntry[] = [
   { id: 'u6', scope: 'user', content: 'The user dislikes emoji anywhere in commit messages or changelogs' },
   { id: 'u7', scope: 'user', content: '用户偏好 vim 键位绑定，编辑器与终端都保持一致', category: 'preference' },
   { id: 'u8', scope: 'user', content: 'Morning standup notes are posted to the team wiki page before ten' },
+  // ── synonym/paraphrase slice (s1–s6) ──
+  // The query's own words never appear in the content; only the human-written
+  // summary carries the query vocabulary. These cases are the acceptance
+  // signal for summary indexing: before it, the whole slice misses.
+  { id: 's1', scope: 'global', content: '始终先在分支上完成改动，确认流水线通过后再合入主干', summary: '代码合并策略：合并前必须通过 CI 检查', category: 'procedure' },
+  { id: 's2', scope: 'global', content: 'Secrets are injected at runtime; never bake credentials into image layers', summary: '凭据管理：禁止把密钥写进镜像', category: 'convention' },
+  { id: 's3', scope: 'project', projectName: 'demo-repo', content: 'The checkout flow talks to the payments adapter over the internal gateway', summary: '订单支付走内部网关的 payments 服务', category: 'insight' },
+  { id: 's4', scope: 'project', projectName: 'demo-repo', content: 'Cache invalidation happens on the write path, not on a TTL clock', summary: '缓存失效由写路径主动触发而非到期', category: 'insight' },
+  { id: 's4b', scope: 'project', projectName: 'demo-repo', content: '缓存键带构建哈希，发布后自动整体刷新', summary: 'Cache entries expire by build hash, invalidating wholesale on deploy', category: 'insight' },
+  { id: 's5', scope: 'user', content: '用户喜欢在解释里穿插真实代码片段，而不是纯文字描述', summary: '讲解风格：多贴示例代码少空谈', category: 'preference' },
+  { id: 's6', scope: 'user', content: '用户不希望助手重复确认已经明确过的决定', summary: '不要反复追问已拍板的事项', category: 'preference' },
+  // ── Latin inflection slice (f1–f4) ──
+  // Query and content share a stem but never a surface token — conservative
+  // suffix stemming (s/es/ies, ed, ing) is what makes them hit.
+  { id: 'f1', scope: 'global', content: 'Component tests run through vitest with jsdom enabled', summary: '组件层的 testing 由 vitest 承担', category: 'convention' },
+  { id: 'f2', scope: 'project', projectName: 'demo-repo', content: 'A fresh clone needs one command to configure the local environment', summary: '克隆后第一步是 configuration 脚本', category: 'procedure' },
+  { id: 'f3', scope: 'project', projectName: 'demo-repo', content: 'The release pipeline builds artifacts then signs them with cosign', summary: '发版流程：先 builds 再签名', category: 'procedure' },
+  { id: 'f4', scope: 'user', content: '用户要求每次改动都附带回滚方案，防止部署失败无法恢复', summary: 'deploy 前必须准备 rollback 预案', category: 'preference' },
 ]
 
 /**
  * The golden query table: each query names exactly the entries a correct
  * search must return within the top-k. Queries mix keyword style ("redis
- * 缓存") and question style ("数据库迁移什么时候执行").
+ * 缓存"), question style ("数据库迁移什么时候执行"), synonym paraphrase
+ * ("凭据 怎么 管理" for the secrets entry), and Latin inflections
+ * ("unit tests 怎么跑" against "Component tests ... vitest").
  */
 export const GOLDEN_CASES: readonly GoldenCase[] = [
   { query: 'package manager preference pnpm', relevant: ['g1'], lang: 'en' },
@@ -98,6 +133,19 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
   { query: 'emoji commit messages dislike', relevant: ['u6'], lang: 'en' },
   { query: 'vim 键位 编辑器 偏好', relevant: ['u7'], lang: 'zh' },
   { query: 'standup notes where posted morning wiki', relevant: ['u8'], lang: 'en' },
+  // ── synonym/paraphrase slice: query vocabulary lives only in the summary ──
+  { query: '合并代码 前 检查 通过', relevant: ['s1'], lang: 'zh' },
+  { query: '镜像 里 能不能 放 密码 凭据', relevant: ['s2'], lang: 'zh' },
+  { query: '支付 请求 走 哪个 网关', relevant: ['s3'], lang: 'zh' },
+  { query: 'cache expiry invalidation behavior', relevant: ['s4'], lang: 'en' },
+  { query: '缓存 什么时候 过期 失效', relevant: ['s4b'], lang: 'zh' },
+  { query: '讲解 风格 要不要 贴 代码', relevant: ['s5'], lang: 'zh' },
+  { query: '已经 决定 的事 别 再问', relevant: ['s6'], lang: 'zh' },
+  // ── Latin inflection slice: stem shared, surface form different ──
+  { query: 'unit tests 组件层 怎么 跑', relevant: ['f1'], lang: 'zh' },
+  { query: 'new clone configuring steps', relevant: ['f2'], lang: 'en' },
+  { query: 'release builds signing artifacts', relevant: ['f3'], lang: 'en' },
+  { query: 'deployment 回滚 预案 要求', relevant: ['f4'], lang: 'zh' },
 ]
 
 /** Minimal search face the evaluator needs (satisfied by MemoryStore.search). */

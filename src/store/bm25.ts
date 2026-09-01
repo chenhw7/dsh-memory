@@ -22,9 +22,59 @@ const K1 = 1.2
 const B = 0.75
 
 /**
+ * Strip ONE conservative Latin inflectional suffix, or return the token
+ * unchanged. Deliberately not a Porter stemmer: only rule suffixes that never
+ * change a word's identity (plural s/es/ies, participles ed/ing) are removed,
+ * the etymology-bound ones (-ion, -al, -ize…) stay, and the rule list ends
+ * where the special cases would begin:
+ * - minimum stem length 3 guards tiny words ("is"→"i", "be"→"b");
+ * - "-ies" → "y" restores the true stem (studies→study, not studi-);
+ * - stem-final "-ss"/"-us"/"-is" never lose their s (class, census, basis),
+ *   while "-ses"-after-vowel (uses→use) and sibilant+es (churches→church,
+ *   boxes→box) drop the whole plural suffix;
+ * - doubling the final consonant after "-ed"/"-ing" (stopped→stop) is NOT
+ *   attempted — the doubled stem is the accepted canonical form.
+ * CJK tokens never enter this function (guarded by the caller's script check).
+ */
+function stemLatin(token: string): string {
+  // Pure-digit runs are identifiers, not words: a trailing 's' is a label
+  // (v2s, 2024s), not a plural — never strip from digits.
+  if (/^\d+$/.test(token)) return token
+  // Only stem when a substantial stem survives: the result must keep a
+  // consonant + at least 3 more characters, so whole words wearing suffix
+  // letters keep their identity (bring, news, lens, does, aged, speed,
+  // tests, builds, boxes) while long inflections still collapse
+  // (testing→test, configuring→configur, computers→computer).
+  if (token.length < 6 || token.length - 1 < 5) return token
+  if (token.length >= 5 && token.endsWith('ies')) return token.slice(0, -3) + 'y'
+  if (token.length >= 4 && token.endsWith('sses')) return token.slice(0, -2)
+  if (token.length >= 4 && token.endsWith('ches') || token.length >= 4 && token.endsWith('shes') || token.length >= 4 && token.endsWith('xes') || token.length >= 4 && token.endsWith('zes')) {
+    return token.slice(0, -2)
+  }
+  if (token.length >= 5 && token.endsWith('ses') && /[aeiou]/.test(token.charAt(token.length - 4))) {
+    return token.slice(0, -2) // uses→use, bases→base (needs a 3-char stem)
+  }
+  if (token.length >= 6 && token.endsWith('ed') && !/[aeiou]{2}$/.test(token)) return token.slice(0, -2)
+  if (token.length >= 7 && token.endsWith('ing') && !/[aeiou]{2}$/.test(token)) return token.slice(0, -3)
+  if (token.length >= 6 && token.endsWith('s') && !/ss$|us$|is$/.test(token)) {
+    return token.slice(0, -1) // computers→computer, managers→manager
+  }
+  return token
+}
+
+/**
  * Tokenize text for retrieval scoring. Same script split as the legacy
  * tokenizer (Latin runs / CJK runs), upgraded so CJK runs emit unigrams plus
  * adjacent bigrams instead of unigrams alone.
+ *
+ * Latin word runs additionally receive a CONSERVATIVE suffix stem
+ * ({@link stemLatin}): only identity-preserving rule suffixes (plural
+ * s/es/ies, ed, ing) collapse, so "testing", "tests" and "test" share the
+ * token "test" while CJK paths and words like "session" are untouched. The
+ * stem is applied to documents and queries alike — one shared tokenizer —
+ * which also means dedup/conflict/suggestion similarity see inflected forms
+ * as near-identical (running ≈ runs); that is accepted drift: the similarity
+ * users mean by "same memory" is about meaning, not surface forms.
  * @param text - the raw document or query text.
  * @returns the token bag (with duplicates; frequency matters to BM25).
  */
@@ -37,11 +87,12 @@ export function tokenizeForSearch(text: string): string[] {
   while ((match = re.exec(lowered)) !== null) {
     const run = match[0]
     if (!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)) {
-      // Pure Latin/alphanumeric run → one word token.
-      tokens.push(run)
+      // Pure Latin/alphanumeric run → one stemmed word token. Pure-digit runs
+      // are identifiers and pass through stemLatin unchanged.
+      tokens.push(stemLatin(run))
       continue
     }
-    // CJK run → unigrams + adjacent bigrams.
+    // CJK run → unigrams + adjacent bigrams (no stemming on this path).
     const chars = Array.from(run)
     for (const ch of chars) tokens.push(ch)
     for (let i = 0; i + 1 < chars.length; i++) tokens.push(chars[i]! + chars[i + 1]!)
@@ -98,6 +149,18 @@ export class CorpusStats {
 /** Convenience: build {@link CorpusStats} directly from raw texts. */
 export function buildCorpusStats(texts: readonly string[]): CorpusStats {
   return new CorpusStats(texts.map(text => tokenizeForSearch(text)))
+}
+
+/**
+ * Build {@link CorpusStats} directly from PRE-TOKENIZED bags — the seam store
+ * search uses to keep its merged content+summary document bags and the df
+ * table bit-identical (running the merged bags back through
+ * {@link tokenizeForSearch} would re-split already-stemmed tokens, which is
+ * not just wasted work but type-incorrect: a token array is not a text).
+ * @param docsTokens - token bags (with duplicates) per document.
+ */
+export function buildCorpusStatsFromTokens(docsTokens: readonly (readonly string[])[]): CorpusStats {
+  return new CorpusStats(docsTokens)
 }
 
 /**
