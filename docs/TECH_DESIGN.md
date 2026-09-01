@@ -281,6 +281,7 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
   - `ts`: Unix epoch ms, plus a monotonic `seq` (lazily seeded from the medium) so same-millisecond writes order deterministically.
   - `category?`, `sessionId?`: optional provenance.
   - The audit log is capped at **200 records** (`auditCap` constructor arg); oldest evicted on overflow. Appends are best-effort (try/catch) and can never break a primary write.
+  - **The entries table caps at `entriesCap` (default 500, configurable on the store row's Config)**: `add` trims back after each successful write, evicting **pinned never → ascending `accessCount` → ascending `lastRecalledAt` ?? `createdAt`** (longest-unrecalled first); when every remaining candidate is protected the table is allowed over the cap (soft target). Eviction audits as `remove`/`janitor`.
 - **Reads** are synchronous from the domain's authoritative in-memory state; **writes** serialize on the domain's write chain and reach the JSON backend before in-memory state updates.
 - The host's `storage-json` backend persists the whole domain to `$DSH_HOME/storages/memory.json` (Windows: `%USERPROFILE%\.dsh\storages\memory.json`).
 - Uninstalling the plugin does **not** delete memories; deleting that one file wipes the data.

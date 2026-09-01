@@ -281,6 +281,7 @@ interface MemoryEntry {
   - `ts`：Unix epoch ms，外加单调递增 `seq`（首次追加时从介质播种），同毫秒写入因此有确定性顺序。
   - `category?`、`sessionId?`：可选溯源字段。
   - 审计日志封顶 **200 条**（构造参数 `auditCap`），溢出淘汰最旧。追加尽力而为（try/catch），永不破坏主写入。
+  - **条目表封顶 `entriesCap`（默认 500，store 行 Config 可配）**：`add` 成功后收敛到上限，淘汰序 **pinned 绝不淘汰 → `accessCount` 升序 → `lastRecalledAt ?? createdAt` 升序**（最久未用先走）；全部候选受保护时允许超限（软目标）。淘汰记 `remove`/`janitor` 审计。
 - **读取**同步自域的内存权威状态；**写入**在域写链上串行化，先落 JSON 后端再更新内存。
 - 宿主的 `storage-json` 后端把整个域持久化到 `$DSH_HOME/storages/memory.json`（Windows：`%USERPROFILE%\.dsh\storages\memory.json`）。
 - 卸载插件**不会**删除记忆；删除该文件即清空数据。
