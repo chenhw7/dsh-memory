@@ -349,7 +349,7 @@ interface MemorySuggestion {
 
 | 工具 | 关键参数 | 结果 | 语义要点 |
 |---|---|---|---|
-| `memory_search` | `scope?`, `category?`, `projectName?`, `query?`, `limit?` | `{ entries[], total }` | BM25 排序（分数 → 固定 → 新近）；默认 limit 实时读 `memory` 命名空间；UI 卡片最多渲染 10 条文件式匹配 |
+| `memory_search` | `scope?`, `category?`, `projectName?`, `query?`, `limit?` | `{ entries[], total, fallback? }` | BM25 排序（分数 → 固定 → 新近）；默认 limit 实时读 `memory` 命名空间；UI 卡片最多渲染 10 条文件式匹配。非空 query 零词法命中时降级：同过滤器下返回最近条目并带 `fallback: true`（只读——不盖召回戳、不复活休眠条目）；仅过滤器无 query 的空结果不降级，注入面与 remote 保持严格词法语义 |
 | `memory_add` | `scope`, `content`, `category?`, `summary?`, `importance?`, `projectName?` | `{ entry }` 或 `{ pending, suggestionId }` | 边界处先做空内容校验 + 扫描拒绝 → 精确的模型可读错误；`importance`（1–5，可选）写入时收窄进范围；人审模式下调用改为在队列中登记提议而非写入 |
 | `memory_replace` | `id`, `content?`, `category?`, `summary?`, `importance?` | `{ entry?, found }` 或 `{ pending, suggestionId }` | 至少需要一个可更新字段（空字符串 `summary` 即清除；`importance` 缺省保留原值）；新内容先验证 + 扫描再进 store；人审模式下内容变更登记携带 `targetEntryId` 的提议——既有条目在有人类采纳前原封不动 |
 | `memory_remove` | `id` | `{ removed }` | id 不存在 → `removed: false`（不是错误） |
