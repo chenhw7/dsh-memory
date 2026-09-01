@@ -187,7 +187,7 @@ figcaption{margin-top:14px;font-size:13px;color:var(--faint);letter-spacing:.04e
 .gate.bad .ic{border-color:var(--red);box-shadow:0 0 18px rgba(224,96,74,.4);background:rgba(224,96,74,.08);animation:shake .5s}
 .gate.bad .gt{color:var(--red)}
 @keyframes shake{20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
-.chip{position:absolute;top:33px;left:8%;width:66px;z-index:5;transition:left 1.05s cubic-bezier(.5,0,.3,1)}
+.chip{position:absolute;top:33px;left:8%;width:66px;z-index:5;transition:left 1.05s cubic-bezier(.5,0,.3,1),top 1.05s cubic-bezier(.5,0,.3,1)}
 .chip .payload{font-family:var(--mono);font-size:10px;background:#241f15;border:1px solid var(--amber);color:var(--amber-hi);border-radius:8px;padding:6px 8px;text-align:center;box-shadow:0 0 16px rgba(232,168,62,.35);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip.evil .payload{border-color:var(--red);color:#ffb0a0;box-shadow:0 0 16px rgba(224,96,74,.35)}
 .gate-btns{display:flex;gap:12px;margin:26px 0 6px;flex-wrap:wrap}
@@ -314,11 +314,73 @@ footer p{font-size:12.5px;color:var(--faint);margin-top:8px;max-width:420px;line
 footer .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);line-height:2.1;text-align:right}
 footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10px;margin-bottom:6px}
 
+/* ── mobile adaptation (<=900px arrow rotation / <=760px main break / <=520px finish) ── */
+@keyframes hint2v{50%{transform:rotate(90deg) translateX(6px)}}
+/* defense cards already stack at <=900px: rotate the arrow to match the column */
+@media(max-width:900px){.def-arrow{animation-name:hint2v}}
+
 @media(max-width:760px){
-  .wrap{padding:0 22px}
-  .sec-num{font-size:56px}
-  section{padding:90px 0 60px}
-  .hstat{padding-right:24px;margin-right:24px}
+  body{font-size:15.5px}
+  .wrap{padding:0 20px}
+  section{padding:84px 0 56px}
+  .kicker{font-size:11px}
+  .sec-head{flex-wrap:wrap;gap:10px 18px;margin-bottom:10px}
+  .sec-num{font-size:50px}
+  .sec-sub{font-size:15.5px;margin-bottom:34px}
+  p.lede{font-size:17px}
+  /* hero: stat cards in two columns; the canvas glow core recenters via JS */
+  .hero-stats{display:grid;grid-template-columns:1fr 1fr;gap:22px 16px;margin-top:52px}
+  .hstat{padding:0;margin:0;border-right:none}
+  .hstat b{font-size:32px}
+  .hstat b i{font-size:17px}
+  a.gh-corner{width:44px;height:44px;top:12px;right:14px}
+  .fig-panel{padding:22px 16px;border-radius:14px}
+  figcaption{font-size:12px}
+  .formula{font-size:12px;padding:12px 14px}
+  /* FIG.2 write-path gates flow vertically; the connector becomes one
+     vertical rail behind the icon column and the chip rides the Y axis (see JS setChip) */
+  .gates{position:relative;flex-direction:column;gap:44px;align-items:stretch;margin:30px auto 8px}
+  .gates::before{content:"";position:absolute;left:29px;top:26px;bottom:26px;width:1px;background:var(--line2);z-index:1}
+  .gate{min-height:52px;padding:0 8px 0 72px;text-align:left;display:flex;flex-direction:column;justify-content:center}
+  .gate::before{display:none}
+  .gate .ic{position:absolute;left:8px;top:50%;transform:translateY(-50%);margin:0;width:44px;height:44px;font-size:19px;z-index:2}
+  .gate-btns{margin:22px 0 4px}
+  .gate-btns .btn{flex:1 1 100%;text-align:center}
+  .gate-log{font-size:11px}
+  /* FIG.0 loop: shrink the nodes so labels stay inside a 390px viewport */
+  .loop-node{width:104px;margin-left:-52px}
+  .loop-node .dot{width:10px;height:10px;margin-bottom:5px}
+  .loop-node .lb{font-size:11.5px}
+  .loop-node .sb{font-size:9px}
+  .loop-core b{font-size:15px}
+  .loop-core span{font-size:9px}
+  /* code-ish blocks scroll horizontally inside instead of breaking the page */
+  .anat-card{font-size:12px;padding:16px 18px;overflow-x:auto;line-height:1.9}
+  .anat-item{align-items:flex-start;line-height:1.6}
+  .mode-view{font-size:11.5px;padding:16px 14px;min-height:0}
+  /* FIG.1 two-column demo header may wrap */
+  .sim-head{flex-wrap:wrap;gap:6px}
+  /* retrieval demo: keep 16px font so iOS does not auto-zoom on focus */
+  .bm-query{font-size:16px;padding:12px 14px}
+  .bm-row{grid-template-columns:22px 1fr 58px;gap:10px;padding:10px 12px}
+  .bm-row .tx{font-size:12.5px}
+  .bm-row .sc{font-size:11px}
+  .bm-stamp{display:block;margin-left:0;font-size:9.5px}
+  /* review queue: action buttons wrap to their own row */
+  .q-row{grid-template-columns:44px 1fr;gap:10px;padding:11px 12px}
+  .q-row .qa{grid-column:1/-1;justify-content:flex-end}
+  .life-now{font-size:40px}
+  .life-days{font-size:10px}
+  footer .src{text-align:left;margin-top:28px}
+}
+
+@media(max-width:520px){
+  .mode-btn{font-size:12px;padding:8px 13px;letter-spacing:0}
+  .sig-card{padding:22px 18px}
+  .tbl{padding:16px}
+  .creed div{padding:26px 20px}
+  .creed b{font-size:19px}
+  .bm-chip{font-size:11px;padding:6px 12px}
 }
 </style>
 </head>
@@ -351,7 +413,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     <div class="hero-stats">
       <div class="hstat"><b>7</b><span>collaborating plugins</span></div>
       <div class="hstat"><b>3</b><span>durable tables</span></div>
-      <div class="hstat"><b>8</b><span>model-facing tools</span></div>
+      <div class="hstat"><b>9</b><span>model-facing tools</span></div>
       <div class="hstat"><b>2<i>×</i></b><span>write / read defense</span></div>
     </div>
   </div>
@@ -376,7 +438,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <figcaption>The memory loop: perceive → extract → store → retrieve → inject → back into the conversation. Six stages, each owned by an independent plugin, all sharing one storage domain.</figcaption>
     </figure>
     <div class="col rv">
-      <p>In practice it is seven Cordis plugins, each with one job: <code>memory-store</code> opens the storage domain and registers the <code>ctx.memory</code> service; <code>tool-memory</code> exposes the eight model tools; <code>memory-review</code> drives automatic extraction; <code>memory-context</code> manages system-prompt injection; <code>memory-notes</code> renders conventions and pitfalls back into the repo; <code>memory-remote</code> backs the memory manager in the settings UI. The storage medium is a single file, <code>~/.dsh/storages/memory.json</code> — uninstalling the plugins never loses your memories.</p>
+      <p>In practice it is seven Cordis composition rows: six functional plugins, each with one job — <code>memory-store</code> opens the storage domain and registers the <code>ctx.memory</code> service; <code>tool-memory</code> exposes the nine model tools; <code>memory-review</code> drives automatic extraction; <code>memory-context</code> manages system-prompt injection; <code>memory-notes</code> renders conventions and pitfalls into the <code>project-notes</code> prompt section (it writes no files into your repo); <code>memory-remote</code> backs the memory manager in the settings UI (remote writes default to off and must be enabled explicitly) — plus a no-op <code>memory-root</code> entry that exists only for client-module discovery. The storage medium is a single file, <code>~/.dsh/storages/memory.json</code> — uninstalling the plugins never loses your memories.</p>
     </div>
   </div>
 </section>
@@ -462,7 +524,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="gates" id="gates">
           <div class="chip" id="chip"><div class="payload" id="payload">memory_add</div></div>
           <div class="gate" data-g="0"><div class="ic">✎</div><div class="gt">Validation</div><div class="gs">scope + projectName</div></div>
-          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">Security scan</div><div class="gs">16 secrets · 8 injections · 4 exfil</div></div>
+          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">Security scan</div><div class="gs">16 secrets · 17 injections · 4 exfil</div></div>
           <div class="gate" data-g="2"><div class="ic">▤</div><div class="gt">KV put</div><div class="gs">entries.put</div></div>
           <div class="gate" data-g="3"><div class="ic">≡</div><div class="gt">Audit append</div><div class="gs">audit + seq</div></div>
         </div>
@@ -476,7 +538,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
           <div id="miniStore"><div class="ms-row audit">audit #41 · update · source:janitor · "…staleSince stamped"</div></div>
         </div>
       </div>
-      <figcaption>The scanner is a pure function: 28 regexes cover API keys, prompt injection, and exfiltration patterns, with a whitelist for exemptions. The read side has a second line of defense (see 06).</figcaption>
+      <figcaption>The scanner is a pure function: 37 regexes cover 16 secret classes, 17 injection patterns (8 of them Chinese counterparts), and 4 exfiltration classes, with a whitelist for exemptions. The read side has a second line of defense (see 06).</figcaption>
     </figure>
 
     <div class="anat rv" style="margin-top:70px">
@@ -490,8 +552,9 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 &nbsp;&nbsp;<span class="k">"projectName"</span>: <span class="v">"dsh-memory"</span>,<br>
 &nbsp;&nbsp;<span class="k">"createdAt"</span>: <span class="v">1756…</span>, <span class="k">"updatedAt"</span>: <span class="v">1756…</span>,<br>
 &nbsp;&nbsp;<span class="k">"pinned"</span>: <span class="v">false</span>,&nbsp;&nbsp;<span class="c">// ④</span><br>
-&nbsp;&nbsp;<span class="k">"lastRecalledAt"</span>: <span class="v">1756…</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
-&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑥</span><br>}
+&nbsp;&nbsp;<span class="k">"accessCount"</span>: <span class="v">7</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
+&nbsp;&nbsp;<span class="k">"lastRecalledAt"</span>: <span class="v">1756…</span>,&nbsp;&nbsp;<span class="c">// ⑥</span><br>
+&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑦</span><br>}
         </div>
       </div>
       <div class="anat-list">
@@ -499,15 +562,20 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="anat-item"><b>category</b><span>Seven categories: failure / correction / insight / preference / convention / tool-quirk / procedure</span></div>
         <div class="anat-item"><b>summary</b><span>Optional short summary — index mode and auto recall render this first (progressive disclosure)</span></div>
         <div class="anat-item"><b>pinned</b><span>Pinned = immune to decay: "the user wants this kept"</span></div>
+        <div class="anat-item"><b>accessCount</b><span>+1 and refreshed lastRecalledAt on every hit — when the cap evicts, the lowest use signal goes first</span></div>
         <div class="anat-item"><b>lastRecalledAt</b><span>Refreshed on every retrieval hit — use is the preservative</span></div>
         <div class="anat-item"><b>staleSince</b><span>The soft-decay stamp: once stamped, it leaves the injection surface but stays searchable and revivable</span></div>
       </div>
     </div>
 
     <div class="tables3">
-      <div class="tbl rv" style="--d:.05s"><h4>entries</h4><div class="tb-sub">KvTable&lt;MemoryId, MemoryEntry&gt;</div><p>The main entry table. Reads hit the in-memory authoritative state synchronously; writes are serialized on the domain write chain, applied to the backend before the in-memory copy updates.</p></div>
+      <div class="tbl rv" style="--d:.05s"><h4>entries</h4><div class="tb-sub">KvTable&lt;MemoryId, MemoryEntry&gt; · soft cap 500</div><p>The main entry table. Reads hit the in-memory authoritative state synchronously; writes are serialized on the domain write chain, applied to the backend before the in-memory copy updates. Writing past the soft cap (<code>entriesCap</code>, configurable) evicts by use signal: pinned entries are exempt, the lowest accessCount / lastRecalledAt goes first; if everything is exempt the table may exceed the cap — healthy data is never hard-deleted.</p></div>
       <div class="tbl rv" style="--d:.15s"><h4>audit</h4><div class="tb-sub">cap = 200 rows</div><p>One audit row per successful change: the operation, the source (tool/review/flush/ui/janitor), a monotonic seq, and a content preview. Who wrote what, and when — always knowable.</p></div>
       <div class="tbl rv" style="--d:.25s"><h4>suggestions</h4><div class="tb-sub">cap = 200 rows</div><p>The pending queue in human-review mode. A suggestion is not a memory — not injected, not searched, not decayed; it only waits for a human verdict (see 06).</p></div>
+    </div>
+
+    <div class="col rv" style="margin-top:44px">
+      <p>The store ships one more layer: <strong>cross-process single-writer detection</strong>. The host storage backend assumes one writer per process — two DSH processes sharing a storage root each hold their own in-memory authoritative state and republish the whole unit file, silently clobbering each other. So on every boot, memory-store writes an owner stamp (pid + bootId) into the domain's global slot and re-reads it periodically: if its own stamp comes back as someone else's, a concurrent publisher exists and is reported at once. It detects, never locks — a foreign stamp whose pid is dead, or one closed cleanly, is no live threat, so restarts stay silent.</p>
     </div>
   </div>
 </section>
@@ -516,10 +584,10 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 <section id="retrieve">
   <div class="wrap">
     <div class="sec-head rv"><div class="sec-num">03</div><h2 class="sec-title">Retrieval: dependency-free BM25</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">No vector store, no embedding model — a 120-line Okapi BM25 with CJK-aware tokenization.</p>
+    <p class="sec-sub rv" style="--d:.1s">No vector store, no embedding model — a ~270-line dependency-free Okapi BM25 with CJK-aware tokenization and a conservative Latin stemmer.</p>
 
     <div class="col rv">
-      <p>Retrieval in two steps: <strong>structured filtering first</strong> (scope / category / projectName), then BM25 scoring over the surviving candidates. The tokenizer splits Latin text by word; for CJK it emits <strong>single-character unigrams plus adjacent bigrams</strong> — the bigrams tighten matches, the unigrams keep single-character queries recallable. Ranking proceeds by: relevance ↓, pinned ↓, recency ↓.</p>
+      <p>Retrieval in two steps: <strong>structured filtering first</strong> (scope / category / projectName), then BM25 scoring over the surviving candidates. The tokenizer splits Latin text by word and strips one conservative rule suffix to collapse inflections — <code>uses→use</code>, <code>studies→study</code>, while stems like <code>class</code> and <code>basis</code> are never damaged (one shared tokenizer for documents and queries); for CJK it emits <strong>single-character unigrams plus adjacent bigrams</strong> — the bigrams tighten matches, the unigrams keep single-character queries recallable. Summaries join the index alongside content, so a short summary recalls the entry too. Ranking proceeds by: relevance ↓, pinned ↓, recency ↓.</p>
     </div>
 
     <div class="formula rv">score = Σ <i>IDF(term)</i> × <b>tf·(k₁+1) / (tf + k₁·(1−b + b·|d|/avgdl))</b>　　<span class="dim">k₁ = 1.2, b = 0.75, non-negative IDF variant</span></div>
@@ -531,7 +599,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="bm-chips" id="bmChips"></div>
         <div style="margin-top:14px" id="bmTokens"></div>
         <div class="bm-res" id="bmRes"></div>
-        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · MRR = 0.958 (24 entries × 24 queries, measured in CI)</span></div>
+        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · P@1 = 82.9% · MRR = 0.902 (35 entries × 35 queries, en+zh, measured in CI)</span></div>
       </div>
       <figcaption>The widget above is the same algorithm ported from src/store/bm25.ts, running live in your browser. A hit stamps lastRecalledAt — recall itself is the preservative.</figcaption>
     </figure>
@@ -552,9 +620,9 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <div class="fig-panel">
         <span class="fig-tag">FIG.4 — FIVE INJECTION MODES</span>
         <div class="modes" id="modeBtns">
-          <button class="mode-btn on" data-m="policy">policy-only</button>
+          <button class="mode-btn" data-m="policy">policy-only</button>
           <button class="mode-btn" data-m="full">full</button>
-          <button class="mode-btn" data-m="index">index</button>
+          <button class="mode-btn on" data-m="index">index</button>
           <button class="mode-btn" data-m="custom">custom</button>
           <button class="mode-btn" data-m="off">off</button>
         </div>
@@ -565,7 +633,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p><strong>Index mode is the core of progressive disclosure</strong>: each entry renders as a one-line existence index (scope/category · id · summary), ordered by the project → user → global relevance tier; when the budget runs out, the tail collapses into per-category counts (<code>project/convention ×12</code>) — index size grows with the number of categories, not entries. The model sees "what exists" and fetches full text with <code>memory_get</code> on demand.</p>
+      <p><strong>Index mode — the factory default since 0.8 — is the core of progressive disclosure</strong>: each entry renders as a one-line existence index (scope/category · id · summary), ordered by the project → user → global relevance tier; when the budget runs out, the tail collapses into per-category counts (<code>project/convention ×12</code>) — index size grows with the number of categories, not entries. The model sees "what exists" and fetches full text with <code>memory_get</code> on demand.</p>
       <p>Optional <strong>step-level auto recall</strong> takes a different road: on each agent step, a BM25 search keyed on that step's user text appends the hit entries as a fenced <code>&lt;recalled-memory&gt;</code> user message — the system prompt is untouched, the prefix cache does not move a single byte. On load, corrected entries carry a conflict annotation (<em>⚠ conflicts with a newer correction</em>) so the model weighs old vs. new itself.</p>
     </div>
   </div>
@@ -607,7 +675,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p>The counterpart to decay is <strong>distillation</strong>: every 20 sessions, the curator picks oversized entries (≥ 400 chars) and has the LLM rewrite them into a concise single line — low-frequency, budget-constrained, and it can enter the human-review queue too. The memory store thus forgets, and it distills.</p>
+      <p>The counterpart to decay is <strong>distillation</strong>: every 20 sessions, the curator picks oversized entries (≥ 400 chars) — at most 5 per pass — and has the LLM rewrite them into a concise single line; low-frequency, budget-constrained, and it can enter the human-review queue too. The memory store thus forgets, and it distills.</p>
     </div>
   </div>
 </section>
@@ -623,7 +691,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="dt">WRITE-TIME</div>
         <h4><i>scanContent</i> gate</h4>
         <ul>
-          <li>28 regexes: secret / injection / exfiltration patterns</li>
+          <li>37 regexes: 16 secrets · 17 injections (8 Chinese counterparts included) · 4 exfiltration</li>
           <li>Intercepted at the tool boundary, re-checked at the storage layer (defense in depth)</li>
           <li>Rejected content returns an error and is never stored; the whitelist exempts known example values</li>
         </ul>
@@ -660,7 +728,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <div><b>Frequency is the signal</b><p>Proposals observed repeatedly accumulate hits and float up; entries recalled repeatedly stay fresh automatically. The trail of use is the most important metadata.</p></div>
       <div><b>Stability over freshness</b><p>The snapshot freezes the session for the KV-cache — rather than jitter the prefix, it accepts one beat of delay: what cache hits save far outweighs the immediate gain.</p></div>
       <div><b>Memory is context, not instructions</b><p>Every injection surface declares: the current user request, the repo files, and tool outputs always outrank memory. On conflict, trust the present.</p></div>
-      <div><b>Every write is auditable</b><p>28 scan rules, a 200-row rolling audit, an optional human-review queue — a memory system must always be able to answer "who wrote this memory, when, and why".</p></div>
+      <div><b>Every write is auditable</b><p>37 scan rules, 200-row rolling caps on audit and suggestions, a 500-entry soft cap, an optional human-review queue — a memory system must always be able to answer "who wrote this memory, when, and why".</p></div>
     </div>
   </div>
 </section>
@@ -698,7 +766,7 @@ setTimeout(()=>{if(!document.querySelector('.rv.in'))document.querySelectorAll('
 (function(){
 const cv=document.getElementById('heroCanvas'),cx=cv.getContext('2d');
 let W,H,ps=[],core={x:0,y:0};
-function rs(){W=cv.width=cv.offsetWidth*devicePixelRatio;H=cv.height=cv.offsetHeight*devicePixelRatio;cx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);core={x:cv.offsetWidth*.76,y:cv.offsetHeight*.42}}
+function rs(){W=cv.width=cv.offsetWidth*devicePixelRatio;H=cv.height=cv.offsetHeight*devicePixelRatio;cx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);const w=cv.offsetWidth;core={x:w*(w<760?.5:.76),y:cv.offsetHeight*.42}}
 rs();addEventListener('resize',rs);
 const N=90;
 for(let i=0;i<N;i++)ps.push({x:Math.random()*2000,y:Math.random()*1200,vx:.12+Math.random()*.3,vy:(Math.random()-.5)*.14,r:1+Math.random()*1.8,c:Math.random()<.82?'232,168,62':'78,201,176',a:.15+Math.random()*.5,ph:Math.random()*6.28});
@@ -862,26 +930,38 @@ const chip=document.getElementById('chip'),payload=document.getElementById('payl
       bC=document.getElementById('runClean'),bE=document.getElementById('runEvil');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let seq=42,busy=false;
-const pos=['9.5%','34.5%','59.5%','84.5%'];
+const gatesHost=document.getElementById('gates');
+const POS=['9.5%','34.5%','59.5%','84.5%'];
+const isNarrow=()=>matchMedia('(max-width:760px)').matches;
+// The chip position is measured from the target gate's bounding rect: it slides
+// along the horizontal rail on desktop and the vertical rail at <=760px, without
+// drifting across breakpoint switches, font differences, or reflow during a run.
+function setChip(i){
+  if(isNarrow()){
+    const host=gatesHost.getBoundingClientRect(),r=gates[i].getBoundingClientRect();
+    chip.style.left='-3px';
+    chip.style.top=(r.top+r.height/2-host.top-chip.offsetHeight/2)+'px';
+  }else{chip.style.left=POS[i];chip.style.top='33px'}
+}
 function reset(){gates.forEach(g=>g.classList.remove('ok','bad'))}
 async function run(evil){
   if(busy)return;busy=true;bC.disabled=bE.disabled=true;reset();
   chip.classList.toggle('evil',evil);
   payload.textContent=evil?'sk-ant-api03…':'user: per-item review';
-  chip.style.left=pos[0];log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
+  setChip(0);log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
   await sleep(900);
-  gates[0].classList.add('ok');chip.style.left=pos[1];
-  log.innerHTML='// scanContent: scanning 28 patterns …';
+  gates[0].classList.add('ok');setChip(1);
+  log.innerHTML='// scanContent: scanning 37 patterns …';
   await sleep(1100);
   if(evil){
     gates[1].classList.add('bad');
     log.innerHTML='<span class="err">✗ secret: Anthropic API key — content rejected by the scanner, never stored</span>';
     await sleep(1600);
   }else{
-    gates[1].classList.add('ok');chip.style.left=pos[2];
+    gates[1].classList.add('ok');setChip(2);
     log.innerHTML='// scanContent ✓ → entries.put(mem_7a41…)';
     await sleep(1000);
-    gates[2].classList.add('ok');chip.style.left=pos[3];
+    gates[2].classList.add('ok');setChip(3);
     const row=document.createElement('div');row.className='ms-row';
     row.textContent='entry mem_7a41… · user/preference · "Review comments must give a reason per item"';
     store.prepend(row);
@@ -893,7 +973,7 @@ async function run(evil){
     log.innerHTML='<span class="ok">✓ stored; audit appended (seq monotonic, cap 200 rolling)</span>';
     await sleep(1600);
   }
-  chip.style.left=pos[0];busy=false;bC.disabled=bE.disabled=false;
+  setChip(0);busy=false;bC.disabled=bE.disabled=false;
 }
 bC.onclick=()=>run(false);bE.onclick=()=>run(true);
 })();
@@ -911,12 +991,28 @@ const ENTRIES=[
  {s:'global',c:'procedure',t:'To find a port conflict: lsof -i :8080 to find the PID, then kill it — don\'t just reboot the machine'},
  {s:'user',c:'correction',t:'The team meeting moved to Wednesday afternoon — not Monday as announced before'},
 ];
+/* stemLatin: strips ONE conservative Latin inflectional suffix (ported from
+   src/store/bm25.ts, rule-for-rule). Documents and queries share one tokenizer,
+   so "testing / tests / test" collapse to a single token while digit runs and
+   stems like class / basis are never damaged; CJK never enters this function. */
+function stemLatin(t){
+  if(/^\d+$/.test(t))return t;
+  if(t.length<6)return t;
+  if(t.endsWith('ies'))return t.slice(0,-3)+'y';
+  if(t.endsWith('sses'))return t.slice(0,-2);
+  if(t.endsWith('ches')||t.endsWith('shes')||t.endsWith('xes')||t.endsWith('zes'))return t.slice(0,-2);
+  if(t.length>=5&&t.endsWith('ses')&&/[aeiou]/.test(t.charAt(t.length-4)))return t.slice(0,-2);
+  if(t.endsWith('ed')&&!/[aeiou]{2}$/.test(t))return t.slice(0,-2);
+  if(t.length>=7&&t.endsWith('ing')&&!/[aeiou]{2}$/.test(t))return t.slice(0,-3);
+  if(t.endsWith('s')&&!/ss$|us$|is$/.test(t))return t.slice(0,-1);
+  return t;
+}
 function tokenizeForSearch(text){
   const lowered=text.toLowerCase(),tokens=[];
   const re=/[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+/g;
   let m;while((m=re.exec(lowered))!==null){
     const run=m[0];
-    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(run);continue}
+    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(stemLatin(run));continue}
     const chars=[...run];
     for(const ch of chars)tokens.push(ch);
     for(let i=0;i+1<chars.length;i++)tokens.push(chars[i]+chars[i+1]);
@@ -1042,9 +1138,9 @@ off:`<span class="cm">// no memory section is injected at all
 // 0 characters, 0 tokens in the system prompt</span>`
 };
 const caps={
-policy:'<b>Default mode.</b> Only the behavioral guidance is injected, no content — the model calls memory_search on demand. Lowest standing cost; memory growth costs nothing.',
+policy:'<b>Policy-only mode (the pre-0.8 default).</b> Only the behavioral guidance is injected, no content — the model calls memory_search on demand. Lowest standing cost.',
 full:'<b>Full mode.</b> Frozen snapshot plus guidance, all at once — the model sees every healthy memory up front. For small, curated stores.',
-index:'<b>Index mode (progressive disclosure).</b> The model sees each entry\'s summary and id, fetching full text on demand. Index size grows with categories, not entries.',
+index:'<b>Default mode since 0.8 · progressive disclosure.</b> The model sees each entry\'s summary and id, fetching full text on demand. Index size grows with categories, not entries.',
 custom:'<b>Custom mode.</b> Inject your own policy text, taking full control of the memory section\'s wording.',
 off:'<b>Off.</b> The section is absent entirely; the tool layer is unaffected.'
 };
@@ -1054,7 +1150,7 @@ btns.forEach(b=>b.onclick=()=>{
   view.style.opacity=0;
   setTimeout(()=>{view.innerHTML=views[b.dataset.m];cap.innerHTML=caps[b.dataset.m];view.style.opacity=1},220);
 });
-view.innerHTML=views.policy;cap.innerHTML=caps.policy;
+view.innerHTML=views.index;cap.innerHTML=caps.index;
 })();
 
 /* ═════════ lifecycle simulator ═════════ */
