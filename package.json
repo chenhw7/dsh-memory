@@ -1,6 +1,6 @@
 {
   "name": "@chenhw7/dsh-memory",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Cairn — long-term memory for the DeepSeek Harness: persistent cross-session memory (store, tools, auto-extraction, context injection) as one installable profile bundle",
   "type": "module",
   "homepage": "https://chenhw7.github.io/dsh-memory/",
