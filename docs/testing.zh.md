@@ -9,7 +9,7 @@
 - **单元测试**(`npm run test`):vitest 跑 `tests/` 下的规格,含 `tests/integration/` 中的集成规格(composition 与宿主契约 smoke)。测试在作用域与命名上贴近被测代码;[vitest 配置](../vitest.config.ts)用 automatic JSX runtime 编译 client 源码,使 `tests/*.spec.tsx` 能在 `node` 环境驱动真实的 `src/client` 组件树。
 - **真实 API**(`tests/judge-real-api.spec.ts`):唯一调用真实模型的规格。无 `DEEPSEEK_API_KEY` 时经 `describe.skipIf` 自动跳过,本地与 CI 均保持绿灯。[测试技能](../.agents/skills/dsh-ci-test-reliability/SKILL.md)规定其重试只在这个外部边界内有效。
 - **金标语料**:`tests/fixtures/` 保存入库数据集——去重数据集、提取金标、扫描器语料。`tests/recall-golden.spec.ts` 钉住默认档决策背后的注入模式对比(见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md));有意改变金标数值的变更,在同一次变更中更新夹具与该 Note 的实测表(可由同一规格再生)。
-- **构建门禁**(`npm run build`):对 `src/` 跑 `tsc` 加 esbuild client 打包。TypeScript 就是 typecheck 车道;没有独立的覆盖率、lint 或快照车道。CI(`.github/workflows/publish.yml`)在版本 tag 上跑 `npm ci && npm publish --provenance`,发布前执行 `prepublishOnly`(`build && test`)——测试不过则发布被阻断,tag/版本一致性检查最先执行。
+- **构建门禁**(`npm run build`):对 `src/` 跑 `tsc` 加 esbuild client 打包。TypeScript 就是 typecheck 车道;没有独立的覆盖率、lint 或快照车道。GitHub Actions 会跑两遍同一对 `build` + `test`:`ci.yml` 在每次 push 到 `main` 与每个 pull request 上跑,发布时再经 `prepublishOnly` 在 `npm publish` 前跑一遍——测试不过会同时阻断 CI 信号与发布(见[发布管线](TECH_DESIGN.zh.md))。
 
 ## 规格如何执行
 

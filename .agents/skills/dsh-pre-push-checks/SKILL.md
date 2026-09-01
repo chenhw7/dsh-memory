@@ -5,7 +5,7 @@ description: Use before pushing to main, tagging a release, publishing to npm, o
 
 # Pre-Push Checks
 
-Run relevant local evidence once before pushing `dsh-memory`. The repository is single-maintainer with direct pushes to `main`; the only external gate is the release workflow (`.github/workflows/publish.yml`), which runs `prepublishOnly` (`npm run build && npm run test`) before `npm publish` on a version tag. Local evidence exists to keep that release lane green and to keep `main` shippable — not to duplicate the release run.
+Run relevant local evidence once before pushing `dsh-memory`. The repository is single-maintainer with direct pushes to `main`; two external gates run on GitHub Actions — `ci.yml` builds and tests every push to `main` and every pull request, and the release workflow (`.github/workflows/publish.yml`) runs `prepublishOnly` (`npm run build && npm run test`) before `npm publish` on a version tag. Local evidence exists to catch a failure before it reaches those runners — not to duplicate them.
 
 ## Inspect the outgoing change
 

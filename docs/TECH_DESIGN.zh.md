@@ -734,7 +734,7 @@ dsh-memory/
 ├── src/                    # TypeScript 源码（35 个文件，约 10.1 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（27 个文件，493 个用例）
+├── tests/                  # vitest specs（27 个文件，501 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -763,13 +763,13 @@ patch 特意**不**插入 `storage-json` / `storage-domain` 行：`dsh-web-app` 
 
 ### 10.5 发布管线
 
-GitHub Actions 在 `v*` tag 推送时发布到 npm（`publish.yml`）：校验 tag 与 `package.json` 匹配，安装后以 granular `NPM_TOKEN` 执行 `npm publish`（`prepublishOnly` = 构建 + 测试）。另有 CI workflow（`ci.yml`）在每次 push/PR 上构建并测试。
+GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每个 pull request 上构建并测试（`npm ci` → `npm run build` → `npm test`）。`publish.yml` 在 `v*` tag 推送时触发：校验 tag 与 `package.json` 匹配，安装后执行 `npm publish --provenance`，发布前先跑 `prepublishOnly`（构建 + 测试）。发布通过 npm OIDC 可信发布鉴权，因此不存在 token secret；两个 workflow 都把 actions 固定到 commit SHA。
 
 ---
 
 ## 11. 测试策略
 
-仓库自带 **27 个 vitest spec 文件、493 个用例**（487 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **27 个 vitest spec 文件、501 个用例**（495 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。

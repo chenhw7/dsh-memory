@@ -28,11 +28,11 @@ scripts/       Build and site tooling
 
 ```sh
 npm run build    # tsc -p tsconfig.json + fix-imports + client bundle (prepublishOnly runs build && test)
-npm run test     # vitest run (the only test lane; CI = GitHub Actions publish.yml on tag push)
+npm run test     # vitest run (the only test lane)
 npm ci           # install (npm, not pnpm/yarn)
 ```
 
-There is no typecheck/lint/doc-gate runner: `tsc` gates the build, vitest gates behavior, review gates the rest.
+There is no typecheck/lint/doc-gate runner: `tsc` gates the build, vitest gates behavior, review gates the rest. GitHub Actions runs `build` + `test` on every push to `main` and every PR (`ci.yml`); `publish.yml` publishes on `v*` tags ([release pipeline](docs/TECH_DESIGN.md)).
 
 ## Conventions
 

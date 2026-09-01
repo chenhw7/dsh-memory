@@ -11,7 +11,7 @@ Build tests that remain correct under the repository's real execution topology, 
 
 - Use [the testing policy](../../../docs/testing.md) to select unit, real-API, golden-corpus, or build-gate evidence.
 - Use [the defensive patterns](../../../docs/defensive-patterns.md) for lifecycle, subprocess, cancellation, and teardown behavior.
-- Read the active [vitest config](../../../vitest.config.ts) and [release workflow](../../../.github/workflows/publish.yml) when their worker or job topology affects the test.
+- Read the active [vitest config](../../../vitest.config.ts), [CI workflow](../../../.github/workflows/ci.yml), and [release workflow](../../../.github/workflows/publish.yml) when their worker or job topology affects the test.
 - Use [dsh-pre-push-checks](../dsh-pre-push-checks/SKILL.md) after the test design is sound to select outgoing validation.
 
 ## Model the execution topology
@@ -21,7 +21,7 @@ Assume these layers can overlap unless the active configuration proves otherwise
 1. Tests in one Vitest file.
 2. Separate Vitest files or worker processes (`npm run test` runs all spec files concurrently).
 3. A vitest run concurrent with a `npm run build` or the client esbuild bundle on the same checkout.
-4. The release workflow job (`publish.yml`) on its runner — the only CI job, sharing no host with local runs.
+4. A GitHub Actions job on its own runner, sharing no host with local runs — `ci.yml` on every push to `main` and every pull request, or `publish.yml` on a version tag.
 
 Process isolation does not isolate host ports, predictable filesystem paths, external services, databases, sockets, or inherited child processes. The store under test reads and writes real files — default the store root to a private `mkdtemp` directory in fixtures, never the developer's real `$DSH_HOME`, and never a shared predictable path inside the checkout. For every acquired resource, identify its owner, atomic allocation mechanism, observable readiness signal, registered cleanup, and quiescent completion signal.
 

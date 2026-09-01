@@ -734,7 +734,7 @@ dsh-memory/
 ├── src/                    # TypeScript sources (35 files, ~10.1 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (27 files, 493 cases)
+├── tests/                  # vitest specs (27 files, 501 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -763,13 +763,13 @@ The patch deliberately inserts **no** `storage-json` / `storage-domain` rows: th
 
 ### 10.5 Release pipeline
 
-GitHub Actions publishes to npm on `v*` tags (`publish.yml`): it verifies the tag matches `package.json`, installs, and runs `npm publish` (`prepublishOnly` = build + tests) with a granular `NPM_TOKEN`. A separate CI workflow (`ci.yml`) builds and tests every push/PR.
+Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main` and every pull request (`npm ci` → `npm run build` → `npm test`). `publish.yml` fires on `v*` tags: it verifies the tag matches `package.json`, installs, and runs `npm publish --provenance`, which executes `prepublishOnly` (build + tests) before publishing. Publishing authenticates through npm OIDC trusted publishing, so no token secret exists; both workflows pin their actions to commit SHAs.
 
 ---
 
 ## 11. Testing Strategy
 
-The repo ships **27 vitest spec files, 493 test cases** (487 active + 6 skipped without real-API keys), in five layers:
+The repo ships **27 vitest spec files, 501 test cases** (495 active + 6 skipped without real-API keys), in five layers:
 
 1. **Pure-function units** — `extract.spec` (67: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
 2. **Contract** — `store-contract.spec` (14): an in-memory `TestMemoryStore` exercises the abstract contract (CRUD/search/pin/archive/janitor two-tier decay/health/audit, scanner rejections, project-scope validation).

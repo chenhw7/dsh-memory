@@ -15,7 +15,7 @@ Status: implemented
 强制集合有意保持很小,且每一项都可机械检查:
 
 - `npm run build`:对 `src/` 跑 `tsc` 加 esbuild client 打包——它同时是 typecheck 车道、编译门禁与 client 打包门禁。没有独立的 `typecheck`、`lint` 或 `coverage` 脚本。
-- `npm run test`:vitest 跑 `tests/`;唯一的行为门禁。CI(由 tag 触发的发布工作流)在 `npm publish` 前恰好运行 `prepublishOnly` = `build && test`,此前先做 tag/版本一致性检查。
+- `npm run test`:vitest 跑 `tests/`;唯一的行为门禁。GitHub Actions 会跑它两遍:`ci.yml` 在每次 push 到 `main` 与每个 pull request 上跑,`publish.yml` 则经 `prepublishOnly` = `build && test` 在 `npm publish` 前跑,此前先做 tag/版本一致性检查。
 - 评审:一切不可机械检查的内容——行文纪律、测试强度、落位、配对质量——由评审按 [dsh-code-review](../../../skills/dsh-code-review/SKILL.md) 与[文档标准](../../../../docs/AGENTS.md)负责。
 - 本仓库不运行 Git 钩子;推送前证据纪律由 [dsh-pre-push-checks](../../../skills/dsh-pre-push-checks/SKILL.md) 承载。
 

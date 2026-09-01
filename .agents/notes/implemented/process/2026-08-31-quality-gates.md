@@ -15,7 +15,7 @@ This codebase is developed primarily by coding agents. Agents follow enforced ga
 The enforced set is deliberately small, and every member is mechanically checkable:
 
 - `npm run build`: `tsc` over `src/` plus the esbuild client bundle — this is the typecheck lane, the compile gate, and the client-bundle gate. There is no separate `typecheck`, `lint`, or `coverage` script.
-- `npm run test`: vitest over `tests/`; the only behavioral gate. CI (the tag-triggered publish workflow) runs exactly `prepublishOnly` = `build && test` before `npm publish`, after a tag/version consistency check.
+- `npm run test`: vitest over `tests/`; the only behavioral gate. GitHub Actions runs it twice: `ci.yml` on every push to `main` and every pull request, and `publish.yml` through `prepublishOnly` = `build && test` before `npm publish`, after a tag/version consistency check.
 - Review: everything not mechanically checkable — prose discipline, test strength, placement, pairing quality — is owned by review per [dsh-code-review](../../../skills/dsh-code-review/SKILL.md) and the [documentation standard](../../../../docs/AGENTS.md).
 - No Git hooks run in this repository; the pre-push evidence discipline is carried by [dsh-pre-push-checks](../../../skills/dsh-pre-push-checks/SKILL.md).
 
