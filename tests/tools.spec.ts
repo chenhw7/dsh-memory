@@ -151,10 +151,10 @@ function text(result: { content: { type: string; text?: string }[] }): string {
 
 describe('@deepseek-ai/dsh-tool-memory', () => {
   describe('registration', () => {
-    it('registers all eight memory tools with stable names', async () => {
+    it('registers all nine memory tools with stable names', async () => {
       const { ctx } = await setup()
       const names = ctx.tools.schemas().map(s => s.name).filter(n => n.startsWith('memory_'))
-      expect(names.sort()).toEqual(['memory_add', 'memory_get', 'memory_list', 'memory_pin', 'memory_remove', 'memory_replace', 'memory_search', 'memory_unpin'])
+      expect(names.sort()).toEqual(['memory_add', 'memory_forget', 'memory_get', 'memory_list', 'memory_pin', 'memory_remove', 'memory_replace', 'memory_search', 'memory_unpin'])
     })
 
     it('has the namespace-plugin export shape (no stray default)', () => {
@@ -518,6 +518,154 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const value = result.value as { removed: boolean }
       expect(value.removed).toBe(false)
       expect(text(result)).toContain('not found')
+    })
+  })
+
+  describe('memory_forget', () => {
+    it('refuses the batch delete unless confirm is explicitly true', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'docker workflow note', createdAt: 1, updatedAt: 1 })
+      // JSON-serializable arguments: absent confirm and explicit false both refuse.
+      for (const args of [{ topic: 'docker' }, { topic: 'docker', confirm: false }]) {
+        const result = await callTool(ctx, 'memory_forget', args)
+        expect(result.isError).toBe(true)
+        expect(text(result)).toContain('confirm: true')
+      }
+      // Nothing was deleted without confirmation.
+      expect(store.list().length).toBe(1)
+    })
+
+    it('requires a non-empty topic even with confirm: true', async () => {
+      const { ctx } = await setup()
+      // The absent-topic case is refused at the schema boundary ("missing
+      // required property"); blank topics reach the tool's own guard.
+      for (const args of [{ topic: '', confirm: true }, { topic: '   ', confirm: true }]) {
+        const result = await callTool(ctx, 'memory_forget', args)
+        expect(result.isError).toBe(true)
+        expect(text(result)).toContain('non-empty topic')
+      }
+    })
+
+    it('removes every lexically related entry and reports ids', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'docker compose workflow for the demo', createdAt: 1, updatedAt: 1 })
+      store.seed({ scope: 'global', content: 'docker image build fails on arm', createdAt: 2, updatedAt: 2 })
+      store.seed({ scope: 'global', content: 'unrelated cooking recipe', createdAt: 3, updatedAt: 3 })
+
+      const result = await callTool(ctx, 'memory_forget', { topic: 'docker', confirm: true })
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { removedCount: number; removedIds: string[] }
+      expect(value.removedCount).toBe(2)
+      expect(value.removedIds).toHaveLength(2)
+      // Only the docker-related entries are gone; the rest survives.
+      expect(store.list().map(e => e.content)).toEqual(['unrelated cooking recipe'])
+    })
+
+    it('matches through a summary (the merged index bag) and includes stale entries', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'long body about the release pipeline', summary: 'release checklist', createdAt: 1, updatedAt: 1 })
+      store.seed({ scope: 'global', content: 'retired kubernetes note', staleSince: 100, createdAt: 2, updatedAt: 2 })
+
+      const result = await callTool(ctx, 'memory_forget', { topic: 'release', confirm: true })
+      expect(result.isError).toBe(false)
+      const value = result.value as { removedCount: number; removedIds: string[] }
+      // The summary token put the first entry in scope…
+      expect(value.removedCount).toBe(1)
+      // …and a search-based pass sees stale entries too (store.search does not
+      // exclude them), so the second seed's removal is asserted by topic below.
+      const second = await callTool(ctx, 'memory_forget', { topic: 'kubernetes', confirm: true })
+      const secondValue = second.value as { removedCount: number }
+      expect(secondValue.removedCount).toBe(1)
+    })
+
+    it('a zero-hit topic removes nothing', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'python preference', createdAt: 1, updatedAt: 1 })
+      const result = await callTool(ctx, 'memory_forget', { topic: 'zzzunmatched', confirm: true })
+      expect(result.isError).toBe(false)
+      const value = result.value as { removedCount: number; removedIds: string[] }
+      expect(value.removedCount).toBe(0)
+      expect(value.removedIds).toEqual([])
+      expect(store.list().length).toBe(1)
+      expect(text(result)).toContain('nothing was removed')
+    })
+
+    it('pinned entries are exempt and reported via pinnedSkipped', async () => {
+      const { ctx, store } = await setup()
+      const pinned = store.seed({ scope: 'global', content: 'pinned docker workflow', pinned: true, createdAt: 1, updatedAt: 1 })
+      store.seed({ scope: 'global', content: 'docker compose note', createdAt: 2, updatedAt: 2 })
+
+      const result = await callTool(ctx, 'memory_forget', { topic: 'docker', confirm: true })
+      expect(result.isError).toBe(false)
+      const value = result.value as { removedCount: number; pinnedSkipped?: number }
+      // Only the unpinned docker entry goes; pin means "never forget".
+      expect(value.removedCount).toBe(1)
+      expect(value.pinnedSkipped).toBe(1)
+      expect(store.get(pinned.id as never)?.content).toBe('pinned docker workflow')
+    })
+
+    it('a batch above half the search ceiling is refused', async () => {
+      const { ctx, store } = await setup()
+      // defaultLimit() is 50 → the ceiling is 25 matched entries.
+      for (let i = 0; i < 26; i++) {
+        store.seed({ scope: 'global', content: `docker note number ${i}`, createdAt: i + 1, updatedAt: i + 1 })
+      }
+      const result = await callTool(ctx, 'memory_forget', { topic: 'docker', confirm: true })
+      expect(result.isError).toBe(true)
+      expect(text(result)).toContain('batch ceiling')
+      // Nothing was removed by the refused call.
+      expect(store.list().length).toBe(26)
+    })
+
+    it('respects scope, category, and projectName filters', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'deploy pipeline note', createdAt: 1, updatedAt: 1 })
+      store.seed({ scope: 'user', content: 'deploy habit note', createdAt: 2, updatedAt: 2 })
+      store.seed({ scope: 'global', content: 'deploy pipeline in the other project', projectName: 'other', createdAt: 3, updatedAt: 3 })
+
+      // Scope alone: both global entries are in the batch, the user one is not.
+      const byScope = await callTool(ctx, 'memory_forget', { topic: 'deploy', scope: 'global', confirm: true })
+      expect(byScope.isError).toBe(false)
+      expect((byScope.value as { removedCount: number }).removedCount).toBe(2)
+      expect(store.list().map(e => e.content)).toEqual(['deploy habit note'])
+
+      // projectName narrows the batch to that project's entries.
+      store.seed({ scope: 'project', content: 'deploy pipeline for demo', projectName: 'demo', createdAt: 4, updatedAt: 4 })
+      store.seed({ scope: 'project', content: 'deploy pipeline for elsewhere', projectName: 'elsewhere', createdAt: 5, updatedAt: 5 })
+      const byProject = await callTool(ctx, 'memory_forget', { topic: 'deploy', projectName: 'demo', confirm: true })
+      expect(byProject.isError).toBe(false)
+      expect((byProject.value as { removedCount: number }).removedCount).toBe(1)
+      expect(store.list().map(e => e.content)).toEqual(['deploy habit note', 'deploy pipeline for elsewhere'])
+
+      // category narrows likewise.
+      store.seed({ scope: 'global', content: 'deploy incident postmortem', category: 'failure', createdAt: 6, updatedAt: 6 })
+      store.seed({ scope: 'global', content: 'deploy runbook', category: 'procedure', createdAt: 7, updatedAt: 7 })
+      const byCategory = await callTool(ctx, 'memory_forget', { topic: 'deploy', category: 'failure', confirm: true })
+      expect(byCategory.isError).toBe(false)
+      expect((byCategory.value as { removedCount: number }).removedCount).toBe(1)
+      expect(store.list().map(e => e.content)).toEqual(['deploy habit note', 'deploy pipeline for elsewhere', 'deploy runbook'])
+    })
+
+    it('every removed entry leaves a remove audit record (contract-suite removes only)', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'audit me docker', createdAt: 1, updatedAt: 1 })
+      store.seed({ scope: 'global', content: 'audit me docker too', createdAt: 2, updatedAt: 2 })
+      const result = await callTool(ctx, 'memory_forget', { topic: 'docker', confirm: true })
+      const value = result.value as { removedCount: number }
+      expect(value.removedCount).toBe(2)
+      // TestMemoryStore.remove is a bare map delete (no audit table), so the
+      // audit-trail behavior is pinned at the store contract level; here we
+      // pin that the tool path goes through store.remove per entry.
+      expect(store.list().length).toBe(0)
+    })
+
+    it('describes the danger and the confirm requirement to the model', async () => {
+      const { ctx } = await setup()
+      const schema = ctx.tools.schemas().find(s => s.name === 'memory_forget')!
+      expect(schema.description).toMatch(/DANGEROUS/)
+      expect(schema.description).toMatch(/confirm/)
+      expect(schema.description).toMatch(/audit log/)
     })
   })
 

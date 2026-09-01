@@ -41,6 +41,17 @@ describe('detectConflict (§3.11)', () => {
     const facts: SessionFact[] = [{ text: 'actually the moon is not cheese', isCorrection: true }]
     expect(detectConflict(entry, facts).status).toBe('fresh')
   })
+
+  // Recorded residual (conflict-resolution entry, partially closed): a heavily
+  // paraphrased correction stays below the stale line on the IDF metric and
+  // passes through unflagged. This test PINS the residual so a future change
+  // to the metric or thresholds consciously updates it — it documents a known
+  // lexical-plane cost, not a behavior to preserve for its own sake.
+  it('passes a heavily paraphrased correction through unflagged (recorded residual)', () => {
+    const entry = { id: 'e1', content: 'the build command is npm run build' }
+    const facts: SessionFact[] = [{ text: 'switch packaging to pnpm; npm scripts are retired here', isCorrection: true }]
+    expect(detectConflict(entry, facts).status).toBe('fresh')
+  })
 })
 
 describe('detectConflicts (§3.11)', () => {

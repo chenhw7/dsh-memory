@@ -191,6 +191,17 @@ function compareAuditAsc(a: AuditEntry, b: AuditEntry): number {
 /** Cordis plugin name. */
 export const name = 'memory-store-domain'
 
+/**
+ * Fraction of {@link StoreConfig.entriesCap} at or beyond which the startup
+ * selfcheck warns that the store is approaching the single-JSON-medium
+ * migration threshold (scale-trigger-selfcheck): it detects "close to the
+ * cap" where the cap's own eviction only acts at "past the cap". File-size
+ * and multi-process concerns are deliberately not re-checked here — the file
+ * size is derived from the same entry count, and cross-process detection
+ * (cross-process-detect) already owns the concurrent-writer warning.
+ */
+const SCALE_SELFCHECK_FRACTION = 0.8
+
 /** Services required before this provider can mount. */
 export const inject = ['storageDomain']
 
@@ -379,6 +390,31 @@ export class DomainMemoryStore extends MemoryStore {
     this.suggestionCap = suggestionCap
     this.entriesCap = entriesCap
     this.failureLogger = failureLogger
+    // Startup selfcheck (scale-trigger-selfcheck): judge the entry count the
+    // medium opened with, once per construction. Deployments that reopen an
+    // already-large medium see the warning at boot — the point where a
+    // migration decision (per-record/SQLite backing) is still cheap — instead
+    // of first learning about the size from an eviction storm.
+    this.selfcheckScale()
+  }
+
+  /**
+   * One-time startup scale judgment. Fires a warn when the entry count
+   * loaded from the medium already sits at or above
+   * {@link SCALE_SELFCHECK_FRACTION} of {@link entriesCap}. The warn carries
+   * the concrete numbers and the documented migration threshold, and goes
+   * through the same best-effort logger channel as every background-path
+   * failure — a missing logger (unit tests, headless constructions) stays
+   * silent rather than throwing out of the constructor.
+   */
+  private selfcheckScale(): void {
+    if (this.entries.size < this.entriesCap * SCALE_SELFCHECK_FRACTION) return
+    this.failureLogger?.warn(
+      `dsh-memory: entries table holds ${this.entries.size} of ${this.entriesCap} `
+      + `allowed entries (≥ ${SCALE_SELFCHECK_FRACTION}× cap) — approaching the `
+      + 'single-JSON-medium scale ceiling; consider migrating to per-record or '
+      + 'SQLite backing (see the improvement program\'s scale-trigger-selfcheck entry)',
+    )
   }
 
   override reportFailure(site: string, error?: unknown): void {

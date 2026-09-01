@@ -1,7 +1,7 @@
 /**
- * Model-facing tools over the long-term memory service. Registers six tools on
+ * Model-facing tools over the long-term memory service. Registers seven tools on
  * `ctx.tools`: `memory_search`, `memory_add`, `memory_replace`,
- * `memory_remove`, `memory_list`, and `memory_get`. Each tool reads the
+ * `memory_remove`, `memory_forget`, `memory_list`, and `memory_get`. Each tool reads the
  * optional `memory` service through `ctx.get('memory')` and fails loud when no
  * provider is composed. Write paths run content through {@link scanContent} at
  * the tool boundary so the model sees a clean rejection before the store is
@@ -176,6 +176,18 @@ const REPLACE_DESCRIPTION =
 const REMOVE_DESCRIPTION =
   'Remove one persistent memory entry by id. Returns `removed: true` when the '
   + 'entry existed and was deleted, `removed: false` when the id was already absent.'
+
+const FORGET_DESCRIPTION =
+  'DANGEROUS: batch-forget every persistent memory entry lexically related to a '
+  + 'topic. BM25 token matching (any shared token counts) decides relatedness '
+  + 'over content AND summaries — one sloppy topic word deletes unrelated entries '
+  + 'irreversibly. `confirm` MUST be an explicit boolean true: the call is refused '
+  + 'without it. Always narrow with `scope`/`projectName`/`category` first, and run '
+  + 'memory_search with the same topic + filters beforehand to preview what would '
+  + 'be deleted. Pinned entries are never removed (pin means "never forget") and '
+  + 'a batch above half the configured search ceiling is refused — narrow the '
+  + 'filters instead. Every removed entry is individually recorded in the audit '
+  + 'log. Returns `removedCount` and `removedIds`; a zero-hit topic removes nothing.'
 
 const LIST_DESCRIPTION =
   'List persistent memory entries, optionally filtered by scope, project, and '
@@ -679,6 +691,108 @@ export function apply(ctx: Context, config: Config): void {
       return {
         card: 'generic',
         title: meta?.removed ? 'Memory entry removed.' : 'Memory entry not found.',
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'memory_forget',
+    description: FORGET_DESCRIPTION,
+    timeoutMs: 5000,
+    parameters: {
+      topic: { type: 'string', required: true, description: 'Topic keywords; entries sharing ANY token with this text (in content or summary) are removed.' },
+      scope: { type: 'string', enum: [...SCOPES], description: 'Restrict the batch to entries matching this scope.' },
+      category: { type: 'string', enum: [...CATEGORIES], description: 'Restrict the batch to entries matching this category.' },
+      projectName: { type: 'string', description: 'Restrict project-scoped entries to this project name.' },
+      confirm: { type: 'boolean', description: 'MUST be explicitly true: the irreversible batch delete is refused without it.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          removedCount: { type: 'integer', required: true },
+          removedIds: { type: 'array', items: { type: 'string' }, required: true },
+          pinnedSkipped: { type: 'integer' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.removedCount === 0
+          ? 'No entries matched the topic — nothing was removed.'
+          : `Forgot ${value.removedCount} entr${value.removedCount === 1 ? 'y' : 'ies'} related to the topic: ${(value.removedIds ?? []).join(', ')}`,
+      }],
+      presentationMeta: (_args, value) => ({ removedCount: value.removedCount, removedIds: value.removedIds ?? [] }),
+    },
+    async execute(args) {
+      // Double confirmation for an irreversible batch delete: absent or false
+      // both refuse, before any search or write runs.
+      if (args.confirm !== true) {
+        throw new Error('memory_forget is a dangerous batch delete: pass confirm: true '
+          + 'after previewing the topic with memory_search')
+      }
+      if (args.topic === undefined || args.topic.trim().length === 0) {
+        throw new Error('memory_forget requires a non-empty topic')
+      }
+      const store = requireMemory(ctx)
+      // Same lexical semantics as memory_search (BM25 tokens, store.search):
+      // no similarity threshold — a token hit IS the relatedness judgment, so
+      // the model chooses topic words with the same care a search query takes.
+      // recordRecall stays default: a delete pass legitimately refreshes the
+      // doomed entries' metadata on the way out.
+      const result = store.search({
+        query: args.topic,
+        ...args.scope !== undefined ? { scope: args.scope as MemoryScope } : {},
+        ...args.category !== undefined ? { category: args.category as MemoryCategory } : {},
+        ...args.projectName !== undefined ? { projectName: args.projectName } : {},
+        // No limit: every lexical hit related to the topic must go.
+        limit: 0,
+      })
+      // Pinned entries are exempt: pin means "never forget" everywhere else
+      // (search ranking, janitor decay), so a topic sweep silently deleting
+      // them would break that contract. They survive and are reported so the
+      // caller can unpin + re-run if the intent really covers them.
+      const deletable = result.entries.filter(entry => entry.pinned !== true)
+      const pinnedSkipped = result.entries.length - deletable.length
+      if (result.total === 0 || deletable.length === 0) {
+        return pinnedSkipped > 0
+          ? { removedCount: 0, removedIds: [], pinnedSkipped }
+          : { removedCount: 0, removedIds: [] }
+      }
+      // Runaway guard: a broad topic word on a large store must not delete
+      // half of it in one call. Forgetting entriesCap/2 rows in one pass is
+      // almost always a token mistake — refuse and let the caller narrow
+      // the filters or split the batch.
+      const maxBatch = Math.max(1, Math.floor(defaultLimit() / 2))
+      if (deletable.length > maxBatch) {
+        throw new Error(`memory_forget matched ${deletable.length} entries, above the batch ceiling of ${maxBatch} — narrow with scope/category/projectName, or use a more specific topic`)
+      }
+      const removedIds: string[] = []
+      for (const entry of deletable) {
+        if (await store.remove(entry.id)) {
+          removedIds.push(entry.id as string)
+        }
+      }
+      return pinnedSkipped > 0
+        ? { removedCount: removedIds.length, removedIds, pinnedSkipped }
+        : { removedCount: removedIds.length, removedIds }
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: 'Forget by topic',
+      kind: 'delete',
+      rawInput: {
+        topic: args.topic,
+        ...args.scope !== undefined ? { scope: args.scope } : {},
+        ...args.category !== undefined ? { category: args.category } : {},
+        ...args.projectName !== undefined ? { projectName: args.projectName } : {},
+      },
+    }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { removedCount?: number } | undefined
+      return {
+        card: 'generic',
+        title: `Forgot ${meta?.removedCount ?? 0} entr${(meta?.removedCount ?? 0) === 1 ? 'y' : 'ies'} by topic.`,
       }
     },
   }))

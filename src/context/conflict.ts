@@ -90,6 +90,19 @@ const CONFLICT_CONTRADICTION_THRESHOLD = 0.1
  * 3. The fact contains a contradiction signal word with overlap at least
  *    {@link CONFLICT_CONTRADICTION_THRESHOLD} (hard `conflicting`), or the
  *    overlap alone is enough for the softer same-topic `stale`.
+ *
+ * Known residual — heavily paraphrased corrections (memory-system-improvement-
+ * program `conflict-resolution` entry, accepted as partially closed): a
+ * correction that restates the fact in almost entirely different words scores
+ * far below {@link CONFLICT_STALE_THRESHOLD} (measured ≈0.02 for
+ * "the build command is npm run build" vs "switch packaging to pnpm; npm
+ * scripts are retired here") and passes through unflagged. This is the
+ * recorded cost of IDF weighting on a zero-LLM lexical plane, not a fixable
+ * threshold bug: lowering the line to catch such pairs would float the
+ * 「上海/海南」-class distractor pairs (≈0.06) above it, and a semantic plane
+ * stays out of scope while `embedding-vs-zero-network` holds. The mitigation
+ * that exists today is the human side: the correction entry itself is stored
+ * and injected, so a human reviewing the queue sees both statements.
  */
 export function detectConflict(
   entry: ConflictEntry,

@@ -5,6 +5,14 @@ import { MemoryStore } from '../src/index.ts'
 import { DomainMemoryStore } from '../src/store/index.ts'
 import { tokenizeForSearch } from '../src/store/bm25.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+import { Context, type Fiber } from '@deepseek-ai/cordis'
+import Storage from '@deepseek-ai/dsh-storage'
+import * as storageJson from '@deepseek-ai/dsh-storage-json'
+import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
+import * as memoryStore from '../src/store/index.ts'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 /** In-memory stand-in for a storage-domain KV table (same shape as health.spec). */
 function memTable<K extends string, V>(): KvTable<K, V> {
@@ -568,6 +576,98 @@ describe('entries-cap (DomainMemoryStore)', () => {
     store.markRecalled([a.id as string, b.id as string])
     await tick()
     expect(store.list().length).toBe(2)
+  })
+})
+
+// scale-trigger-selfcheck (§ write-path governance): a store constructed over
+// a medium that already sits at/above 80% of entriesCap warns once at startup
+// — the migration-decision moment — while a store below the line stays silent.
+// Detection is "approaching the cap" (the entries-cap eviction only acts past
+// it); multi-process concerns are cross-process-detect's job, not re-checked.
+describe('scale-trigger-selfcheck (DomainMemoryStore)', () => {
+  /** Seed N entries directly into a table, bypassing add()/its eviction. */
+  function seededTable(count: number): KvTable<MemoryId, MemoryEntry> {
+    const table = memTable<MemoryId, MemoryEntry>()
+    for (let i = 0; i < count; i++) {
+      void table.put(MemoryId(), {
+        id: MemoryId(),
+        scope: 'global',
+        content: `seeded ${i}`,
+        createdAt: 1_700_000_000_000 + i,
+        updatedAt: 1_700_000_000_000 + i,
+      } as MemoryEntry)
+    }
+    return table
+  }
+
+  it('warns at exactly the 80% line and cites the migration threshold', () => {
+    const warns: string[] = []
+    new DomainMemoryStore(seededTable(8), memTable(), memTable(), 200, 200,
+      { warn: message => { warns.push(message) } }, 10)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('dsh-memory:')
+    expect(warns[0]).toContain('8 of 10')
+    expect(warns[0]).toContain('migrating')
+  })
+
+  it('stays silent below the line and on a fresh medium', () => {
+    const warns: string[] = []
+    new DomainMemoryStore(seededTable(7), memTable(), memTable(), 200, 200,
+      { warn: message => { warns.push(message) } }, 10)
+    new DomainMemoryStore(seededTable(0), memTable(), memTable(), 200, 200,
+      { warn: message => { warns.push(message) } }, 10)
+    expect(warns).toEqual([])
+  })
+
+  it('construction survives a missing logger (selfcheck is best-effort)', () => {
+    expect(() => new DomainMemoryStore(seededTable(10), memTable(), memTable(), 200, 200, undefined, 10)).not.toThrow()
+  })
+
+  it('composition boot over a seeded large medium warns through the host logger', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-selfcheck-'))
+    try {
+      // Seed the medium with 5 entries directly, then boot with a low cap
+      // (5 ≥ 0.8 × 5) so the opened store constructs above the selfcheck line.
+      const seedDocument = {
+        unit: { name: 'memory', version: 0 },
+        global: null,
+        tables: {
+          entries: Object.fromEntries([0, 1, 2, 3, 4].map(i => [`seed-${i}`, {
+            id: `seed-${i}`,
+            scope: 'global',
+            content: `selfcheck seed ${i}`,
+            createdAt: 1_700_000_000_000 + i,
+            updatedAt: 1_700_000_000_000 + i,
+          }])),
+        },
+      }
+      writeFileSync(join(dir, 'memory.json'), JSON.stringify(seedDocument, null, 2))
+
+      const warns: { args: unknown[] }[] = []
+      const ctx = new Context()
+      // Capture the host logger's warn channel: register an exporter on the
+      // logger service before the store mounts (exporters receive every
+      // structured message, including warns from the boot path).
+      const root = await ctx.plugin(Storage)
+      const loggerService = ctx.logger
+      loggerService.exporter({
+        // WARN=2: the exporter's default threshold is INFO(1), which would
+        // filter the warn out; this capture wants warn-level records only.
+        levels: { default: 2 },
+        export: message => {
+          warns.push({ args: message.args })
+        },
+      })
+      await ctx.plugin(storageJson, { root: dir })
+      await ctx.plugin(storageDomain, { backend: 'json' })
+      await ctx.plugin(memoryStore, { crossProcessProbeMs: 0, entriesCap: 5 })
+      const store = ctx.get('memory') as DomainMemoryStore
+      expect(store.list().length).toBe(5)
+      expect(warns).toHaveLength(1)
+      await (root as unknown as { dispose(): Promise<void> }).dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
