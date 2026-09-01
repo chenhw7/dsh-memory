@@ -322,7 +322,7 @@ interface MemorySuggestion {
 - **`DomainMemoryStore`** 基于 storage-domain 表实现：
   - `add`：校验 project 作用域 → 校验非空内容 → 扫描 → 铸造 `MemoryId` → `entries.put` → `appendAudit`。
   - `update`：合并字段（content / category / summary——空字符串 summary 即清除），校验并扫描合并后内容；id 不存在返回 `undefined`。
-  - `search`：先结构化过滤，再做 **BM25 排序**（见下）；结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位）→ `updatedAt` 降序；默认 limit = 实时上限，`0` = 不限；返回 `{ entries, total }`。fire-and-forget 的 `stampRecalled` 刷新命中项的 `lastRecalledAt`、递增 `accessCount` 并**清除 `staleSince`**（召回证明有用，恢复注入可见性），刻意不动 `updatedAt`。查询里的 `recordRecall: false` 抑制这一切——管理 UI 经此标志浏览，读取绝不改写元数据。
+  - `search`：先结构化过滤，再做 **BM25 排序**（见下）；结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位）→ `updatedAt` 降序；默认 limit = 实时上限，`0` = 不限；返回 `{ entries, total }`。fire-and-forget 的 `stampRecalled` 对每个有变化的命中项经**表的原子 read-modify-write**（宿主 `KvTable.update`，transform 在写入链槽位上重读当前记录）刷新 `lastRecalledAt`、递增 `accessCount` 并**清除 `staleSince`**（召回证明有用，恢复注入可见性），刻意不动 `updatedAt`——并发 `memory_replace` 与召回戳交错时先落地的内容不会被戳回滚。同毫秒内已盖章且无衰减戳的条目在快照预检处跳过，不进写入链。查询里的 `recordRecall: false` 抑制这一切——管理 UI 经此标志浏览，读取绝不改写元数据。
   - `markRecalled(ids)`：`memory_list` 返回页与 `memory_get` 走同一盖章路径，同时递增 `accessCount`。
   - `archiveEntry` / `unarchiveEntry`：**手动休眠开关**——直接盖章/清除 `staleSince`，复用软衰减的表示，使一切既有表面（注入过滤、stale 徽标、召回复活）行为一致。按调用方 source 记 `update` 审计。
   - `list`：可选 scope + project 过滤，按 `createdAt` 升序。
@@ -331,7 +331,7 @@ interface MemorySuggestion {
     - `project` 作用域 → **硬衰减**：删除并审计 `remove`/`janitor`；
     - `global`/`user` 作用域 → **软衰减**：首个过期周期打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。`importance` 4–5 的条目享有 1.5× 的宽限窗口（模型"这条重要"的自评延长可容忍的静默期；召回仍是更强的信号——`stampRecalled` 直接清除衰减戳）。
     返回被硬衰减（移除）的 project 条目数。
-  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
+  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
   - **建议队列（待确认人审表）：**
     - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 Jaccard > 0.15 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
@@ -778,7 +778,7 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **28 个 vitest spec 文件、530 个用例**（524 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **28 个 vitest spec 文件、533 个用例**（527 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。

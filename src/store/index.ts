@@ -351,29 +351,48 @@ export class DomainMemoryStore extends MemoryStore {
     // so the janitor can decay entries that have not been recalled recently.
     // Read-only consumers (management UI) opt out via recordRecall: false —
     // merely viewing entries must not rewrite their recall metadata.
-    if (query.recordRecall !== false) void this.stampRecalled(all)
+    if (query.recordRecall !== false) void this.stampRecalled(all.map(entry => entry.id))
     return { entries: all, total }
   }
 
   /**
-   * Stamp entries with a recall timestamp (fire-and-forget). Updates
-   * `lastRecalledAt` on each entry so the janitor can track staleness, and
-   * bumps `accessCount` — the mechanical use-signal ranking and eviction
-   * weigh. `updatedAt` is intentionally left untouched: recalling is not
-   * mutating.
+   * Stamp entries with a recall timestamp (fire-and-forget). Each entry is
+   * stamped through the table's atomic read-modify-write, so the transform
+   * reads the record current at its write-chain slot — a concurrent
+   * `memory_replace` that lands first is never rolled back by the stamp, and
+   * the stamp never rolls one back. One stamp pass enqueues one job per
+   * changed entry; entries already carrying this pass's timestamp and no
+   * decay stamp are skipped without touching the chain. `updatedAt` is
+   * intentionally left untouched: recalling is not mutating.
+   * @param ids - the ids of the entries the caller surfaced to the model.
    */
-  private async stampRecalled(entries: readonly MemoryEntry[]): Promise<void> {
+  private async stampRecalled(ids: readonly MemoryId[]): Promise<void> {
     const now = Date.now()
-    for (const entry of entries) {
-      // Recall proves usefulness: it refreshes lastRecalledAt AND clears a
-      // soft-decay stamp, bringing the entry back into injection surfaces.
-      if (entry.lastRecalledAt === now && entry.staleSince === undefined) continue
-      const { staleSince: _cleared, ...rest } = entry
-      await this.entries.put(entry.id, {
-        ...rest,
-        lastRecalledAt: now,
-        accessCount: (rest.accessCount ?? 0) + 1,
-      })
+    for (const id of ids) {
+      // Cheap pre-check on the synchronous snapshot: a stamp pass that would
+      // change nothing skips the queue entirely (the common repeat-search case).
+      const snapshot = this.entries.get(id)
+      if (snapshot?.lastRecalledAt === now && snapshot.staleSince === undefined) continue
+      try {
+        // The atomic RMW re-reads at the chain slot, so a content edit that
+        // landed between search and stamp survives in the written record.
+        await this.entries.update(id, current => {
+          if (current.lastRecalledAt === now && current.staleSince === undefined) return current
+          const { staleSince: _cleared, ...rest } = current
+          return {
+            ...rest,
+            lastRecalledAt: now,
+            accessCount: (rest.accessCount ?? 0) + 1,
+          }
+        })
+      } catch (error) {
+        // A missing id (entry removed between search and stamp) or a domain
+        // going away mid-pass is a normal end-of-life for a stamp, not a
+        // failure to report.
+        if (error instanceof Error && !error.message.includes('no record')) {
+          this.reportFailure('recall-stamp', error)
+        }
+      }
     }
   }
 
@@ -385,7 +404,7 @@ export class DomainMemoryStore extends MemoryStore {
    */
   override markRecalled(ids: readonly string[]): void {
     if (ids.length === 0) return
-    void this.stampRecalled(ids.map(id => this.entries.get(id as MemoryId)).filter((e): e is MemoryEntry => e !== undefined))
+    void this.stampRecalled(ids.filter(id => this.entries.get(id as MemoryId) !== undefined) as MemoryId[])
   }
 
   // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────

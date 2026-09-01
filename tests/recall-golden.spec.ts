@@ -32,6 +32,7 @@ function memTable<K extends string, V>(): KvTable<K, V> {
     keys: () => map.keys(),
     get size() { return map.size },
     put: async (key, value) => { map.set(key, value) },
+    update: async (key, fn) => { const cur = map.get(key); if (cur === undefined) throw new Error('missing-key'); const next = fn(cur); map.set(key, next); return next },
     delete: async key => map.delete(key),
   }
 }

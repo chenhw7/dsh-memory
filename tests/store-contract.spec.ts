@@ -14,6 +14,7 @@ function memTable<K extends string, V>(): KvTable<K, V> {
     keys: () => map.keys(),
     get size() { return map.size },
     put: async (key, value) => { map.set(key, value) },
+    update: async (key, fn) => { const cur = map.get(key); if (cur === undefined) throw new Error('missing-key'); const next = fn(cur); map.set(key, next); return next },
     delete: async key => map.delete(key),
   }
 }
@@ -354,5 +355,93 @@ describe('importance-signal (DomainMemoryStore)', () => {
     const revived = store.get(entry.id)!
     expect(revived.staleSince).toBeUndefined()
     expect(revived.accessCount).toBe(1)
+  })
+})
+
+// recall-stamp-batching (§ write-path governance): the stamp pass must be a
+// batched, read-before-write operation — one durable write per changed entry
+// taken from the record current at its write-chain slot, so a concurrent
+// content edit is never rolled back by a stamp carrying a pre-edit snapshot.
+describe('recall-stamp-batching (DomainMemoryStore)', () => {
+  /** memTable whose put/update operations are observable per call. */
+  function countingTable<K extends string, V>() {
+    const map = new Map<K, V>()
+    let puts = 0
+    const table = {
+      get: (key: K) => map.get(key),
+      entries: () => map.entries(),
+      keys: () => map.keys(),
+      get size() { return map.size },
+      put: async (key: K, value: V) => { puts += 1; map.set(key, value) },
+      update: async (key: K, fn: (current: V) => V) => {
+        const cur = map.get(key)
+        if (cur === undefined) throw new Error(`no record '${String(key)}' to update`)
+        puts += 1
+        const next = fn(cur)
+        map.set(key, next)
+        return next
+      },
+      delete: async (key: K) => map.delete(key),
+    }
+    return { table: table as KvTable<K, V>, count: () => puts }
+  }
+
+  it('one 50-hit search issues exactly one durable write per changed entry (no per-hit fan-out beyond the stamp)', async () => {
+    const entries = countingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    for (let i = 0; i < 50; i++) {
+      await store.add({ scope: 'global', content: `batch probe ${i} sharedtoken` })
+    }
+    const afterSeed = entries.count()
+
+    // One search over 50 hits: the stamp pass issues exactly one durable
+    // write per changed entry — no hidden second writes, no per-hit rewrites
+    // beyond the stamp itself (the single-layout fan-out this change bounds).
+    store.search({ query: 'sharedtoken' })
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+    expect(entries.count() - afterSeed).toBe(50)
+
+    // A same-millisecond repeat search changes nothing (skip condition holds);
+    // a later search legitimately re-stamps with the newer timestamp — the
+    // write count stays one-per-entry per pass either way.
+    const afterFirst = entries.count()
+    store.search({ query: 'sharedtoken' })
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+    expect(entries.count() - afterFirst).toBeLessThanOrEqual(50)
+  })
+
+  it('a memory_replace landing between search and stamp survives in the stamped record', async () => {
+    const entries = countingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'original text editable' })
+
+    // Interleave: replace (durable), then the recall stamp enqueued after it.
+    // The stamp's RMW must read the post-edit record, not the search snapshot.
+    store.search({ query: 'editable' })
+    await store.update(entry.id, { content: 'edited content survives' })
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+
+    const stamped = store.get(entry.id)!
+    expect(stamped.content).toBe('edited content survives')
+    expect(stamped.lastRecalledAt).toBeDefined()
+    expect(stamped.accessCount).toBe(1)
+  })
+
+  it('a recall stamp landing after a replace does not roll the edit back', async () => {
+    const entries = countingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'editable here' })
+
+    // The stamp job is enqueued first (fire-and-forget); the edit joins the
+    // write chain after it — then a second stamp reads the edited record.
+    store.search({ query: 'editable' })
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+    await store.update(entry.id, { content: 'replaced text remains' })
+    store.markRecalled([entry.id as string])
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+
+    const final = store.get(entry.id)!
+    expect(final.content).toBe('replaced text remains')
+    expect(final.accessCount).toBe(2)
   })
 })

@@ -2,7 +2,7 @@
 
 Status: proposed
 
-**执行进度（2026-09-01 更新）：** 第一波已在本仓库范围内全部结题——`structured-logging`（84f9550）、`substring-wording-drift`（1a60756）、`summary-scan`（16b5d83）、`ci-trigger-single-home`（490fad7）、`deployment-dataflow-doc`（08e0a45）、`fence-escaping`（4bd4d32）、`tool-read-redact`（8286d86）、`importance-signal`（0086503），各自携带验收信号、双语文档同步与 implemented Agent Note 三件套；`session-capture-repair` 因依赖宿主侧会话采集恢复（见「风险」节）搁置于 deepseek-harness 仓库。第二波进行中：`client-typecheck-gate` 已结题（存量摸底 409→12，全部修复，门禁已接线并经注入验证），`recall-stamp-batching` 随后（`index-default` 的硬前置）。`importance-signal` 落地后 `entries-cap` 的淘汰序已可定义为 pinned → `accessCount` → `lastRecalledAt`。
+**执行进度（2026-09-01 更新）：** 第一波已在本仓库范围内全部结题——`structured-logging`（84f9550）、`substring-wording-drift`（1a60756）、`summary-scan`（16b5d83）、`ci-trigger-single-home`（490fad7）、`deployment-dataflow-doc`（08e0a45）、`fence-escaping`（4bd4d32）、`tool-read-redact`（8286d86）、`importance-signal`（0086503），各自携带验收信号、双语文档同步与 implemented Agent Note 三件套；`session-capture-repair` 因依赖宿主侧会话采集恢复（见「风险」节）搁置于 deepseek-harness 仓库。第二波进行中：`client-typecheck-gate` 已结题（存量 409→12，全修，门禁接线并经注入验证；paths 已改为解析到 node_modules 内的 devDependency 类型，无同级 checkout 依赖），`recall-stamp-batching` 已结题（盖章通道改经宿主 `KvTable.update` 原子 RMW，两条验收信号均有测试钉住）。`index-default` 的超越性 note 前置已满足；`importance-signal` 落地后 `entries-cap` 的淘汰序已可定义为 pinned → `accessCount` → `lastRecalledAt`。
 
 本 note 合并两份独立评审的改进意见：better-harness 的项目评审（2026-08-31 快照，locale zh-CN，report contract v26）与归档评估报告 [MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md](../../../../docs/archive/MEMORY_SYSTEM_EVALUATION_v0.7.0.zh.md)。harness 报告是插件本地产物（`.qoder/better-harness/`），按 [committed-artifact-citations](../../implemented/process/2026-08-31-committed-artifact-citations.zh.md) 不作为可引用的提交物，因此它的每一条结论在本 note 中都重述为独立成立的代码事实并附 `文件:行号`。
 
