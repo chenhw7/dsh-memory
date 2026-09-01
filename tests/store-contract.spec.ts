@@ -3,6 +3,7 @@ import { MemoryId, scanContent, validateProjectScope, validateContent } from '..
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 import { DomainMemoryStore } from '../src/store/index.ts'
+import { tokenizeForSearch } from '../src/store/bm25.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 
 /** In-memory stand-in for a storage-domain KV table (same shape as health.spec). */
@@ -96,13 +97,20 @@ class TestMemoryStore extends MemoryStore {
       .filter(e => query.scope === undefined || e.scope === query.scope)
       .filter(e => query.category === undefined || e.category === query.category)
       .filter(e => query.projectName === undefined || e.projectName === query.projectName)
-      .filter(
-        e =>
-          query.query === undefined ||
-          query.query.length === 0 ||
-          e.content.toLowerCase().includes(query.query.toLowerCase()),
-      )
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+    // Token-match semantics shared with the domain store's BM25 plane: a
+    // query hits when ANY of its tokens appears as a token in the content
+    // (OR); a bare substring that is not a full token does NOT match.
+    if (query.query !== undefined && query.query.length > 0) {
+      const queryTokens = new Set(tokenizeForSearch(query.query))
+      all = all.filter(e => {
+        const contentTokens = new Set(tokenizeForSearch(e.content))
+        for (const token of queryTokens) {
+          if (contentTokens.has(token)) return true
+        }
+        return false
+      })
+    }
+    all.sort((a, b) => b.updatedAt - a.updatedAt)
     const total = all.length
     const limit = query.limit ?? 50
     all = limit > 0 ? all.slice(0, limit) : all
@@ -200,13 +208,21 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
       expect(store.list('user').length).toBe(1)
     })
 
-    it('searches by substring', async () => {
+    it('searches by token match: any query token hit matches, bare substring does not', async () => {
       const store = makeStore()
       await store.add({ scope: 'global', content: 'User likes Python.' })
       await store.add({ scope: 'global', content: 'User dislikes Java.' })
+      // Full-token hit (case-insensitive) matches.
       const result = store.search({ query: 'python' })
       expect(result.total).toBe(1)
       expect(result.entries[0]!.content).toBe('User likes Python.')
+      // A query whose tokens all appear matches even across word boundaries
+      // (OR semantics: either token alone keeps the document in play).
+      const eitherToken = store.search({ query: 'likes java' })
+      expect(eitherToken.total).toBe(2)
+      // A bare substring that is not a full token never matches.
+      const substring = store.search({ query: 'yth' })
+      expect(substring.total).toBe(0)
     })
 
     it('updates content and scanner still runs', async () => {
@@ -267,8 +283,11 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
   })
 }
 
-// Run the shared contract suite against the in-memory TestMemoryStore.
+// Run the shared contract suite against both implementations: the in-memory
+// TestMemoryStore and the real storage-domain DomainMemoryStore (each table a
+// test stub, same shape as health.spec).
 runStoreContractSuite('TestMemoryStore', () => new TestMemoryStore())
+runStoreContractSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(), memTable(), memTable()))
 
 // The importance/accessCount use-signals are a domain-store behavior (recall
 // stamping and the janitor live there), so they are tested against the real
