@@ -1,0 +1,346 @@
+/**
+ * Boot path for the eval suite: start a REAL harness subprocess with the
+ * memory plugin mounted as a profile bundle inside a throwaway `$DSH_HOME`,
+ * drive it over the SDK stdio protocol, and expose one prompt-per-turn
+ * handle. This is the M0 milestone's load-bearing seam — later milestones
+ * (M1 standing injection, M2 storage) build on exactly these shapes:
+ *
+ * ```ts
+ * interface TurnResult { finalText: string; systemPrompt?: string; toolCalls: Array<{ name: string; args: unknown; ok: boolean }> }
+ * interface HarnessHandle { readonly dshHome: string; prompt(text: string): Promise<TurnResult>; dispose(): Promise<void> }
+ * startHarness(opts): Promise<HarnessHandle>
+ * ```
+ *
+ * Boot wiring follows docs/HOST_CONTRACT.zh.md §10: bundle layers compose from
+ * the profile manifest (eval/harness/profile-template/), the pinned user layer
+ * sits below `--patch` overlays, and the SDK runtime's stdout carries
+ * exclusively JSON-RPC frames.
+ *
+ * @module eval/boot
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { startLlmMock, HARNESS_ROOT, type LlmMock } from './harness/llm-mock.ts'
+import { materializeProfile, type ModelMode } from './harness/profile-template.ts'
+import {
+  SdkStdioClient,
+  collectSessionEvent,
+  emptyTurnCollector,
+  isInboxReceipt,
+  type HarnessNotification,
+  type TurnCollector,
+} from './harness/sdk-client.ts'
+
+/** One driven turn's observed outcome. */
+export interface TurnResult {
+  /** Concatenated text of the turn's final assistant message. */
+  finalText: string
+  /** The assembled system prompt captured from this turn's request/header. */
+  systemPrompt?: string
+  /** Tool calls observed during the turn, paired with their results. */
+  toolCalls: Array<{ name: string; args: unknown; ok: boolean }>
+}
+
+/** One live harness runtime this process owns. */
+export interface HarnessHandle {
+  /** The throwaway harness home the runtime writes into. */
+  readonly dshHome: string
+  /**
+   * Run one prompt on the runtime's session and await its next idle.
+   *
+   * MUST be called serially per handle: turns share this handle's one
+   * notification subscription, so concurrent prompts would fold each other's
+   * events (mixed tool calls, crossed system prompts). Multi-session work
+   * means a new handle per session over the same dshHome.
+   */
+  prompt(text: string): Promise<TurnResult>
+  /** Shut the runtime down (protocol shutdown + dispose ladder). */
+  dispose(): Promise<void>
+}
+
+/** Model route selection for one harness run. */
+export interface HarnessModelOptions {
+  /**
+   * `mock` starts the in-process llm-mock and injects its env; `real` passes
+   * through to the public endpoint with the resolved key; `external` injects
+   * a caller-supplied OpenAI-compatible endpoint (the runner's per-scenario
+   * route-table fake LLM) without starting anything in this process.
+   */
+  mode: ModelMode
+  /** Provider route for the initialize handshake (default `deepseek-official`). */
+  provider?: string
+  /** Model route for the initialize handshake (default `deepseek-v4-flash`). */
+  model?: string
+  /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`, e.g. `http://127.0.0.1:<port>/v1`. */
+  baseUrl?: string
+  /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
+  apiKey?: string
+}
+
+/** Options for {@link startHarness}. */
+export interface StartHarnessOptions {
+  /** Plugin build under test: the directory holding the built package.json + lib/. */
+  buildDir: string
+  /** Throwaway harness home; materialized in place and owned by the handle. */
+  dshHome: string
+  /** Profile directory name (default `eval`). */
+  profileName?: string
+  /** Model route (default mock mode). */
+  model?: HarnessModelOptions
+  /**
+   * Extra `--patch` overlays applied ABOVE the profile's pinned user layer —
+   * the per-run override seam for the pinned config.
+   */
+  configPatches?: Array<Record<string, unknown>>
+  /** Initialize handshake timeout in ms (default 30_000). */
+  initializeTimeoutMs?: number
+  /** Per-turn idle timeout in ms (default 120_000). */
+  turnTimeoutMs?: number
+}
+
+/** Default dsh executable inside the harness workspace (built bin preferred). */
+export function defaultDshBin(): string {
+  return join(HARNESS_ROOT, 'apps', 'cli', 'lib', 'bin.js')
+}
+
+/** Loud preflight for the harness installation the eval drives. */
+function assertDshBinAvailable(): void {
+  if (existsSync(defaultDshBin())) return
+  throw new Error(
+    `eval boot: harness executable missing at ${defaultDshBin()} — point DSH_EVAL_HARNESS_ROOT `
+    + 'at a built deepseek-harness checkout (apps/cli/lib/bin.js present) or build it with pnpm build',
+  )
+}
+
+/**
+ * Resolve the credential preflight for real runs: the inherited
+ * `DEEPSEEK_API_KEY`, else the managed `$DSH_HOME/.credentials.yaml`.
+ * @returns the env key value, `'managed-credentials-document'` when only the
+ * document plausibly holds the key, or `undefined` when neither source has one.
+ */
+function resolveRealApiKey(dshHome: string): string | undefined {
+  const envKey = process.env['DEEPSEEK_API_KEY']
+  if (envKey !== undefined && envKey.length > 0) return envKey
+  // Preflight only: the harness resolves the key per request from the managed
+  // document (the layout is the harness's, not ours — probe, never parse); we
+  // refuse to boot when neither source plausibly holds the DEEPSEEK key, so a
+  // real run fails loud at boot instead of mid-turn.
+  const documentPath = join(dshHome, '.credentials.yaml')
+  let raw: string
+  try {
+    raw = readFileSync(documentPath, 'utf8')
+  } catch (error) {
+    // ENOENT is simply no managed credential; any other read failure is a
+    // broken deployment and must surface at boot, not mid-run.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`eval boot: credentials document at ${documentPath} cannot be read: ${String(error)}`)
+    }
+    return undefined
+  }
+  return raw.includes('DEEPSEEK_API_KEY') ? 'managed-credentials-document' : undefined
+}
+
+/**
+ * Start one harness runtime subprocess.
+ * @throws when the model route cannot be satisfied (real mode without a
+ * reachable key) or the profile/bootstrap chain fails — all loud by design.
+ */
+export async function startHarness(options: StartHarnessOptions): Promise<HarnessHandle> {
+  const mode = options.model?.mode ?? 'mock'
+  const provider = options.model?.provider ?? 'deepseek-official'
+  const model = options.model?.model ?? 'deepseek-v4-flash'
+  const profileName = options.profileName ?? 'eval'
+  const dshHome = options.dshHome
+  const turnTimeoutMs = options.turnTimeoutMs ?? 120_000
+
+  let mock: LlmMock | undefined
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    // The child must never see the outer deployment's harness state.
+    DSH_HOME: dshHome,
+    // The dsh-base telemetry row drains to OTLP on exit; eval runs opt out.
+    DSH_TELEMETRY_DISABLED: '1',
+  }
+  if (mode === 'mock') {
+    mock = await startLlmMock()
+    env['DEEPSEEK_BASE_URL'] = mock.baseUrl
+    env['DEEPSEEK_API_KEY'] = mock.apiKey
+  } else if (mode === 'external') {
+    // The runner's route-table fake LLM: nothing is started in this process —
+    // the endpoint is caller-owned (typically one per scenario), so only the
+    // child env is injected. No settings-layer pin: the endpoint varies per
+    // scenario and the document would go stale.
+    const externalBaseUrl = options.model?.baseUrl
+    if (externalBaseUrl === undefined || externalBaseUrl.length === 0) {
+      throw new Error('eval boot: external mode requires model.baseUrl (the fake LLM endpoint base, e.g. http://127.0.0.1:<port>/v1)')
+    }
+    env['DEEPSEEK_BASE_URL'] = externalBaseUrl
+    env['DEEPSEEK_API_KEY'] = options.model?.apiKey ?? 'eval-fake-key'
+  } else {
+    const apiKey = resolveRealApiKey(dshHome)
+    if (apiKey === undefined) {
+      throw new Error(
+        'eval boot: real mode requires a DEEPSEEK key — set $DEEPSEEK_API_KEY in the environment '
+        + `or a key entry under ${documentPath(dshHome)}`,
+      )
+    }
+    // The managed-document sentinel stays out of the child env: the harness
+    // resolves that source itself.
+    if (apiKey !== 'managed-credentials-document') env['DEEPSEEK_API_KEY'] = apiKey
+  }
+
+  // Everything from here that can throw runs under the startup-failure guard:
+  // a failure must stop the in-process mock (if any) and reap the child, or a
+  // leaked listener keeps the driver's event loop alive and the run hangs
+  // instead of failing with exit code 1.
+  let client: SdkStdioClient | undefined
+  try {
+    assertDshBinAvailable()
+    materializeProfile(dshHome, profileName, {
+      mode,
+      buildDir: options.buildDir,
+      ...(mock !== undefined ? { mockBaseUrl: mock.baseUrl } : {}),
+    })
+
+    // Per-run configPatches land as overlay files under the throwaway home
+    // (never the repository) and ride `--patch`, the launcher's topmost layer.
+    const patches: string[] = []
+    for (const [index, patch] of (options.configPatches ?? []).entries()) {
+      const overlayDir = join(dshHome, 'eval-overlays')
+      mkdirSync(overlayDir, { recursive: true })
+      const file = join(overlayDir, `overlay-${String(index)}.yaml`)
+      writeFileSync(file, `${JSON.stringify(Array.isArray(patch) ? patch : [patch], undefined, 2)}\n`)
+      patches.push(file)
+    }
+
+    client = new SdkStdioClient({
+      dshBin: defaultDshBin(),
+      profile: profileName,
+      patches,
+      env,
+      // The child runs with the throwaway home as cwd so the harness
+      // credentials chain's project-.env fallback cannot read the eval
+      // repository's own `.env` (the credentials row's documented fallback).
+      cwd: dshHome,
+      description: `dsh profile ${JSON.stringify(profileName)} (eval)`,
+    })
+    client.start()
+    await client.request('initialize', { cwd: dshHome, provider, model }, options.initializeTimeoutMs ?? 30_000)
+  } catch (error) {
+    // Startup-failure window teardown: stop the mock, reap the child (short
+    // graces — a spawn failure has no live process to wait for), then rethrow
+    // the ORIGINAL startup error. close() below is best-effort by contract and
+    // its own diagnostics already rode along on the transport error context.
+    try {
+      await client?.close({ shutdownTimeoutMs: 2_000, eofGraceMs: 1_000, termGraceMs: 1_000 })
+    } catch (closeError) {
+      // Swallowed: the dispose ladder cannot fail a process that is already
+      // failing, and no other diagnostic exists beyond the rethrown error.
+    }
+    await mock?.stop()
+    throw error
+  }
+
+  // One SDK session for the handle's lifetime: a multi-turn conversation whose
+  // memory snapshot froze at session creation (KV-cache contract) — the
+  // standing-injection surface the suite measures. A follow-up session with a
+  // fresh snapshot is a NEW handle over the same dshHome.
+  const sessionId = `eval-${globalThis.crypto.randomUUID().replaceAll('-', '')}`
+  let lastSystemPrompt: string | undefined
+  const subscription = client.subscribe((notification) => notification.params['sessionId'] === sessionId)
+
+  /**
+   * One prompt's activity interval; the caller MUST await it before the next
+   * prompt (serial per handle — concurrent turns share the subscription above
+   * and would fold each other's events).
+   */
+  const prompt: (text: string) => Promise<TurnResult> = async (text) => {
+    const collector: TurnCollector = emptyTurnCollector()
+    const promptResult = await client.request(
+      'session/prompt',
+      { sessionId, contentBlocks: [{ type: 'text', text }] },
+      turnTimeoutMs,
+    )
+    const messageId = (promptResult as { messageId?: unknown } | null)?.messageId
+    if (typeof messageId !== 'string') {
+      throw new Error(`eval boot: session/prompt returned no messageId: ${JSON.stringify(promptResult)}`)
+    }
+    // Collect from the queued message's durable receipt through the next idle,
+    // mirroring the reference client's activity interval.
+    let received = false
+    for (;;) {
+      const notification = await withTimeout(subscription.next(), turnTimeoutMs, 'waiting for session notifications')
+      if (!received) {
+        const event = eventOf(notification)
+        if (event === undefined || !isInboxReceipt(event, messageId)) continue
+        received = true
+      }
+      const event = eventOf(notification)
+      if (event !== undefined) collectSessionEvent(collector, event)
+      if (notification.method === 'session.status'
+        && notification.params['sessionId'] === sessionId
+        && notification.params['status'] === 'idle') break
+    }
+    if (collector.systemPrompt !== undefined) lastSystemPrompt = collector.systemPrompt
+    return {
+      finalText: collector.finalText,
+      // A turn without its own header snapshot (unchanged header) carries the
+      // session's standing prompt forward.
+      ...(collector.systemPrompt !== undefined
+        ? { systemPrompt: collector.systemPrompt }
+        : lastSystemPrompt !== undefined ? { systemPrompt: lastSystemPrompt } : {}),
+      toolCalls: collector.toolCalls.map(call => ({ name: call.name, args: call.args, ok: call.ok })),
+    }
+  }
+
+  const dispose: () => Promise<void> = async () => {
+    subscription.close()
+    try {
+      await client.close()
+    } finally {
+      // The mock stops only AFTER the runtime's dispose ladder completes: the
+      // dispose flush may still fire LLM calls while the runtime tears down,
+      // so the mock must stay reachable through client.close(). Per handle,
+      // the mock's lifetime is dispose's; a runner never stops it separately.
+      await mock?.stop()
+      mock = undefined
+    }
+  }
+
+  return { dshHome, prompt, dispose }
+}
+
+/** The managed credentials document path under a harness home. */
+function documentPath(dshHome: string): string {
+  return join(dshHome, '.credentials.yaml')
+}
+
+/** Narrow a notification to its session.event payload when it is one. */
+function eventOf(notification: HarnessNotification): { type: string; seq: number; data: Record<string, unknown> } | undefined {
+  if (notification.method !== 'session.event') return undefined
+  const event = notification.params['event']
+  if (typeof event !== 'object' || event === null || Array.isArray(event)) return undefined
+  const record = event as Record<string, unknown>
+  if (typeof record['type'] !== 'string') return undefined
+  return {
+    type: record['type'],
+    seq: typeof record['seq'] === 'number' ? record['seq'] : 0,
+    data: (record['data'] !== undefined && typeof record['data'] === 'object' && record['data'] !== null
+      ? record['data']
+      : {}) as Record<string, unknown>,
+  }
+}
+
+/** Reject when a notification wait outlives `timeoutMs`. */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { reject(new Error(`eval boot: ${what} timed out after ${String(timeoutMs)}ms`)) }, timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}

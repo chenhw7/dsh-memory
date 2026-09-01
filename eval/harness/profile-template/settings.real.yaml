@@ -1,0 +1,12 @@
+# Eval-profile settings document: real-model routing.
+#
+# Materialized at $DSH_HOME/settings.yaml — the only location the harness
+# settings-file service parses (packages/settings/settings-file/src/index.ts).
+# The empty mapping pins nothing: the adapter keeps its default endpoint
+# (config.baseURL unset falls through $DEEPSEEK_BASE_URL, then the public
+# API), the key resolves per request from the inherited DEEPSEEK_API_KEY
+# environment variable or the managed $DSH_HOME/.credentials.yaml, and
+# eval/boot.ts passes the provider/model route per run in the SDK initialize
+# handshake. Kept as a file so real runs and mock runs leave identical home
+# layouts.
+{}

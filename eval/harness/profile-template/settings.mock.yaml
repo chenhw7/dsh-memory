@@ -1,0 +1,15 @@
+# Eval-profile settings document: mock model routing.
+#
+# Primary routing is the child environment eval/boot.ts injects: the deepseek
+# adapter resolves its endpoint as config.baseURL ?? $DEEPSEEK_BASE_URL ??
+# public API and appends /chat/completions (the mock accepts any path ending
+# in /chat/completions, so the /v1 namespace prefix is harmless). This
+# document is materialized at $DSH_HOME/settings.yaml — the only location the
+# harness settings-file service parses (packages/settings/settings-file/src/
+# index.ts); the profile directory itself is not a settings source — and
+# records the same endpoint at the settings layer so the run's routing is
+# legible on disk and still applies if a future launch loses the variable.
+# {{MOCK_BASE_URL}} is replaced by eval/boot.ts with the live mock base URL
+# including /v1.
+llm-deepseek:
+  baseURL: {{MOCK_BASE_URL}}

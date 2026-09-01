@@ -15,6 +15,7 @@ src/           Plugin source (ESM TypeScript, compiled to lib/)
   remote/        remote storage adapter
   benchmark/     benchmark utilities
 tests/         vitest specs (unit + integration)
+eval/          Harness-run eval suite: scenario corpus, versioned rubrics, runner/judge/report, CLI (runbook: docs/EVAL.zh.md)
 docs/          Documentation index (docs/README.md), TECH_DESIGN, SEQUENCE_DIAGRAMS, standards
   i18n/          Bilingual pairing contract, translation rules, terminology
   archive/       Frozen planning/analysis records
@@ -29,6 +30,7 @@ scripts/       Build and site tooling
 ```sh
 npm run build    # tsc (host + client gate) + fix-imports + client bundle (prepublishOnly runs build && test)
 npm run test     # vitest run (the only test lane)
+npm run eval     # harness-run eval over a dataset; eval:ab diffs two builds; eval:smoke is the M0 chain smoke (runbook: docs/EVAL.zh.md)
 npm ci           # install (npm, not pnpm/yarn)
 ```
 

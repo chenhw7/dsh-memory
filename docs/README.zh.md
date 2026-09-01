@@ -15,6 +15,7 @@
 | [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh.md) | 开发 dsh 插件客户端 UI 的踩坑教训——对任何贡献设置卡或浏览器 UI 的插件都有用。 |
 | [HOST_CONTRACT](./HOST_CONTRACT.zh.md) | 宿主（harness）API 工程契约，每条结论附源码出处；§9 是 harness 升级时的核对清单。（仅中文版） |
 | [RELEASING](./RELEASING.zh.md) | npm 发布 runbook：三条命令流程、OIDC trusted-publishing 前提、故障排查与信任边界（推 tag 即发布）。 |
+| [EVAL](./EVAL.zh.md) | 真实 harness 测评集 runbook：L0/L1/L2 三层设计、`npm run eval` / `eval:ab` / `eval:smoke` 命令面、指标语义、rubric 版本化与 judge 环境门控、临时 `$DSH_HOME` 隔离纪律。 |
 
 ## 历史决策记录（`archive/`）
 

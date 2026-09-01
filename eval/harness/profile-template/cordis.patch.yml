@@ -1,0 +1,41 @@
+# Eval-profile user patch layer: the pinned evaluation configuration.
+#
+# Applied after every bundle layer (and below any `--patch` overlays passed by
+# eval/boot.ts, which is how a run overrides these pins). A config patch
+# replaces the targeted row's whole config object, and each plugin's schemastery
+# Config schema fills the omitted fields with its factory defaults — the pins
+# below state only the knobs that would blur a measurement if they moved.
+#
+# Pinned per the harness-eval-suite design (.agents/notes/implemented/testing/
+# 2026-09-01-harness-eval-suite.md, "Standing-injection chain evaluation"):
+# the janitor, curator, and human-confirm gate stay out of the measurement's
+# way, extraction flushes stay on (they are part of the chain under test), and
+# exactly one injection surface (the system-prompt memory section) is live.
+
+- id: memory-context
+  config:
+    # The suite measures the factory-default index mode (existence lines in
+    # <memory-index>); A/B runs override per run if they compare modes.
+    memoryMode: index
+    # No janitor decay inside a run: seed and planted entries must survive.
+    decayDays: 0
+    # One injection surface per run: project-notes and step-level auto-recall
+    # are excluded so the system-prompt memory section is the only channel.
+    notesEnabled: false
+    autoRecallEnabled: false
+
+- id: memory-review
+  config:
+    # Extraction stays on (the write path is part of the chain under test).
+    reviewEnabled: true
+    reviewCandidateThreshold: 10
+    flushOnCompaction: true
+    flushOnDispose: true
+    # No cross-model override: extraction rides the session route (the mock in
+    # mock runs, the initialized route in real runs).
+    extractionModelProvider: ''
+    extractionModelModel: ''
+    # Human-confirm off: proposals write straight into the store.
+    confirmBeforeWrite: false
+    # Curator off: re-summarization would rewrite stored content mid-run.
+    curatorEnabled: false

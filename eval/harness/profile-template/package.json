@@ -1,0 +1,17 @@
+{
+  "name": "dsh-profile-eval",
+  "private": true,
+  "dependencies": {
+    "@chenhw7/dsh-memory": "link:{{BUILD_DIR}}"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-sdk-app",
+        "@chenhw7/dsh-memory"
+      ],
+      "patchReload": "startup"
+    }
+  }
+}

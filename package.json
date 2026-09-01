@@ -100,7 +100,10 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/fix-imports.cjs && node scripts/build-client.cjs",
     "prepare": "echo skip",
     "prepublishOnly": "npm run build && npm run test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:smoke": "tsx eval/smoke.ts",
+    "eval": "tsx eval/cli.ts",
+    "eval:ab": "tsx eval/cli.ts ab"
   },
   "dependencies": {
     "@deepseek-ai/dsh-storage-domain": "^0.1.2-alpha.2",
@@ -155,6 +158,7 @@
     "jsdom": "^30.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^3.2.0",
     "zod": "^4.4.3"
