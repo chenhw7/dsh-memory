@@ -19,6 +19,8 @@ const testToolSignal = new AbortController().signal
 class TestMemoryStore extends MemoryStore {
   private readonly map = new Map<string, MemoryEntry>()
   private seq = 0
+  /** Ids handed to markRecalled — lets tests assert recall-stamp behavior. */
+  readonly recalledIds: string[] = []
 
   /** Seed one entry verbatim, bypassing add() so tests control every field. */
   seed(entry: Omit<MemoryEntry, 'id'> & { id?: string }): MemoryEntry {
@@ -109,6 +111,10 @@ class TestMemoryStore extends MemoryStore {
     const limit = query.limit ?? 50
     all = limit > 0 ? all.slice(0, limit) : all
     return { entries: all, total }
+  }
+
+  override markRecalled(ids: readonly string[]): void {
+    this.recalledIds.push(...ids)
   }
 }
 
@@ -348,6 +354,94 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const { ctx } = await setup()
       const result = await callTool(ctx, 'memory_search', { query: 'nonexistent' })
       expect(text(result)).toContain('No matching entries.')
+    })
+
+    it('falls back to the most recent entries flagged fallback: true on zero lexical overlap', async () => {
+      const { ctx, store } = await setup()
+      const older = store.seed({ scope: 'global', content: 'older fact', createdAt: 1_000, updatedAt: 1_000 })
+      const newer = store.seed({ scope: 'global', content: 'newer fact', createdAt: 2_000, updatedAt: 2_000 })
+      // Zero lexical overlap with either entry's content.
+      const result = await callTool(ctx, 'memory_search', { query: 'zzzunmatched', limit: 1 })
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { entries: { id: string }[]; total: number; fallback?: boolean }
+      expect(value.fallback).toBe(true)
+      expect(value.entries.map(e => e.id)).toEqual([newer.id])
+      // total counts the filtered candidates before the limit.
+      expect(value.total).toBe(2)
+      expect(older).toBeDefined()
+    })
+
+    it('a query with a lexical hit does not set the fallback flag', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'python fact', createdAt: 1, updatedAt: 1 })
+      const result = await callTool(ctx, 'memory_search', { query: 'python' })
+      const value = result.value as { entries: { content: string }[]; total: number; fallback?: boolean }
+      expect(value.total).toBe(1)
+      expect(value.fallback).toBeUndefined()
+      expect('fallback' in value).toBe(false)
+    })
+
+    it('a search without any query (filters only) never falls back', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'user', content: 'whatever', createdAt: 1, updatedAt: 1 })
+      const result = await callTool(ctx, 'memory_search', { scope: 'user', category: 'insight' })
+      const value = result.value as { entries: unknown[]; total: number; fallback?: boolean }
+      expect(value.total).toBe(0)
+      expect(value.fallback).toBeUndefined()
+    })
+
+    it('the fallback respects scope/category/projectName filters', async () => {
+      const { ctx, store } = await setup()
+      const globalEntry = store.seed({ scope: 'global', content: 'global note', createdAt: 3_000, updatedAt: 3_000 })
+      const insightEntry = store.seed({ scope: 'user', content: 'user insight', category: 'insight', createdAt: 2_000, updatedAt: 2_000 })
+      store.seed({ scope: 'user', content: 'user preference', category: 'preference', createdAt: 1_000, updatedAt: 1_000 })
+      const result = await callTool(ctx, 'memory_search', {
+        query: 'zzzunmatched',
+        scope: 'user',
+        category: 'insight',
+        limit: 10,
+      })
+      const value = result.value as { entries: { id: string }[]; total: number; fallback?: boolean }
+      expect(value.fallback).toBe(true)
+      expect(value.entries.map(e => e.id)).toEqual([insightEntry.id])
+      expect(value.total).toBe(1)
+      expect(globalEntry).toBeDefined()
+    })
+
+    it('the fallback render states it is not a lexical match', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'some fact', createdAt: 1, updatedAt: 1 })
+      const result = await callTool(ctx, 'memory_search', { query: 'zzzunmatched' })
+      const t = text(result)
+      expect(t).toContain('no lexical match')
+      expect(t).toContain('fallback')
+    })
+
+    it('the fallback does not stamp recall metadata (not a real recall)', async () => {
+      const { ctx, store } = await setup()
+      // Seed verbatim with a pinned lastRecalledAt so any stamp is observable.
+      const seeded = store.seed({
+        scope: 'global', content: 'untouched fact', createdAt: 1, updatedAt: 1,
+        lastRecalledAt: 123_456, accessCount: 2,
+      })
+      const result = await callTool(ctx, 'memory_search', { query: 'zzzunmatched' })
+      const value = result.value as { fallback?: boolean }
+      expect(value.fallback).toBe(true)
+      // The fallback path goes through store.list, never markRecalled.
+      expect(store.recalledIds).toEqual([])
+      const after = store.get(seeded.id as never)
+      expect(after?.lastRecalledAt).toBe(123_456)
+      expect(after?.accessCount).toBe(2)
+    })
+
+    it('a lexical hit keeps the store-level recordRecall semantics (no tool-side stamping)', async () => {
+      const { ctx, store } = await setup()
+      store.seed({ scope: 'global', content: 'hit me python', createdAt: 1, updatedAt: 1 })
+      await callTool(ctx, 'memory_search', { query: 'python' })
+      // The tool never calls markRecalled on any path; store.search stamps via
+      // its own recordRecall mechanism (contract: tests/store-contract.spec.ts).
+      expect(store.recalledIds).toEqual([])
     })
   })
 
