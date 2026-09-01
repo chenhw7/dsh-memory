@@ -327,9 +327,9 @@ interface MemorySuggestion {
   - `archiveEntry` / `unarchiveEntry`：**手动休眠开关**——直接盖章/清除 `staleSince`，复用软衰减的表示，使一切既有表面（注入过滤、stale 徽标、召回复活）行为一致。按调用方 source 记 `update` 审计。
   - `list`：可选 scope + project 过滤，按 `createdAt` 升序。
   - `pin(id)` / `unpin(id)`：设置 `pinned` 字段（不写审计记录）；返回更新后的条目或 `undefined`。
-  - `janitor(decayDays)`：**两层生命周期策略**。对每个未固定的、`now − lastActive ≥ decayDays·86400000` 的条目（`lastActive = lastRecalledAt ?? createdAt`）：
-    - `project` 作用域 → **硬衰减**：删除并审计 `remove`/`janitor`；
-    - `global`/`user` 作用域 → **软衰减**：首个过期周期打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。`importance` 4–5 的条目享有 1.5× 的宽限窗口（模型"这条重要"的自评延长可容忍的静默期；召回仍是更强的信号——`stampRecalled` 直接清除衰减戳）。
+  - `janitor(decayDays)`：**两层生命周期策略**。快照迭代仅作候选预筛；每个写入决策都在**写入链槽位上重读当前记录**（`KvTable.update` 原子 RMW，与召回戳同一纪律）：
+    - `project` 作用域 → **硬衰减**：守卫 update 先重读 `pinned`（pinned → 原样返回并跳过），未 pinned 才删除并审计 `remove`/`janitor`（守卫与删除之间残留一个宿主原语无法关闭的窄窗口，代码注释如实记录）；
+    - `global`/`user` 作用域 → **软衰减**：过期判定、importance 宽限、pinned 豁免、衰减幂等全部在 update 的 transform 内基于重读值判定，通过则打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。`importance` 4–5 的条目享有 1.5× 的宽限窗口（模型"这条重要"的自评延长可容忍的静默期；召回仍是更强的信号——`stampRecalled` 直接清除衰减戳）。
     返回被硬衰减（移除）的 project 条目数。
   - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
