@@ -1,0 +1,45 @@
+# Regenerate stats.json — the per-day commit/churn feed the GitHub Pages
+# deep-dive pages fetch at view time. Runs on every push to main (so the
+# feed is fresh right after landing work) and once daily (so a quiet repo
+# still gets a regenerated timestamp).
+# Pages is deployed from the main branch root, so committing the file here
+# publishes it; [skip ci] keeps this commit from retriggering the workflow.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '32 17 * * *' # 17:32 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site-stats
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to commit SHA so a retargeted tag cannot run code in CI.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # full history is the data
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      # Selfcheck first: aggregation totals must match the independent
+      # shortstat pass before anything is written.
+      - run: node scripts/build-site-stats.cjs --out stats.json --selfcheck
+      - name: Commit refreshed stats.json
+        run: |
+          if git diff --quiet stats.json; then
+            echo "stats.json unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stats.json
+          git commit -m "chore(site): refresh stats.json [skip ci]"
+          git push origin HEAD:main
