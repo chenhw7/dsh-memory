@@ -1,0 +1,14 @@
+# Normalize all text files to LF in the repository and on checkout.
+# Windows checkouts also get LF — Node tooling (tsc, vitest, esbuild) and the
+# test suites assert byte-exact content, so CRLF working copies are a hazard.
+* text=auto eol=lf
+
+# Windows scripts must keep CRLF on checkout.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never normalize.
+*.png binary
+*.webp binary
+*.gif binary
+*.ico binary
