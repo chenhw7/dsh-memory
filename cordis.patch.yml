@@ -44,6 +44,10 @@
     - id: memory-context
       name: '@chenhw7/dsh-memory/context'
 
-    # @Remote service for the memory management UI (§3.8).
+    # @Remote service for the memory management UI (§7.7). The write switch
+    # defaults to false (deny by default — see the remote-write-guard Agent
+    # Note); this deployment drives the management UI, so it opts in here.
     - id: memory-remote
       name: '@chenhw7/dsh-memory/remote-service'
+      config:
+        remoteWritesEnabled: true
