@@ -351,7 +351,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     <div class="hero-stats">
       <div class="hstat"><b>7</b><span>个协作插件</span></div>
       <div class="hstat"><b>3</b><span>张持久化表</span></div>
-      <div class="hstat"><b>8</b><span>个模型工具</span></div>
+      <div class="hstat"><b>9</b><span>个模型工具</span></div>
       <div class="hstat"><b>2<i>×</i></b><span>写入 / 读取双防线</span></div>
     </div>
   </div>
@@ -376,7 +376,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <figcaption>记忆的闭环：感知 → 提取 → 入库 → 检索 → 注入 → 再回到会话。六个环节分别由独立插件承担，共享同一个存储域。</figcaption>
     </figure>
     <div class="col rv">
-      <p>实现上，它是七个各司其职的 Cordis 插件：<code>memory-store</code> 打开存储域并注册 <code>ctx.memory</code> 服务；<code>tool-memory</code> 暴露八个模型工具；<code>memory-review</code> 负责自动提取；<code>memory-context</code> 管理系统提示注入；<code>memory-notes</code> 把约定与踩坑渲染回仓库；<code>memory-remote</code> 支撑设置界面里的记忆管理中心。存储介质只是 <code>~/.dsh/storages/memory.json</code> 一个文件——卸载插件也不会丢失记忆。</p>
+      <p>实现上，它是七行 Cordis 编排：六个功能插件各司其职——<code>memory-store</code> 打开存储域并注册 <code>ctx.memory</code> 服务；<code>tool-memory</code> 暴露九个模型工具；<code>memory-review</code> 负责自动提取；<code>memory-context</code> 管理系统提示注入；<code>memory-notes</code> 把约定与踩坑渲染成 <code>project-notes</code> 提示词段落（不向仓库写任何文件）；<code>memory-remote</code> 支撑设置界面里的记忆管理中心（远程写默认关闭，需显式开启）——外加一个只做客户端模块发现的 <code>memory-root</code> 根条目。存储介质只是 <code>~/.dsh/storages/memory.json</code> 一个文件——卸载插件也不会丢失记忆。</p>
     </div>
   </div>
 </section>
@@ -462,7 +462,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="gates" id="gates">
           <div class="chip" id="chip"><div class="payload" id="payload">memory_add</div></div>
           <div class="gate" data-g="0"><div class="ic">✎</div><div class="gt">结构校验</div><div class="gs">scope + projectName</div></div>
-          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">安全扫描</div><div class="gs">16 密钥 · 8 注入 · 4 外泄</div></div>
+          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">安全扫描</div><div class="gs">16 密钥 · 17 注入 · 4 外泄</div></div>
           <div class="gate" data-g="2"><div class="ic">▤</div><div class="gt">KV 落库</div><div class="gs">entries.put</div></div>
           <div class="gate" data-g="3"><div class="ic">≡</div><div class="gt">审计追加</div><div class="gs">audit + seq</div></div>
         </div>
@@ -476,7 +476,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
           <div id="miniStore"><div class="ms-row audit">audit #41 · update · source:janitor · "…staleSince 盖章"</div></div>
         </div>
       </div>
-      <figcaption>扫描器是纯函数：28 条正则覆盖 API Key、提示注入与外泄模式，支持白名单豁免。读取侧还有第二道防线（见 06）。</figcaption>
+      <figcaption>扫描器是纯函数：37 条正则覆盖 16 类密钥、17 条注入模式（含 8 条中文对应规则）与 4 类外泄企图，支持白名单豁免。读取侧还有第二道防线（见 06）。</figcaption>
     </figure>
 
     <div class="anat rv" style="margin-top:70px">
@@ -490,8 +490,9 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 &nbsp;&nbsp;<span class="k">"projectName"</span>: <span class="v">"dsh-memory"</span>,<br>
 &nbsp;&nbsp;<span class="k">"createdAt"</span>: <span class="v">1756…</span>, <span class="k">"updatedAt"</span>: <span class="v">1756…</span>,<br>
 &nbsp;&nbsp;<span class="k">"pinned"</span>: <span class="v">false</span>,&nbsp;&nbsp;<span class="c">// ④</span><br>
-&nbsp;&nbsp;<span class="k">"lastRecalledAt"</span>: <span class="v">1756…</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
-&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑥</span><br>}
+&nbsp;&nbsp;<span class="k">"accessCount"</span>: <span class="v">7</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
+&nbsp;&nbsp;<span class="k">"lastRecalledAt"</span>: <span class="v">1756…</span>,&nbsp;&nbsp;<span class="c">// ⑥</span><br>
+&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑦</span><br>}
         </div>
       </div>
       <div class="anat-list">
@@ -499,15 +500,20 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="anat-item"><b>category</b><span>七类课程：failure / correction / insight / preference / convention / tool-quirk / procedure</span></div>
         <div class="anat-item"><b>summary</b><span>可选短摘要——索引与自动召回优先渲染它，渐进式披露</span></div>
         <div class="anat-item"><b>pinned</b><span>置顶即免疫衰减：「用户希望它被记住」</span></div>
+        <div class="anat-item"><b>accessCount</b><span>每次命中都 +1 并刷新 lastRecalledAt——容量淘汰时，使用信号最低的条目先走</span></div>
         <div class="anat-item"><b>lastRecalledAt</b><span>每次被检索/读取命中都会刷新——使用频率就是保鲜剂</span></div>
         <div class="anat-item"><b>staleSince</b><span>软衰减章：被盖章后退出注入面，但仍可搜索、可复活</span></div>
       </div>
     </div>
 
     <div class="tables3">
-      <div class="tbl rv" style="--d:.05s"><h4>entries</h4><div class="tb-sub">KvTable&lt;MemoryId, MemoryEntry&gt;</div><p>记忆条目主表。读取同步走内存权威态，写在域写链上串行化，先达后端再更新内存。</p></div>
+      <div class="tbl rv" style="--d:.05s"><h4>entries</h4><div class="tb-sub">KvTable&lt;MemoryId, MemoryEntry&gt; · 软上限 500</div><p>记忆条目主表。读取同步走内存权威态，写在域写链上串行化，先达后端再更新内存。写后超出软上限（<code>entriesCap</code>，可配）即按使用信号淘汰：pinned 免疫，accessCount / lastRecalledAt 最低者先走；全部豁免时允许超限，绝不硬删健康数据。</p></div>
       <div class="tbl rv" style="--d:.15s"><h4>audit</h4><div class="tb-sub">cap = 200 条</div><p>每次成功变更追加一条审计：操作、来源（tool/review/flush/ui/janitor）、单调 seq、内容预览。谁写的、何时写的，永远可查。</p></div>
       <div class="tbl rv" style="--d:.25s"><h4>suggestions</h4><div class="tb-sub">cap = 200 条</div><p>人审模式的待确认队列。提议不是记忆——不注入、不搜索、不衰减，只等待人的裁决（见 06）。</p></div>
+    </div>
+
+    <div class="col rv" style="margin-top:44px">
+      <p>存储还有一层<strong>跨进程单写者检测</strong>：宿主的存储后端假设每个进程独占写入——两个 DSH 进程共享同一存储根时，各自持有内存权威态并整文件回写，互相静默覆盖。memory-store 因此每次启动把一枚 owner stamp（pid + bootId）写进存储域的 global 槽，并周期性回读：自己写的印章读回来变成别家的，即证明存在并发发布者，立即上报。它只检测、不加锁——pid 已死或干净退出的前代印章不算活威胁，重启场景不会误报。</p>
     </div>
   </div>
 </section>
@@ -516,10 +522,10 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 <section id="retrieve">
   <div class="wrap">
     <div class="sec-head rv"><div class="sec-num">03</div><h2 class="sec-title">检索：零依赖的 BM25</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">没有向量库、没有嵌入模型——一套 120 行的 Okapi BM25，配上 CJK 感知分词。</p>
+    <p class="sec-sub rv" style="--d:.1s">没有向量库、没有嵌入模型——一套约 270 行的零依赖 Okapi BM25，配上 CJK 感知分词与拉丁保守词干。</p>
 
     <div class="col rv">
-      <p>检索分两步：<strong>结构化过滤先行</strong>（scope / category / projectName），再对幸存候选做 BM25 打分。分词器对拉丁文按词切分；对中文同时产出<strong>单字一元 + 相邻二字 bigram</strong>——bigram 让「记忆」不再命中所有只含「记」的条目，一元保留单字查询的召回。排序依次按：相关性 ↓、置顶 ↓、新近度 ↓。</p>
+      <p>检索分两步：<strong>结构化过滤先行</strong>（scope / category / projectName），再对幸存候选做 BM25 打分。分词器对拉丁文按词切分，并剥掉一个保守的规则后缀收敛词形——<code>uses→use</code>、<code>studies→study</code>，而 <code>class</code>、<code>basis</code> 这类词干永不受损（文档与查询共用同一分词器）；对中文同时产出<strong>单字一元 + 相邻二字 bigram</strong>——bigram 让「记忆」不再命中所有只含「记」的条目，一元保留单字查询的召回。summary 与正文一起入索引，短摘要同样能召回条目。排序依次按：相关性 ↓、置顶 ↓、新近度 ↓。</p>
     </div>
 
     <div class="formula rv">score = Σ <i>IDF(term)</i> × <b>tf·(k₁+1) / (tf + k₁·(1−b + b·|d|/avgdl))</b>　　<span class="dim">k₁ = 1.2, b = 0.75, IDF 非负变体</span></div>
@@ -531,7 +537,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="bm-chips" id="bmChips"></div>
         <div style="margin-top:14px" id="bmTokens"></div>
         <div class="bm-res" id="bmRes"></div>
-        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · MRR = 0.958（24 条 × 24 查询，CI 实测）</span></div>
+        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · P@1 = 82.9% · MRR = 0.902（35 条 × 35 查询 · en+zh，CI 实测）</span></div>
       </div>
       <figcaption>上方是移植自 src/store/bm25.ts 的同一份算法在浏览器里实时运行。命中即盖章 lastRecalledAt——召回本身就是保鲜。</figcaption>
     </figure>
@@ -552,9 +558,9 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <div class="fig-panel">
         <span class="fig-tag">FIG.4 — 五种注入模式</span>
         <div class="modes" id="modeBtns">
-          <button class="mode-btn on" data-m="policy">policy-only</button>
+          <button class="mode-btn" data-m="policy">policy-only</button>
           <button class="mode-btn" data-m="full">full</button>
-          <button class="mode-btn" data-m="index">index</button>
+          <button class="mode-btn on" data-m="index">index</button>
           <button class="mode-btn" data-m="custom">custom</button>
           <button class="mode-btn" data-m="off">off</button>
         </div>
@@ -565,7 +571,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p><strong>index 模式是渐进式披露的核心</strong>：每个条目只渲染一行存在性索引（作用域/类别 · id · 摘要），按 project → user → global 的相关性层级排序；预算耗尽时尾部折叠成类别计数行（<code>project/convention ×12</code>）——索引体积随类别数增长，而非条目数。模型看见「存了什么」，按需用 <code>memory_get</code> 取全文。</p>
+      <p><strong>index 模式——出厂默认（0.8 起）——是渐进式披露的核心</strong>：每个条目只渲染一行存在性索引（作用域/类别 · id · 摘要），按 project → user → global 的相关性层级排序；预算耗尽时尾部折叠成类别计数行（<code>project/convention ×12</code>）——索引体积随类别数增长，而非条目数。模型看见「存了什么」，按需用 <code>memory_get</code> 取全文。</p>
       <p>可选的<strong>步级自动召回</strong>则走另一条路：每个 agent step 用当步用户文本对库做一次 BM25，命中条目以 <code>&lt;recalled-memory&gt;</code> 围栏追加为一条用户消息——不碰系统提示，前缀缓存分毫不动。加载时，被纠正条目还会带上冲突标注（<em>⚠ 与更新的修正相矛盾</em>），让模型自己权衡新旧。</p>
     </div>
   </div>
@@ -607,7 +613,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
     </figure>
 
     <div class="col rv">
-      <p>与衰减相对的是<strong>凝练</strong>：每 20 个会话，curator 会把超长（≥400 字符）的条目挑出来交给 LLM 改写成简洁的单行——低频、有预算约束、同样可进入人审队列。记忆库因此既会遗忘，也会沉淀。</p>
+      <p>与衰减相对的是<strong>凝练</strong>：每 20 个会话，curator 会把超长（≥400 字符）的条目挑出来——每批最多 5 条——交给 LLM 改写成简洁的单行；低频、有预算约束、同样可进入人审队列。记忆库因此既会遗忘，也会沉淀。</p>
     </div>
   </div>
 </section>
@@ -623,7 +629,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="dt">WRITE-TIME · 写入时</div>
         <h4><i>scanContent</i> 闸门</h4>
         <ul>
-          <li>28 条正则：密钥 / 注入 / 外泄三类模式</li>
+          <li>37 条正则：密钥 16 · 注入 17（含 8 条中文对应规则）· 外泄 4</li>
           <li>工具边界先拦一次，存储层复检一次（纵深防御）</li>
           <li>被拒内容返回错误，永不落库；支持白名单豁免示例值</li>
         </ul>
@@ -660,7 +666,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       <div><b>频率即信号</b><p>被反复观察到的提议累计 hits 自动置顶；被反复召回的条目自动保鲜。使用痕迹本身就是最重要的元数据。</p></div>
       <div><b>稳定高于新鲜</b><p>快照为 KV-cache 冻结整个会话，宁可延迟一拍也不抖动前缀——缓存命中省下的成本远超即时的收益。</p></div>
       <div><b>记忆是上下文，不是指令</b><p>每个注入面都声明：当前用户请求、仓库文件与工具输出永远优先于记忆。冲突时，相信当下。</p></div>
-      <div><b>每次写入都可审计</b><p>28 条扫描规则、200 条滚动审计、可选的人审队列——记忆系统必须能回答「这条记忆是谁、在何时、为什么写下的」。</p></div>
+      <div><b>每次写入都可审计</b><p>37 条扫描规则、audit / suggestions 各 200 条滚动、entries 软上限 500、可选的人审队列——记忆系统必须能回答「这条记忆是谁、在何时、为什么写下的」。</p></div>
     </div>
   </div>
 </section>
@@ -870,7 +876,7 @@ async function run(evil){
   chip.style.left=pos[0];log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
   await sleep(900);
   gates[0].classList.add('ok');chip.style.left=pos[1];
-  log.innerHTML='// scanContent：扫描 28 条模式 …';
+  log.innerHTML='// scanContent：扫描 37 条模式 …';
   await sleep(1100);
   if(evil){
     gates[1].classList.add('bad');
@@ -910,12 +916,27 @@ const ENTRIES=[
  {s:'global',c:'procedure',t:'排查端口占用：lsof -i :8080 找到 PID 后 kill，不要盲目重启机器'},
  {s:'user',c:'correction',t:'其实团队周会改到周三下午了，不是之前说的周一'},
 ];
+/* stemLatin：剥除一个保守的拉丁词形后缀（移植自 src/store/bm25.ts，规则逐条一致）。
+   文档与查询共用同一分词器——"testing / tests / test" 收敛为同一 token，
+   纯数字与 class / basis 这类词干永不受损；CJK 走另一条路径，从不进入本函数。 */
+function stemLatin(t){
+  if(/^\d+$/.test(t))return t;
+  if(t.length<6)return t;
+  if(t.endsWith('ies'))return t.slice(0,-3)+'y';
+  if(t.endsWith('sses'))return t.slice(0,-2);
+  if(t.endsWith('ches')||t.endsWith('shes')||t.endsWith('xes')||t.endsWith('zes'))return t.slice(0,-2);
+  if(t.length>=5&&t.endsWith('ses')&&/[aeiou]/.test(t.charAt(t.length-4)))return t.slice(0,-2);
+  if(t.endsWith('ed')&&!/[aeiou]{2}$/.test(t))return t.slice(0,-2);
+  if(t.length>=7&&t.endsWith('ing')&&!/[aeiou]{2}$/.test(t))return t.slice(0,-3);
+  if(t.endsWith('s')&&!/ss$|us$|is$/.test(t))return t.slice(0,-1);
+  return t;
+}
 function tokenizeForSearch(text){
   const lowered=text.toLowerCase(),tokens=[];
   const re=/[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+/g;
   let m;while((m=re.exec(lowered))!==null){
     const run=m[0];
-    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(run);continue}
+    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(stemLatin(run));continue}
     const chars=[...run];
     for(const ch of chars)tokens.push(ch);
     for(let i=0;i+1<chars.length;i++)tokens.push(chars[i]+chars[i+1]);
@@ -1041,9 +1062,9 @@ off:`<span class="cm">// 不注入任何 memory 段落
 // 系统提示中 0 字符、0 token 成本</span>`
 };
 const caps={
-policy:'<b>默认模式。</b>只注入行为指引，不注入内容——模型按需调用 memory_search。常驻成本最低，记忆量增长零压力。',
+policy:'<b>纯策略模式（0.8 前的默认）。</b>只注入行为指引，不注入内容——模型按需调用 memory_search。常驻成本最低。',
 full:'<b>全量模式。</b>冻结快照 + 指引一起注入，模型开箱即见所有健康记忆。适合条目少而精的库。',
-index:'<b>索引模式（渐进式披露）。</b>模型看见每条的摘要与 id，按需取全文。索引体积随类别数增长，而非条目数。',
+index:'<b>默认模式（0.8 起）· 渐进式披露。</b>模型看见每条的摘要与 id，按需取全文。索引体积随类别数增长，而非条目数。',
 custom:'<b>自定义模式。</b>注入你自己的策略文本，完全接管记忆段落的措辞。',
 off:'<b>关闭。</b>段落整体缺席；工具层不受影响。'
 };
@@ -1053,7 +1074,7 @@ btns.forEach(b=>b.onclick=()=>{
   view.style.opacity=0;
   setTimeout(()=>{view.innerHTML=views[b.dataset.m];cap.innerHTML=caps[b.dataset.m];view.style.opacity=1},220);
 });
-view.innerHTML=views.policy;cap.innerHTML=caps.policy;
+view.innerHTML=views.index;cap.innerHTML=caps.index;
 })();
 
 /* ═════════ lifecycle simulator ═════════ */
