@@ -156,6 +156,17 @@ export abstract class MemoryStore {
    */
   markRecalled(ids: readonly string[]): void { /* default no-op */ }
 
+  /**
+   * Record one failure swallowed by a best-effort background path (flush,
+   * janitor, curator, judge, per-row rewrite, ...) so it stays observable
+   * instead of silently vanishing. Fire-and-forget like {@link markRecalled}:
+   * the default implementation is a no-op, so providers without failure
+   * tracking remain contract-conformant and callers never handle failures.
+   * @param site - stable identifier of the failing path; doubles as the counter key.
+   * @param error - the swallowed error, when one was caught.
+   */
+  reportFailure(_site: string, _error?: unknown): void { /* default no-op */ }
+
   // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────
   //
   // Default implementations follow the `markRecalled` precedent: providers

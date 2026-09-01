@@ -131,7 +131,8 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
         conventions: renderConventions(conventions, settings.notesMaxEntriesPerFile),
         pitfalls: renderPitfalls(pitfalls, settings.notesMaxEntriesPerFile),
       }
-    } catch {
+    } catch (error) {
+      this.ctx.get('memory')?.reportFailure('notes-snapshot', error)
       return EMPTY_SNAPSHOT
     }
   }
@@ -162,6 +163,8 @@ export function apply(ctx: Context): void {
     const cwd = session.header?.cwd
     if (cwd === undefined || cwd.length === 0 || cleanedRoots.has(cwd)) return
     cleanedRoots.add(cwd)
-    void cleanupLegacyNotesArtifacts(cwd).catch(() => {})
+    void cleanupLegacyNotesArtifacts(cwd, ctx.logger).catch((error: unknown) => {
+      ctx.get('memory')?.reportFailure('legacy-cleanup', error)
+    })
   }, { global: true })
 }

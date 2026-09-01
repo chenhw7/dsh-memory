@@ -101,7 +101,18 @@
 | `settings.plugin.item` slot（Plugins 页卡片） | `packages/client/ui-settings-plugins/src/client/index.ts:79,83` |
 | 客户端模块扫描器只发现**根导出行**的 dsh.client（子路径跳过） | 本仓库踩坑记录：root 包 no-op 行见 `src/index.ts` 尾注 |
 
-## 9. 升级核对清单（harness bump 时过一遍）
+## 9. 日志通道：cordis 内置 `ctx.logger`
+
+| 依赖 | 出处 |
+|---|---|
+| `ctx.logger: LoggerService`（Context 内置属性，无需 inject） | `@deepseek-ai/cordis` 包 `lib/types/context.d.ts:27` |
+| `LoggerService` 形状：`(name?) => Logger` 可调用 + `error/info/warn/debug` 方法 | 同包 `lib/types/logger.d.ts:77-87` |
+
+**契约要点**：
+- 本插件的失败上报接缝（`MemoryStore.reportFailure`：warn 一条 + `health().backgroundFailures` 计数）走这个通道；`src/notes/cleanup.ts` 的迁移日志也在此归并（不再用 `console.log`）。
+- 消息统一 `dsh-memory: <site> failed[: error]` 格式，与 harness 各包（hooks-claude-code 等）「包名前缀 + 单条模板字符串」的既有用法一致；该服务在 cordis core 而非 harness 仓库，升级核对以 npm 包版本为准。
+
+## 10. 升级核对清单（harness bump 时过一遍）
 
 1. §1 KvTable 接口形状 / 域 version 语义是否变化；
 2. §2 installSettingsSection hooks 形状（setSource/onChange）是否变化；
@@ -110,4 +121,5 @@
 5. §4 agent/pre-step 的 payload/决策形状；
 6. §6 finish reason 枚举与 BlockAssembler API；
 7. §7 typertRemote 绑定发现机制、保留方法名清单、信任围栏语义；
-8. §8 slots 契约键名与 scanner 根导出行为。
+8. §8 slots 契约键名与 scanner 根导出行为；
+9. §9 `ctx.logger` 服务形状（severity 方法集、Exporter 管道）是否变化。

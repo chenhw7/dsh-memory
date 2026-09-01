@@ -190,6 +190,7 @@ export interface MemoryHealthResult {
   stale?: number
   lastActivityTs?: number
   lastExtractionTs?: number
+  backgroundFailures?: Record<string, number>
 }
 
 /** Distinct `projectName` values across all `project`-scoped entries. */
@@ -459,6 +460,7 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (h.stale !== undefined) result.stale = h.stale
     if (h.lastActivityTs !== undefined) result.lastActivityTs = h.lastActivityTs
     if (h.lastExtractionTs !== undefined) result.lastExtractionTs = h.lastExtractionTs
+    if (h.backgroundFailures !== undefined) result.backgroundFailures = h.backgroundFailures
     return result
   }
 

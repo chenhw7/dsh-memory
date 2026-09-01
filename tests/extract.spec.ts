@@ -66,6 +66,7 @@ function recordingStore(entries: MemoryEntry[] = []): { store: MemoryStore; adde
     update: async () => undefined,
     remove: async () => true,
     search: () => ({ entries: [], total: 0 }),
+    reportFailure: () => {},
   } as unknown as MemoryStore
   return { store, added }
 }
@@ -582,9 +583,10 @@ describe('curator pass (P1-13)', () => {
 
 describe('LLM dedup judge (§3.4)', () => {
   /** A store mock with one existing entry that the prefilter will flag. */
-  function storeWithExisting(existingContent: string): { store: MemoryStore; updated: { id: string; content: string }[]; added: AddMemoryInput[] } {
+  function storeWithExisting(existingContent: string): { store: MemoryStore; updated: { id: string; content: string }[]; added: AddMemoryInput[]; failures: string[] } {
     const updated: { id: string; content: string }[] = []
     const added: AddMemoryInput[] = []
+    const failures: string[] = []
     const entries: MemoryEntry[] = [{ id: 'e1' as never, scope: 'global', content: existingContent, createdAt: 0, updatedAt: 0 }]
     const store = {
       add: async (input: AddMemoryInput) => {
@@ -599,8 +601,9 @@ describe('LLM dedup judge (§3.4)', () => {
       },
       remove: async () => true,
       search: () => ({ entries: [], total: 0 }),
+      reportFailure: (site: string) => { failures.push(site) },
     } as unknown as MemoryStore
-    return { store, updated, added }
+    return { store, updated, added, failures }
   }
 
   it('judge verdict "duplicate" merges the content', async () => {
@@ -650,13 +653,14 @@ describe('LLM dedup judge (§3.4)', () => {
   })
 
   it('falls back to "duplicate" when the LLM stream fails', async () => {
-    const { store, updated, added } = storeWithExisting('user prefers concise answers')
+    const { store, updated, added, failures } = storeWithExisting('user prefers concise answers')
     // Stream that errors on finish.
     const ctx = fakeCtx(() => makeTextStream('garbage', { type: 'finish', reason: { kind: 'error', failure: { message: 'boom', code: 'ERR' } } }), store)
     const session = fakeSession()
     await storeMemories(ctx, [{ scope: 'global', content: 'user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
-    // Safe fallback: merge.
+    // Safe fallback: merge — and the swallowed judge failure is reported, not lost.
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
+    expect(failures).toEqual(['judge'])
   })
 })

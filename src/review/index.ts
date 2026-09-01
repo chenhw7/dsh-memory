@@ -284,8 +284,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!signal.aborted && cfg.reviewEnabled) {
       try {
         await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite)
-      } catch (_reviewError) {
+      } catch (reviewError) {
         // Best-effort: a review failure must never block the step.
+        ctx.get('memory')?.reportFailure('review-drain', reviewError)
       }
     }
     return next()
@@ -298,8 +299,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnCompaction) return
     if (!checkBudget(session)) return
-    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch(() => {
-      // Best-effort: a flush failure is logged by the runtime, not thrown here.
+    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch((error: unknown) => {
+      // Best-effort: never blocks compaction, but stays observable.
+      ctx.get('memory')?.reportFailure('flush-compaction', error)
     })
   })
 
@@ -308,8 +310,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnDispose) return
     if (!checkBudget(session)) return
-    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch(() => {
-      // Best-effort: dispose must not block on memory extraction.
+    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch((error: unknown) => {
+      // Best-effort: dispose must not block on memory extraction, but stays observable.
+      ctx.get('memory')?.reportFailure('flush-dispose', error)
     })
   })
 
@@ -322,8 +325,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (days <= 0) return
     const memory = ctx.get('memory')
     if (memory === undefined) return
-    void memory.janitor(days).catch(() => {
-      // Best-effort: a janitor failure never blocks session creation.
+    void memory.janitor(days).catch((error: unknown) => {
+      // Best-effort: a janitor failure never blocks session creation, but stays observable.
+      memory.reportFailure('janitor', error)
     })
   }, { global: true })
 
@@ -345,8 +349,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       .slice(0, cfg.curatorMaxEntries)
     if (selected.length < 2) return
     if (!checkBudget(session)) return
-    void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).catch(() => {
-      // Best-effort: curation failures never surface into session creation.
+    void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).catch((error: unknown) => {
+      // Best-effort: curation failures never surface into session creation, but stay observable.
+      ctx.get('memory')?.reportFailure('curator', error)
     })
   }, { global: true })
 }

@@ -424,7 +424,9 @@ async function judgeDuplicate(
   try {
     const text = await collectStreamText(ctx, options)
     return parseJudgeVerdict(text)
-  } catch {
+  } catch (error) {
+    // Fail-closed verdict, but the swallowed call stays observable.
+    ctx.get('memory')?.reportFailure('judge', error)
     return 'duplicate'
   }
 }
@@ -776,8 +778,9 @@ export async function runCuration(
         sessionId: session.id,
       })
       if (updated !== undefined) rewritten++
-    } catch {
+    } catch (error) {
       // Per-row best-effort: one rejected/failed rewrite skips only itself.
+      memory.reportFailure('row-rewrite', error)
     }
   }
   return rewritten

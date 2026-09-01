@@ -51,6 +51,7 @@ export interface MemoryHealthResult {
   stale?: number
   lastActivityTs?: number
   lastExtractionTs?: number
+  backgroundFailures?: Record<string, number>
 }
 export interface MemoryProjectsResult { projects: readonly string[] }
 export interface AuditEntryJson {

@@ -311,7 +311,7 @@ interface MemorySuggestion {
 ### 7.1 记忆存储 — `/store`（`src/store/index.ts`、`src/store/bm25.ts`）
 
 - **`MemoryStore`（抽象类，位于 `src/index.ts`）** 是公开契约：
-  `add / get / list / update / remove / search / pin / unpin / archiveEntry / unarchiveEntry / markRecalled / observeSuggestion / listSuggestions / getSuggestion / adoptSuggestion / rejectSuggestion / janitor / health / exportAuditLog`。
+  `add / get / list / update / remove / search / pin / unpin / archiveEntry / unarchiveEntry / markRecalled / reportFailure / observeSuggestion / listSuggestions / getSuggestion / adoptSuggestion / rejectSuggestion / janitor / health / exportAuditLog`。
   契约*要求*实现方在持久化前运行 `scanContent` 并拒绝未通过的内容——即便未来某个消费方绕过工具边界，store 本身也是安全的。`markRecalled` 默认空实现；归档对（archive 一对）默认返回 `undefined`、建议队列方法默认拒绝/空实现——没有这些表面的 provider 仍符合契约，人审模式的调用方把"不支持"当作空队列处理。
 - **`DomainMemoryStore`** 基于 storage-domain 表实现：
   - `add`：校验 project 作用域 → 校验非空内容 → 扫描 → 铸造 `MemoryId` → `entries.put` → `appendAudit`。
@@ -325,7 +325,7 @@ interface MemorySuggestion {
     - `project` 作用域 → **硬衰减**：删除并审计 `remove`/`janitor`；
     - `global`/`user` 作用域 → **软衰减**：首个过期周期打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。
     返回被硬衰减（移除）的 project 条目数。
-  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间。
+  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
   - **建议队列（待确认人审表）：**
     - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 Jaccard > 0.15 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
@@ -554,7 +554,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | `suggestList` | — | `{ suggestions[] }` | 待确认人审队列（P1-1），`hits` 最高者在前 |
 | `suggestAdopt` | `MemorySuggestAdoptRequest` (id, content?, category?, summary?) | `{ entry?, found, error? }` | async；带可选"先编辑后采纳"覆盖，经完整 store 契约落实（`source: 'ui'`） |
 | `suggestReject` | `MemorySuggestRejectRequest` (id) | `{ rejected }` | async；行退出队列，什么都不写 |
-| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` | 同步；`stale` 为软衰减计数透传 |
+| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` | 同步；`stale` 为软衰减计数透传，`backgroundFailures` 为按站点的后台失败计数透传 |
 | `projects` | — | `{ projects[] }` | 从 `store.list('project')` 聚合 distinct `projectName`（remote 层聚合，不改 store），供工作区选择器 |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | 最新尾部，默认 100 |
 
@@ -736,7 +736,7 @@ dsh-memory/
 ├── src/                    # TypeScript 源码（35 个文件，约 10.1 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（27 个文件，501 个用例）
+├── tests/                  # vitest specs（28 个文件，505 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -771,7 +771,7 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **27 个 vitest spec 文件、501 个用例**（495 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **28 个 vitest spec 文件、505 个用例**（499 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。

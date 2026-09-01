@@ -159,7 +159,7 @@ export async function apply(ctx: Context): Promise<void> {
 
   ctx.effect(() => async () => { await domain.close() })
 
-  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions))
+  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger))
 }
 
 /**
@@ -174,6 +174,10 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly suggestions: SuggestionsTable
   private readonly auditCap: number
   private readonly suggestionCap: number
+  /** Warn channel for swallowed background-path failures; the host `ctx.logger`. */
+  private readonly failureLogger: { warn(message: string): void } | undefined
+  /** Per-site counts of swallowed failures, surfaced through `health()`. */
+  private readonly failureCounts = new Map<string, number>()
   /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
   private auditSeq: number | undefined
 
@@ -183,6 +187,7 @@ export class DomainMemoryStore extends MemoryStore {
     suggestions: SuggestionsTable,
     auditCap: number = DEFAULT_AUDIT_CAP,
     suggestionCap: number = DEFAULT_SUGGESTION_CAP,
+    failureLogger?: { warn(message: string): void },
   ) {
     super()
     this.entries = entries
@@ -190,6 +195,12 @@ export class DomainMemoryStore extends MemoryStore {
     this.suggestions = suggestions
     this.auditCap = auditCap
     this.suggestionCap = suggestionCap
+    this.failureLogger = failureLogger
+  }
+
+  override reportFailure(site: string, error?: unknown): void {
+    this.failureCounts.set(site, (this.failureCounts.get(site) ?? 0) + 1)
+    this.failureLogger?.warn(`dsh-memory: ${site} failed${error === undefined ? '' : `: ${String(error)}`}`)
   }
 
   /** Next monotonic audit sequence number (survives reopen via the medium). */
@@ -625,6 +636,7 @@ export class DomainMemoryStore extends MemoryStore {
       stale,
       ...lastActivityTs !== undefined ? { lastActivityTs } : {},
       ...lastExtractionTs !== undefined ? { lastExtractionTs } : {},
+      ...this.failureCounts.size > 0 ? { backgroundFailures: Object.fromEntries(this.failureCounts) } : {},
     }
   }
 
@@ -662,8 +674,9 @@ export class DomainMemoryStore extends MemoryStore {
       }
       await this.audit.put(record.id, record)
       await this.trimAudit()
-    } catch {
+    } catch (error) {
       // Best-effort: an audit failure must never propagate to the caller.
+      this.reportFailure('audit-append', error)
     }
   }
 

@@ -253,6 +253,12 @@ export interface MemoryHealth {
   readonly lastActivityTs?: number | undefined
   /** Timestamp of the most recent extraction-sourced audit record, or undefined. */
   readonly lastExtractionTs?: number | undefined
+  /**
+   * Per-site counts of failures swallowed by best-effort background paths
+   * (audit append, flush, janitor, curator, judge, ...); absent when none have
+   * occurred. In-process only — counts reset when the host restarts.
+   */
+  readonly backgroundFailures?: Readonly<Record<string, number>> | undefined
 }
 
 declare module '@deepseek-ai/dsh-session/types' {

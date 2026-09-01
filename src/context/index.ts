@@ -367,8 +367,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     if (event.data.error !== undefined) return
     try {
       freezeFor(session)
-    } catch {
-      // Best-effort: keep serving the previous frozen snapshot on failure.
+    } catch (error) {
+      // Best-effort: keep serving the previous frozen snapshot on failure, but stay observable.
+      ctx.get('memory')?.reportFailure('compaction-refreeze', error)
     }
   }, { global: true })
 
@@ -398,8 +399,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
         source: { kind: 'plugin', plugin: 'dsh-memory-context' },
       })
       return { kind: 'enter', messages: [...payload.messages, recallMessage] }
-    } catch {
-      // Recall must never break the step: fall through unchanged.
+    } catch (error) {
+      // Recall must never break the step: fall through unchanged, but stay observable.
+      ctx.get('memory')?.reportFailure('auto-recall', error)
       return next()
     }
   })

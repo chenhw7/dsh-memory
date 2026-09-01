@@ -311,7 +311,7 @@ A suggestion is **not** a memory: it never injects, never searches, and never de
 ### 7.1 Memory store — `/store` (`src/store/index.ts`, `src/store/bm25.ts`)
 
 - **`MemoryStore` (abstract, in `src/index.ts`)** is the public contract:
-  `add / get / list / update / remove / search / pin / unpin / archiveEntry / unarchiveEntry / markRecalled / observeSuggestion / listSuggestions / getSuggestion / adoptSuggestion / rejectSuggestion / janitor / health / exportAuditLog`.
+  `add / get / list / update / remove / search / pin / unpin / archiveEntry / unarchiveEntry / markRecalled / reportFailure / observeSuggestion / listSuggestions / getSuggestion / adoptSuggestion / rejectSuggestion / janitor / health / exportAuditLog`.
   The contract *requires* implementations to run `scanContent` before persisting and to reject failing content — making the store itself safe even if a future consumer bypasses the tool boundary. `markRecalled` defaults to a no-op so simpler providers stay contract-conformant; the archive pair defaults to `undefined` and the suggestion-queue methods to reject/empty defaults, so providers without either surface stay contract-conformant and confirm-mode callers treat "unsupported" as an empty queue.
 - **`DomainMemoryStore`** implements it over the storage-domain tables:
   - `add`: validate project scope → validate non-blank content → scan → mint `MemoryId` → `entries.put` → `appendAudit`.
@@ -325,7 +325,7 @@ A suggestion is **not** a memory: it never injects, never searches, and never de
     - `project` scope → **hard decay**: removed, audited as `remove`/`janitor`;
     - `global`/`user` scope → **soft decay**: first overdue pass stamps `staleSince = now` and audits `update`/`janitor`; never auto-deleted. Stale entries drop out of injection surfaces (prompt snapshot, index, notes files, auto-recall) but stay searchable; being recalled again clears the stamp.
     Returns the count of hard-decayed (removed) project entries.
-  - `health()`: `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` — `stale` counts currently soft-decayed entries; `lastExtractionTs` is the newest audit record sourced `review`/`flush`.
+  - `health()`: `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` — `stale` counts currently soft-decayed entries; `lastExtractionTs` is the newest audit record sourced `review`/`flush`; `backgroundFailures` counts, per site (`audit-append`, `review-drain`, `flush-compaction`, `flush-dispose`, `janitor`, `curator`, `judge`, `row-rewrite`, `compaction-refreeze`, `auto-recall`, `notes-snapshot`, `legacy-cleanup`), the failures swallowed by best-effort background paths — each report also warns once through the host `ctx.logger` channel, so a silently degraded path stays observable (in-process counters; they reset on restart).
   - `listAudit()` returns records newest-first; `exportAuditLog()` oldest-first; both order by `ts`, tie-broken by monotonic `seq`, then id.
   - **Suggestion queue (the pending human-review table):**
     - `observeSuggestion(input)`: scanner-gated, then dedups against existing proposals — same `targetEntryId` wins outright; same-scope Jaccard > 0.15 counts as a repeat (bump `hits`, refresh `lastSeenAt`, adopt newer fields, let a strict-superset content replace the original). Otherwise a new row joins with `hits: 1`. Overflow past the 200-row cap evicts lowest hits, then oldest `lastSeenAt`.
@@ -554,7 +554,7 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 | `suggestList` | — | `{ suggestions[] }` | pending-review queue (P1-1), highest `hits` first |
 | `suggestAdopt` | `MemorySuggestAdoptRequest` (id, content?, category?, summary?) | `{ entry?, found, error? }` | async; adopts with optional "edit before adopt" overrides through the full store contract (`source: 'ui'`) |
 | `suggestReject` | `MemorySuggestRejectRequest` (id) | `{ rejected }` | async; the row leaves the queue, nothing is written |
-| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs? }` | synchronous; `stale` passes through the soft-decay count |
+| `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` | synchronous; `stale` passes through the soft-decay count, `backgroundFailures` the per-site background-failure counters |
 | `projects` | — | `{ projects[] }` | aggregates distinct `projectName` from `store.list('project')` (remote-layer aggregation, no store change); feeds the workspace selector |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | newest tail, default 100 |
 
@@ -736,7 +736,7 @@ dsh-memory/
 ├── src/                    # TypeScript sources (35 files, ~10.1 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (27 files, 501 cases)
+├── tests/                  # vitest specs (28 files, 505 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -771,7 +771,7 @@ Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main`
 
 ## 11. Testing Strategy
 
-The repo ships **27 vitest spec files, 501 test cases** (495 active + 6 skipped without real-API keys), in five layers:
+The repo ships **28 vitest spec files, 505 test cases** (499 active + 6 skipped without real-API keys), in five layers:
 
 1. **Pure-function units** — `extract.spec` (67: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
 2. **Contract** — `store-contract.spec` (14): an in-memory `TestMemoryStore` exercises the abstract contract (CRUD/search/pin/archive/janitor two-tier decay/health/audit, scanner rejections, project-scope validation).

@@ -116,6 +116,12 @@ class TestMemoryStore extends MemoryStore {
     return updated
   }
 
+  private readonly failures = new Map<string, number>()
+
+  override reportFailure(site: string): void {
+    this.failures.set(site, (this.failures.get(site) ?? 0) + 1)
+  }
+
   override health(): MemoryHealth {
     let global = 0, project = 0, user = 0, pinned = 0, stale = 0
     for (const [, entry] of this.map) {
@@ -131,6 +137,7 @@ class TestMemoryStore extends MemoryStore {
       pinned,
       auditRecords: this.auditLog.length,
       stale,
+      ...this.failures.size > 0 ? { backgroundFailures: Object.fromEntries(this.failures) } : {},
     }
   }
 
@@ -250,6 +257,13 @@ describe('memoryRemote.health', () => {
     bare.provide('memory', oldStore)
     new MemoryRemoteService(bare)
     expect((bare.memoryRemote as MemoryRemoteService).health().stale).toBeUndefined()
+  })
+
+  it('projects background failure counters onto the wire result', () => {
+    const { service, store } = setup()
+    store.reportFailure('janitor', new Error('decay pass failed'))
+    store.reportFailure('janitor')
+    expect(service.health().backgroundFailures).toEqual({ janitor: 2 })
   })
 })
 
