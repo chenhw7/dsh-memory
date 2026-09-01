@@ -445,7 +445,7 @@ sequenceDiagram
     Ctx->>Ctx: settings = current()【实时】
     Ctx->>NotesSvc: snapshotFor(cwd) [notesEnabled 时]
     NotesSvc->>Store: memory.list() —— 同步渲染（扫描门、跳过 stale、isRenderedEntry 矩阵）
-    Note over NotesSvc: 0.6 起纯内存渲染，零文件 I/O（ADR-6）
+    Note over NotesSvc: 0.6 起纯内存渲染，零文件 I/O（prompt-only 决策，见 TECH_DESIGN §7.4）
     NotesSvc-->>Ctx: 渲染好的 { conventions, pitfalls } 文本
 
     Ctx->>Store: 逐作用域 memory.list(scope)
@@ -480,7 +480,7 @@ sequenceDiagram
 
 ### 9.1 笔记投影与 ≤0.5.x 残留清理
 
-`snapshotFor(cwd)` 是同步纯内存渲染——0.6 起不落盘（ADR-6）。0.5.x 写入仓库的产物在每项目根的第一次会话创建时被一次性保守清理。
+`snapshotFor(cwd)` 是同步纯内存渲染——0.6 起不落盘（理由见 prompt-only [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）。0.5.x 写入仓库的产物在每项目根的第一次会话创建时被一次性保守清理。
 
 ```mermaid
 sequenceDiagram

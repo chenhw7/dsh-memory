@@ -445,7 +445,7 @@ sequenceDiagram
     Ctx->>Ctx: settings = current() [live]
     Ctx->>NotesSvc: snapshotFor(cwd) [when notesEnabled]
     NotesSvc->>Store: memory.list() — sync render (scan gate, skip stale, isRenderedEntry matrix)
-    Note over NotesSvc: pure in-memory render since 0.6 — zero file I/O (ADR-6)
+    Note over NotesSvc: pure in-memory render since 0.6 — zero file I/O (prompt-only decision, see TECH_DESIGN §7.4)
     NotesSvc-->>Ctx: { conventions, pitfalls } rendered text
 
     Ctx->>Store: memory.list(scope) per scope
@@ -480,7 +480,7 @@ sequenceDiagram
 
 ### 9.1 Notes projection & ≤0.5.x artifact cleanup
 
-`snapshotFor(cwd)` is a synchronous, purely in-memory render — no persistence since 0.6 (ADR-6). Artifacts the 0.5.x file export left in the repo are conservatively cleaned once per project root at the first session creation.
+`snapshotFor(cwd)` is a synchronous, purely in-memory render — no persistence since 0.6 (rationale: the prompt-only [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)). Artifacts the 0.5.x file export left in the repo are conservatively cleaned once per project root at the first session creation.
 
 ```mermaid
 sequenceDiagram

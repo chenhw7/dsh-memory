@@ -12,10 +12,9 @@
 |---|---|
 | [TECH_DESIGN](./TECH_DESIGN.zh.md) · [EN](./TECH_DESIGN.md) | 完整技术方案与实现参考（v0.6.0）：架构、数据模型、各子系统、配置、安全、测试。 |
 | [SEQUENCE_DIAGRAMS](./SEQUENCE_DIAGRAMS.zh.md) · [EN](./SEQUENCE_DIAGRAMS.md) | 所有主要路径的时序图 + 模块依赖与服务调用图。 |
-| [PROJECT_NOTES](./PROJECT_NOTES.zh.md) | 项目笔记子系统（prompt 注入；0.6 起不再写仓库文件）的设计与 ADR。 |
 | [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh.md) | 开发 dsh 插件客户端 UI 的踩坑教训——对任何贡献设置卡或浏览器 UI 的插件都有用。 |
 | [HOST_CONTRACT](./HOST_CONTRACT.zh.md) | 宿主（harness）API 工程契约，每条结论附源码出处；§9 是 harness 升级时的核对清单。（仅中文版） |
-| [INDEX_MODE_EVALUATION](./INDEX_MODE_EVALUATION.zh.md) | 三档注入模式（policy-only / index / full）的实测对照与"保持 policy-only 为默认"的裁决；可用 `tests/recall-golden.spec.ts` 复现。（仅中文版） |
+| [RELEASING](./RELEASING.zh.md) | npm 发布 runbook：三条命令流程、OIDC trusted-publishing 前提、故障排查与信任边界（推 tag 即发布）。 |
 
 ## 历史决策记录（`archive/`）
 
@@ -28,6 +27,9 @@
 | [archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md](./archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md) | v0.3.0 实施说明（P0×7 + P1×6）。 |
 | [archive/memory-plugins-comparison-zh.md](./archive/memory-plugins-comparison-zh.md) | 与三个参考 dsh 记忆插件的横向对比 + P0/P1 治理改进清单，全部已随 v0.5.0 落地。 |
 | [archive/MEMORY_MANAGER_PLAN.zh.md](./archive/MEMORY_MANAGER_PLAN.zh.md) | 记忆管理中心 UI 实施规划；一期已随 v0.4.0 发布，§12 记录实施偏差（如弃 `$mount` 改 `/api` RPC 直呼）。 |
+| [archive/PROJECT_NOTES.zh.md](./archive/PROJECT_NOTES.zh.md) | 项目笔记子系统的设计与 ADR（v0.2–v0.6）。prompt-only 投影已随 v0.6.0 落地；决策由 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md) 承载。 |
+| [archive/INDEX_MODE_EVALUATION.zh.md](./archive/INDEX_MODE_EVALUATION.zh.md) | 三档注入模式（policy-only / index / full）的实测对照；可用 `tests/recall-golden.spec.ts` 复现。裁决由 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md) 承载。 |
+| [archive/SECURITY_AUDIT.zh.md](./archive/SECURITY_AUDIT.zh.md) | 安全审计（2026-08-28，v0.5.0）：九大类人工审计 + Mimosa 密封深扫，发现 SEC-01…09——全部已处置（SEC-01 的 key 已于 2026-08-31 吊销）。 |
 
 ## 约定
 

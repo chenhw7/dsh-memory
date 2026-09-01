@@ -1,5 +1,7 @@
 /**
- * `@chenhw7/dsh-memory/notes`: the project-notes projection (docs/PROJECT_NOTES.zh.md).
+ * `@chenhw7/dsh-memory/notes`: the project-notes projection
+ * (TECH_DESIGN §7.4; rationale: the prompt-only Agent Note
+ * .agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md).
  * A function plugin that renders habit/convention/pitfall entries from the
  * memory store into the `project-notes` system-prompt section. Since 0.6 it
  * writes NOTHING into the user's project — the store is the sole source of

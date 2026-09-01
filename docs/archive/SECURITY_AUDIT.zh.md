@@ -1,4 +1,6 @@
-# 安全审计报告（docs/SECURITY_AUDIT.zh.md）
+# 安全审计报告（v0.5.0 安全审计，2026-08-28）
+
+> **已归档（2026-08-31）**：全部发现已处置完毕。SEC-01 的 key 已于 2026-08-31 在网关侧吊销（§5.1 处置完成，历史清除 §5.2 不再需要）；其余修复项均已合入（v0.6.0 重构后 `notesDir` 相关修复随文件导出功能一并移除，SSRF 守卫 `assertSafeEndpoint` 存续于 `tests/judge-real-api.spec.ts`）。本文作为审计快照保留；现行安全设计以 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md) §9 为准。
 
 - **审计对象**：`@chenhw7/dsh-memory`（Cairn）— DeepSeek Harness 长期记忆插件
 - **审计分支**：`security-audit`（基于 `main` @ `0d2edad`）

@@ -1,11 +1,13 @@
 /**
- * P1-4 recall evaluation baseline: runs the fixed golden set (24 entries,
+ * Recall evaluation baseline: runs the fixed golden set (24 entries,
  * 24 queries, en+zh) through the REAL DomainMemoryStore BM25 search and
  * asserts precision/recall floors so any future retrieval change (tokenizer,
  * weights, budgets) is judged against numbers instead of vibes.
  *
- * The same spec prints the per-mode standing injection cost table used by
- * docs/INDEX_MODE_EVALUATION.zh.md (P1-8): policy-only vs index vs full.
+ * The same spec prints the per-mode standing injection cost table behind the
+ * policy-only default-mode decision
+ * (.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.md):
+ * policy-only vs index vs full.
  *
  * Set DSH_MEMORY_EVAL_VERBOSE=1 to dump per-case rankings.
  */

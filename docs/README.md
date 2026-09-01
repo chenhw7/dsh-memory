@@ -12,11 +12,8 @@ Living documents describing how the system works today, plus standing maintenanc
 |---|---|
 | [TECH_DESIGN](./TECH_DESIGN.md) · [zh-CN](./TECH_DESIGN.zh.md) | Full technical design & implementation reference (v0.6.0): architecture, data model, subsystems, configuration, security, testing. |
 | [SEQUENCE_DIAGRAMS](./SEQUENCE_DIAGRAMS.md) · [zh-CN](./SEQUENCE_DIAGRAMS.zh.md) | Sequence diagrams for every major flow + module dependency & service call graph. |
-| [PROJECT_NOTES](./PROJECT_NOTES.zh.md) | Design & ADRs of the project-notes subsystem (prompt injection; no repo files since 0.6). (zh-CN only) |
 | [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh.md) | Hard-won lessons from building a dsh plugin client UI — useful to any plugin that contributes a settings card or browser UI. (zh-CN only) |
 | [HOST_CONTRACT](./HOST_CONTRACT.zh.md) | Host (harness) API contract with source-code evidence per claim; §9 is the check-list to run when the harness is bumped. (zh-CN only) |
-| [INDEX_MODE_EVALUATION](./INDEX_MODE_EVALUATION.zh.md) | Measured comparison of the three injection modes (policy-only / index / full) and the decision to keep policy-only as the default; reproducible via `tests/recall-golden.spec.ts`. (zh-CN only) |
-| [SECURITY_AUDIT](./SECURITY_AUDIT.zh.md) | Security audit (2026-08, v0.5.0): nine-category manual audit + Mimosa sealed deep scan; findings SEC-01…09 with shipped fixes (leaked key removed, notesDir containment, test SSRF guard, CI hardening). Pending owner actions: revoke the leaked key (§5.1) and optionally purge git history (§5.2). (zh-CN only) |
 | [RELEASING](./RELEASING.zh.md) | npm release runbook: the three-command flow, OIDC trusted-publishing prerequisites, failure triage, and the trust boundary (tag-push = publish right). (zh-CN only) |
 
 ## Historical decision records (`archive/`)
@@ -30,6 +27,9 @@ Completed planning/analysis documents, kept for the "why": decision rationale, v
 | [archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md](./archive/IMPLEMENTATION_NOTES_v0.3.0.zh.md) | v0.3.0 implementation notes (P0×7 + P1×6). |
 | [archive/memory-plugins-comparison-zh.md](./archive/memory-plugins-comparison-zh.md) | Comparison against three reference dsh memory plugins + the P0/P1 governance program, all shipped in v0.5.0. |
 | [archive/MEMORY_MANAGER_PLAN.zh.md](./archive/MEMORY_MANAGER_PLAN.zh.md) | Memory-management UI implementation plan; phase 1 shipped in v0.4.0, §12 records implementation deviations (e.g. `/api` RPC instead of `$mount`). |
+| [archive/PROJECT_NOTES.zh.md](./archive/PROJECT_NOTES.zh.md) | Project-notes subsystem design & ADRs (v0.2–v0.6). The prompt-only projection shipped in v0.6.0; the decision lives in the [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md). |
+| [archive/INDEX_MODE_EVALUATION.zh.md](./archive/INDEX_MODE_EVALUATION.zh.md) | Measured comparison of the three injection modes (policy-only / index / full); reproducible via `tests/recall-golden.spec.ts`. The verdict lives in the [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.md). |
+| [archive/SECURITY_AUDIT.zh.md](./archive/SECURITY_AUDIT.zh.md) | Security audit (2026-08-28, v0.5.0): nine-category manual audit + Mimosa sealed deep scan, findings SEC-01…09 — all resolved (SEC-01 key revoked 2026-08-31). |
 
 ## Conventions
 

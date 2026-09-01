@@ -4,7 +4,7 @@
  * the {@link agent/pre-step} listener drains the accumulator once it reaches
  * the configured threshold and runs one extraction call.
  *
- * Signal sources (§5 of docs/PROJECT_NOTES.zh.md):
+ * Signal sources:
  * - `user/message` — keyword hits (explicit "remember" intent) and corrections
  *   (the user revises a prior statement).
  * - `tool/call` + `tool/result` — **failure-streak pairing**: consecutive

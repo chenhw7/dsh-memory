@@ -1,6 +1,6 @@
 /**
- * The scope×category render matrix for project notes (§4 of
- * docs/PROJECT_NOTES.zh.md): which store entries land in the
+ * The scope×category render matrix for project notes (TECH_DESIGN §7.4):
+ * which store entries land in the
  * `project-notes` prompt section. Pure functions, zero host imports — shared
  * by the notes renderer and by `memory-context` (which excludes the same set
  * from its own snapshot/index injection so content never appears twice in
@@ -24,8 +24,8 @@ export type RenderableEntry = Pick<MemoryEntry, 'scope' | 'category' | 'projectN
 export type NotesKind = 'conventions' | 'pitfalls'
 
 /**
- * Decide whether an entry is rendered into the notes files, and into which
- * one. Rules (docs/PROJECT_NOTES.zh.md §4):
+ * Decide whether an entry is rendered into the `project-notes` section, and
+ * into which half (conventions or pitfalls). Rules:
  * - `project`-scoped entries must match the current project name; an unknown
  *   project (no cwd) excludes them.
  * - Conventions come from all three scopes (project > global > personal is
@@ -36,7 +36,7 @@ export type NotesKind = 'conventions' | 'pitfalls'
  *
  * @param entry - the entry to classify.
  * @param projectName - the current project name (cwd basename), or undefined.
- * @returns the target notes file kind, or `undefined` when not rendered.
+ * @returns the target render half, or `undefined` when not rendered.
  */
 export function isRenderedEntry(entry: RenderableEntry, projectName: string | undefined): NotesKind | undefined {
   const category = entry.category

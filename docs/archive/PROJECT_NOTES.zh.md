@@ -1,5 +1,7 @@
 # 方案设计：Project Notes —— 项目级 prompt 记忆（编码习惯 + 踩坑日志）
 
+> **已归档（2026-08-31）**：prompt-only 投影已随 v0.6.0 落地。决策记录（§2 的 ADR）由 Agent Note 接管：[.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md](../../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)（不写仓库文件，含 ADR-6 理由与清理规则）；现行行为以 [../TECH_DESIGN.zh.md](../TECH_DESIGN.zh.md) §7.4 为准（渲染矩阵、防重复注入、配置项）。
+
 | | |
 |---|---|
 | Package | `@chenhw7/dsh-memory` |

@@ -22,11 +22,11 @@
 | `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + **建议队列** 三张表） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + 去重 + janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
-记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（24 条 × 24 组查询，中英混合）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.958），各注入模式的常驻注入成本也按同样方式测量（见 [INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)）。
+记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（24 条 × 24 组查询，中英混合）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.958），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
 
 ---
 
@@ -58,7 +58,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G4 — 相关性排序检索。** `memory_search` 按 CJK 感知分词（一元 + 二元 bigram）的 BM25 排序；同等相关时固定条目靠前。
 - **G5 — 自动学习。** (a) 候选信号累积到阈值后的周期性 review 提取——含已验证的失败序列踩坑；(b) 压缩遮蔽上下文时 flush 提取；(c) 会话销毁时 flush 提取；(d) 受预算约束的低频 curator pass 改写超长条目。
 - **G6 — 两层生命周期。** 过期 `project` 条目硬衰减（移除）；过期 `global`/`user` 条目软衰减（打 `staleSince` 戳，从常驻注入隐藏但仍可搜索）；固定条目始终豁免。
-- **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（ADR-6，见 PROJECT_NOTES.zh.md）。
+- **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）。
 - **G8 — 写入与读取双重安全。** 每条写入路径扫描密钥 / 注入 / 泄露模式；每个面向 prompt 的表面对未通过扫描的内容再脱敏。
 - **G9 — 前端可配置、实时生效。** 全部设置经 dsh 设置界面暴露（两个命名空间四张卡片），无需重启生效。
 - **G10 — 一条命令安装 / 卸载。** `dsh plugin add` / `dsh plugin remove`；卸载保留用户数据。
@@ -78,7 +78,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 5. **绝不阻塞 agent 循环。** review/flush/curation/janitor/自动召回全部尽力而为；一个失败或缓慢的 LLM 调用永远不能卡住 step、compaction 或 dispose。自动召回整体包裹 try/catch，任何失败都原样落到 `next()`。
 6. **该响的地方响，该静的地方静。** 缺失服务在用户最早能看见的点（工具调用）响亮失败，而后台提取静默降级为 no-op。
 7. **prompt 预算纪律与缓存稳定性。** 注入内容有上限（`memoryCharLimit` **以及 `memoryMaxEntries`**、notes 的 `notesCharLimit`、自动召回围栏固定 1200 字符），且其 ≈token 成本直接报告在表面上。召回快照按会话冻结（稳定 KV-cache 前缀）；**compaction 是唯一被认可的重新冻结时机**——前缀本来就要重建。
-8. **零重复注入。** 渲染进笔记文件的条目在 notes 启用期间被排除出 memory 快照/索引；两个表面的成员资格来自同一个共享谓词（`isRenderedEntry`）。
+8. **零重复注入。** 渲染进 `project-notes` 段的条目在 notes 启用期间被排除出 memory 快照/索引；两个表面的成员资格来自同一个共享谓词（`isRenderedEntry`）。
 9. **零配置起步、实时可调。** 出厂即有合理默认；每个旋钮都能在设置界面编辑，下一次事件或组装即生效。
 
 ---
@@ -375,7 +375,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
     - *correction*（用户修订先前陈述，11 条）：`不对`, `不要`, `其实是?`, `应该是`, `搞错了`, `说错了`, `no, I said`, `that's wrong`, `actually`, `I meant`, `no, it's`。
   - **`tool/call`** —— 记入 `openCalls`（callId → `{ name, signature, seq }`，上限 64，LRU 淘汰）。签名归一化主参数：`command`/`cmd` 折叠为前两个 token（`npm test`），路径类键直接取路径值，否则退化为裸工具名；≤120 字符。
   - **`tool/result`** —— 错误开启/延长同签名**失败序列**（计数、截断的最后错误文本 ≤500 字符、首末 seq；至多保留 8 条序列）。随后的**成功**关闭序列：当失败次数达到 `pitfallStreakThreshold`（默认 2）时发出恰好一条携带完整弧线的 **`pitfall-resolved`** 候选（"failed N time(s) before succeeding … resolved by the call at seq X"）。一次性失败不产生候选——压缩/销毁 flush 仍能看到完整事件作为兜底。
-- 收集层只负责*放宽漏斗*：准入保守性（已验证流程、重复主题）由提取 prompt 强制，漏掉一个模式是免费损失，误命中则代价低廉。
+- 收集层只负责*放宽漏斗*：准入保守性（已验证流程、重复主题）由提取 prompt 强制，漏掉一个模式是免费损失，误命中则代价低廉。一条习惯（`preference`/`convention`）仅在用户明确要求或同一主题重复出现时入库——一次性的场景性偏好被丢弃。
 - 无贡献的事件返回*同一个* state 引用——投影注册表的 `Object.is` 门使 no-op 折叠近乎免费。此路径不跑任何 LLM。
 
 #### 7.3.2 周期 review（drain）与成本护栏
@@ -476,7 +476,8 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
   - 无类别或其他类别的条目永不渲染；project 条目要求 `projectName` 匹配（cwd basename）。
 - **加载时防护：** 未通过扫描的内容绝不进入注入段（直接省略而非脱敏）；软衰减条目退出一切常驻视图。
 - **渲染：** `renderConventions` 输出 `## Project conventions` / `## Global practices` / `## Personal habits`；`renderPitfalls` 输出 `## Project pitfalls` / `## Environment & cross-project pitfalls`；两者带来源说明行并按 `notesMaxEntriesPerFile` 封顶（按 `updatedAt` 保留最新）。
-- **不落盘（ADR-6）：** 0.6 起插件对用户仓库零写入；0.5.x 的渲染文件与 AGENTS.md 指针块机制已移除（writer/drift guard 随之删除）。
+- **不落盘：** 0.6 起插件对用户仓库零写入（理由与保守清理规则见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；0.5.x 的渲染文件与 AGENTS.md 指针块机制已移除（writer/drift guard 随之删除）。
+- **踩坑条目形态：** 一条自动踩坑渲染为三个短句——症状（错误信息）、根因、已验证的修复方法——由提取 prompt 限定篇幅，冗长日志或 diff 不会撑爆注入段。
 - **迁移清理（`cleanup.ts`）：** `session/created` 时每项目根执行一次、幂等、best-effort：剥离 AGENTS.md 托管块（标记外内容不动；pointer-only 文件删除）；删除 `docs/agent-memory/` 下插件生成的 `CONVENTIONS.md` / `PITFALLS.md` / `*.bak.*`（目录含外来文件则保留目录）；不改 `.gitignore`。
 
 #### System prompt 注入段（`src/context/`）
@@ -606,7 +607,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 - **Golden 夹具：** `GOLDEN_ENTRIES` —— 24 条主题互不重叠、跨三个作用域的条目（12 英文 / 6 中文 / 6 混合），其中故意放了几枚诱饵词元（两条条目共享 端口/port），让精度保持诚实——以及 `GOLDEN_CASES` —— 24 组 查询→相关 id 对，混合关键词风格与提问风格。
 - **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 91.7%、MRR = 0.958。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
-- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——是 index 模式裁决（[INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)）的输入：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
+- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——默认档决策的依据（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md)）：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
 - **已知边界，记录在案：** 纯中文查询对纯英文条目零词法重叠、必然漏检——词法 BM25 不承诺跨语言语义召回；那是 embedding 层的问题，属于另一个工程量级。
 
 模块以 `@chenhw7/dsh-memory/benchmark` 导出（含类型），夹具与指标可在 spec 之外复用。
@@ -697,7 +698,7 @@ memory:
 | 低价值噪音沉淀（捕获 ≠ 正确） | 所有提取 prompt 中的负面准入规则（排除可从仓库推导的内容）；去重裁决；curator 透传；人审模式的人工闸门 |
 | 存储无限增长 / prompt 膨胀 | `memoryCharLimit` + `memoryMaxEntries` + notes 字符预算 + 1200 字符自动召回上限；`MERGE_CHAR_LIMIT`（600）限制合并增长；`limit`/`offset` 分页；审计日志封顶 200；建议队列封顶 200；两层 janitor 衰减；curator 收缩超长条目 |
 | 冲突记忆被当作事实提供 | 冻结时刻的冲突标注 inline 标记矛盾/陈旧行；软衰减条目在再次召回前退出常驻视图；三个记忆表面均带写时真实性免责 |
-| 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（ADR-6）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
+| 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
 
 ### 9.2 失效矩阵
@@ -758,7 +759,7 @@ patch 特意**不**插入 `storage-json` / `storage-domain` 行：`dsh-web-app` 
 
 ### 10.4 卸载语义
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在 `$DSH_HOME/storages/memory.json`（有意的数据保全保证）；删除该文件即显式清空。0.6 起插件不向仓库写文件（ADR-6），卸载后仓库无插件产物残留。
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在 `$DSH_HOME/storages/memory.json`（有意的数据保全保证）；删除该文件即显式清空。0.6 起插件不向仓库写文件，卸载后仓库无插件产物残留。
 
 ### 10.5 发布管线
 
@@ -789,7 +790,7 @@ GitHub Actions 在 `v*` tag 推送时发布到 npm（`publish.yml`）：校验 t
 - **Prompt 预算：** 记忆内容 ≤ `memoryCharLimit`（5000 字符 ≈ 1.2–1.5 k tokens）**且 ≤ `memoryMaxEntries` 条（默认 20）** + policy 块（约 0.4 k tokens）；快照尾注与自动召回围栏尾注都报告 ≈tokens；index 模式把尾部折叠为类别汇总行；project-notes ≤ `notesCharLimit`（4000）；自动召回围栏 ≤ 1200 字符。各模式在 golden 夹具上的常驻成本在 §7.9 实测（policy-only ≈344 tokens，与 store 规模无关的固定值）。
 - **缓存稳定性：** 快照在会话创建时冻结、仅在 `compaction/end` 刷新（彼时前缀本来重建）；自动召回只触及步尾消息通道，system prompt 前缀不动。
 - **提取花费：** 按触发记账（drain / compaction / dispose / curator tick），会话级预算（默认 20）；除覆盖外复用会话 provider/model。
-- **Notes I/O：** 从内存同步渲染、仅在内容变化时原子持久化，挂在 pre-step 脏检查后 2 秒去抖。
+- **Notes 成本：** 冻结时从内存同步渲染——0.6 起零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；一次性的 ≤0.5.x 残留清理每项目根每进程执行一次。
 - **I/O：** 单个 JSON 文件；写入在域写链串行；读取走内存。
 
 ---
@@ -882,4 +883,4 @@ src/
 
 ---
 
-*配套文档：[README.zh.md](../README.zh.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh.md)、[Index 模式评估](./INDEX_MODE_EVALUATION.zh.md)（检索/注入成本实验）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*
+*配套文档：[README.zh.md](../README.zh.md)（用户指南）、[英文用户指南](../README.md)、[时序图（中文）](./SEQUENCE_DIAGRAMS.zh.md)（[English](./SEQUENCE_DIAGRAMS.md)）、[英文技术方案](./TECH_DESIGN.md)、[Client UI Lessons](./CLIENT_UI_LESSONS.zh.md)、决策 [Agent Notes](../.agents/notes/README.zh.md)（注入模式默认档、prompt-only 笔记投影）、[记忆插件对比](./archive/memory-plugins-comparison-zh.md)（P0/P1 改进计划，已归档）。*

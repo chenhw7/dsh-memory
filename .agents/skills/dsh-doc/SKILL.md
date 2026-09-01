@@ -53,7 +53,7 @@ This repository has a small, closed set of document kinds; each maps to an owner
 - **Documentation index (`docs/README.md` pair)** — maps every standing document by purpose and owns the language convention.
 - **Technical reference (`docs/TECH_DESIGN.md` pair, `docs/SEQUENCE_DIAGRAMS.md` pair)** — exhaustive about its own subject; no decision rationale (→ Agent Notes) or incident chronology (→ `docs/archive/`).
 - **Standards (`docs/AGENTS.md` pair, [testing](../../../docs/testing.md), [defensive patterns](../../../docs/defensive-patterns.md), [i18n](../../../docs/i18n/README.md))** — the rules other documents and code follow; changes here are non-trivial and need an Agent Note.
-- **Maintainer references (zh-only by convention)** — HOST_CONTRACT, RELEASING, CLIENT_UI_LESSONS, INDEX_MODE_EVALUATION, SECURITY_AUDIT, PROJECT_NOTES.
+- **Maintainer references (zh-only by convention)** — HOST_CONTRACT, RELEASING, CLIENT_UI_LESSONS.
 - **Archived analysis (`docs/archive/`)** — frozen records; never restructured, only linked.
 - **Agent Notes (`.agents/notes/`)** — the decision records; their format is owned by [the notes README](../../notes/README.md), not this skill.
 

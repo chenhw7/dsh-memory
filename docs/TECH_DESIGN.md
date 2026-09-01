@@ -22,11 +22,11 @@
 | `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + **suggestion-queue** tables) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + dedup + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
-| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
+| `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6 — [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt sections (`memory` @90, `project-notes` @91) + step-level auto-recall middleware; owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (three tabs, full write path) |
 
-Memories are structured records with three scopes (`global` / `project` / `user`), persisted to a single JSON file under `$DSH_HOME/storages/`. Every write path is security-scanned against secrets, prompt-injection, and exfiltration patterns; every prompt-facing read path re-redacts scanner-violating content (`redactBlocked`). All behavior is configurable from two live settings namespaces (`memory`, `memory-review`) and applies without restart. Retrieval quality is evidence-backed, not asserted: a fixed golden set of 24 entries × 24 queries (English + Chinese) runs in CI against the real store (success@5 = 100%, MRR = 0.958), and the standing-injection cost of each prompt mode is measured the same way (see [INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)).
+Memories are structured records with three scopes (`global` / `project` / `user`), persisted to a single JSON file under `$DSH_HOME/storages/`. Every write path is security-scanned against secrets, prompt-injection, and exfiltration patterns; every prompt-facing read path re-redacts scanner-violating content (`redactBlocked`). All behavior is configurable from two live settings namespaces (`memory`, `memory-review`) and applies without restart. Retrieval quality is evidence-backed, not asserted: a fixed golden set of 24 entries × 24 queries (English + Chinese) runs in CI against the real store (success@5 = 100%, MRR = 0.958), and the standing-injection cost of each prompt mode is measured the same way (see §7.9).
 
 ---
 
@@ -45,7 +45,7 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 1. **Persists** facts, preferences, corrections, and lessons durably.
 2. **Exposes** them to the model through first-class tools with relevance-ranked search.
 3. **Accumulates** them automatically without user effort (signal-based triggering, LLM extraction).
-4. **Sediments** them into repo-visible project notes so conventions and pitfalls survive even without a session.
+4. **Sediments** them into project notes rendered into every session's prompt, so conventions and pitfalls survive even without a session.
 5. **Guards** the store: secrets and injection payloads cannot be written or re-injected.
 
 ---
@@ -58,7 +58,7 @@ dsh's plugin system — Cordis dependency injection, profile bundles, and `cordi
 - **G4 — Relevance-ranked retrieval.** `memory_search` ranks by BM25 over CJK-aware tokenization (unigrams + bigrams), pinning important entries ahead of equal-relevance matches.
 - **G5 — Automatic learning.** (a) Periodic review extraction when enough candidate signals accumulate — including verified failure-streak pitfalls; (b) flush extraction when compaction shadows context; (c) flush extraction on session dispose; (d) a budget-gated curator pass that re-summarizes oversized entries.
 - **G6 — Two-tier lifecycle.** Overdue `project` entries are hard-decayed (removed); overdue `global`/`user` entries are soft-decayed (stamped `staleSince`, hidden from standing injections but still searchable); pinned entries are always exempt.
-- **G7 — Project-notes prompt section.** Conventions and pitfalls render from the KV store into every session's system prompt (the `project-notes` section), with no double injection against the memory section — and no files written into the user's repository (ADR-6, see PROJECT_NOTES.zh.md).
+- **G7 — Project-notes prompt section.** Conventions and pitfalls render from the KV store into every session's system prompt (the `project-notes` section), with no double injection against the memory section — and no files written into the user's repository ([Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)).
 - **G8 — Safe writes *and* safe reads.** Every write path scans content for secrets / injection / exfiltration; every prompt-facing surface re-redacts content that fails the scan.
 - **G9 — Frontend-configurable, live.** All settings exposed through the dsh settings UI (four cards over two namespaces) and applied without restart.
 - **G10 — One-command install / uninstall.** `dsh plugin add` / `dsh plugin remove`; uninstall preserves user data.
@@ -78,7 +78,7 @@ Client UI development lessons — including the esbuild CJS var-hoisting bug tha
 5. **Never block the agent loop.** Review/flush/curation/janitor/auto-recall are best-effort; a failing or slow LLM call can never stall a step, a compaction, or a dispose. Auto-recall wraps its whole waterfall in try/catch and falls through to `next()` unchanged.
 6. **Fail loud where it matters, fail soft where it doesn't.** Missing services fail loudly at the earliest point a user can see (a tool call), while background extraction silently degrades to a no-op.
 7. **Prompt-budget discipline & cache stability.** Injected memory content is capped (`memoryCharLimit` **and `memoryMaxEntries`**, notes `notesCharLimit`, auto-recall fence fixed at 1200 chars) and its ≈token cost is reported on the surface itself. Recalled snapshots are frozen per session (stable KV-cache prefix); **compaction is the one sanctioned moment to re-freeze**, since the prefix rebuilds anyway.
-8. **No double injection.** Entries rendered into the notes files are excluded from the memory snapshot/index while notes are enabled; both surfaces derive their membership from one shared predicate (`isRenderedEntry`).
+8. **No double injection.** Entries rendered into the `project-notes` section are excluded from the memory snapshot/index while notes are enabled; both surfaces derive their membership from one shared predicate (`isRenderedEntry`).
 9. **Zero-config start, live-tunable.** Sensible defaults ship; every knob is editable from the settings UI and takes effect on the next event or assembly.
 
 ---
@@ -375,7 +375,7 @@ The review plugin is the automatic-sediment layer. One store, five triggers: per
     - *Correction* (user revises a prior statement, 11 patterns): `不对`, `不要`, `其实是?`, `应该是`, `搞错了`, `说错了`, `no, I said`, `that's wrong`, `actually`, `I meant`, `no, it's`.
   - **`tool/call`** — recorded in `openCalls` (callId → `{ name, signature, seq }`, capped at 64, LRU-evicted). The signature normalizes the primary argument: `command`/`cmd` collapse to the first two tokens (`npm test`), path-style keys use the path verbatim, otherwise the bare tool name; ≤120 chars.
   - **`tool/result`** — errors start/extend a per-signature **failure streak** (count, truncated last-error text ≤500 chars, first/last seq; ≤8 streaks retained). A subsequent **success** closes the streak: if the failure count reached `pitfallStreakThreshold` (default 2), exactly one **`pitfall-resolved`** candidate is emitted carrying the whole arc ("failed N time(s) before succeeding … resolved by the call at seq X"). One-shot failures emit nothing — the compaction/dispose flush still sees full events as the safety net.
-- The collection layer only *widens the funnel*: admission conservatism (verified procedures, repeated themes) is enforced by the extraction prompts, so a missed pattern is free loss while a false hit is cheap.
+- The collection layer only *widens the funnel*: admission conservatism (verified procedures, repeated themes) is enforced by the extraction prompts, so a missed pattern is free loss while a false hit is cheap. A habit (`preference`/`convention`) persists only when the user explicitly asks for it or the same theme recurs — one-off situational preferences are dropped.
 - Events that contribute nothing return the *same* state reference — the projection registry's `Object.is` gate makes no-op folds cheap. No LLM runs here.
 
 #### 7.3.2 Periodic review (drain) & cost guardrails
@@ -476,7 +476,8 @@ Each resolves in layers: schema defaults → composition `config:` base → user
   - uncategorized entries and other categories never render; project-scope entries require a matching `projectName` (cwd basename).
 - **Load-time guards:** scanner-rejected content never reaches the injected section (omitted, not redacted); soft-decayed entries drop out of every standing view.
 - **Render:** `renderConventions` emits `## Project conventions` / `## Global practices` / `## Personal habits`; `renderPitfalls` emits `## Project pitfalls` / `## Environment & cross-project pitfalls`; both carry the provenance line and cap entries (`notesMaxEntriesPerFile`, newest-by-`updatedAt` first).
-- **No persistence (ADR-6):** since 0.6 the plugin writes nothing into the user's repository; the 0.5.x rendered files and AGENTS.md pointer mechanism are gone (the writer/drift guard was deleted with them).
+- **No persistence:** since 0.6 the plugin writes nothing into the user's repository (rationale and conservative cleanup rules: [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)); the 0.5.x rendered files and AGENTS.md pointer mechanism are gone (the writer/drift guard was deleted with them).
+- **Pitfall entry shape:** an automatic pitfall renders as three short clauses — the symptom (the error message), the root cause, and the verified fix — bounded by the extraction prompt so verbose logs or diffs never inflate the injected section.
 - **Migration cleanup (`cleanup.ts`):** once per project root per process on `session/created`, idempotent, best-effort: strips the AGENTS.md managed block (everything outside the markers untouched; a pointer-only file is deleted); deletes the plugin-generated `CONVENTIONS.md` / `PITFALLS.md` / `*.bak.*` under `docs/agent-memory/` (foreign files keep the directory); never touches `.gitignore`.
 
 #### System-prompt sections (`src/context/`)
@@ -606,7 +607,7 @@ A pure, dependency-free module that turns "the retrieval is strong" from a struc
 
 - **Golden fixture:** `GOLDEN_ENTRIES` — 24 topically distinct entries across the three scopes (12 English / 6 Chinese / 6 mixed), with a few deliberate decoy tokens (two entries share 端口/port) so precision stays honest — and `GOLDEN_CASES` — 24 query→relevant-ids pairs in keyword and question styles.
 - **Recall evaluation:** `evaluateRecall(searcher, k = 5)` runs every case against a store-shaped search face (the real `DomainMemoryStore` in the spec) and aggregates **success@k** (all relevant ids inside the top-k), **P@k**, **P@1**, **MRR**, plus zh/en slices. Current baseline: success@5 = 100%, P@1 = 91.7%, MRR = 0.958. The spec floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh success@5 ≥ 0.8) make any tokenizer/weight/budget regression a CI failure.
-- **Injection cost:** `measureInjectionCost(mode, renderedSection, …)` reports rendered characters and ≈tokens (4-chars/token heuristic, the same estimate the snapshot footer uses) per `policy-only` / `index` / `full` mode over the fixture store — the input to the index-mode verdict ([INDEX_MODE_EVALUATION.zh.md](./INDEX_MODE_EVALUATION.zh.md)): keep `policy-only` as the default; `index` is the recommended power mode.
+- **Injection cost:** `measureInjectionCost(mode, renderedSection, …)` reports rendered characters and ≈tokens (4-chars/token heuristic, the same estimate the snapshot footer uses) per `policy-only` / `index` / `full` mode over the fixture store — the evidence behind the default-mode decision ([Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.md)): keep `policy-only` as the default; `index` is the recommended power mode.
 - **Known boundary, on the record:** a pure-Chinese query against a pure-English entry has zero lexical overlap and necessarily misses — lexical BM25 does not promise cross-language semantic recall; that is an embeddings-layer problem, a different order of engineering.
 
 The module is exported as `@chenhw7/dsh-memory/benchmark` (types included) so the fixture and metrics can be reused outside the spec.
@@ -697,7 +698,7 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | Low-value noise sedimenting (capture ≠ correctness) | Negative admission rule in all extraction prompts (repo-derivable content excluded); dedup judge; curator passthrough; confirm-mode human gate |
 | Unbounded store growth / prompt bloat | `memoryCharLimit` + `memoryMaxEntries` + notes char budgets + 1200-char auto-recall cap; `MERGE_CHAR_LIMIT` (600) bounds merge growth; `limit`/`offset` pagination; audit log capped at 200; suggestion queue capped at 200; two-tier janitor decay; curator shrinks oversized entries |
 | Conflicting memories served as truth | Freeze-time conflict annotation marks contradicted/staled lines inline; soft-decayed entries hidden from standing views until re-recalled; write-time-truth disclaimer on all three memory surfaces |
-| The plugin unexpectedly writes files into the user's repository | The 0.6 notes projection does zero file I/O (ADR-6); rendering is pure in-memory; ≤0.5.x artifacts are conservatively cleaned on `session/created` (only plugin-generated files; content outside the markers untouched) |
+| The plugin unexpectedly writes files into the user's repository | The 0.6 notes projection does zero file I/O (see the [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)); rendering is pure in-memory; ≤0.5.x artifacts are conservatively cleaned on `session/created` (only plugin-generated files; content outside the markers untouched) |
 | Retrieval quality regressing unnoticed | Golden-set CI floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) — a tokenizer/weight/budget regression fails the build |
 
 ### 9.2 Failure matrix
@@ -758,7 +759,7 @@ The patch deliberately inserts **no** `storage-json` / `storage-domain` rows: th
 
 ### 10.4 Uninstall semantics
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain in `$DSH_HOME/storages/memory.json` (intentional data-preservation guarantee); users wipe them explicitly by deleting that file. Since 0.6 the plugin writes no repository files (ADR-6), so uninstalling leaves no plugin artifacts in the repo.
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain in `$DSH_HOME/storages/memory.json` (intentional data-preservation guarantee); users wipe them explicitly by deleting that file. Since 0.6 the plugin writes no repository files, so uninstalling leaves no plugin artifacts in the repo.
 
 ### 10.5 Release pipeline
 
@@ -789,7 +790,7 @@ The repo ships **27 vitest spec files, 493 test cases** (487 active + 6 skipped 
 - **Prompt budget:** memory content ≤ `memoryCharLimit` (5000 chars ≈ 1.2–1.5 k tokens) **and ≤ `memoryMaxEntries` entries (default 20)** + policy block (~0.4 k tokens); the snapshot footer and the auto-recall fence footer both report ≈tokens; index mode collapses tails into category roll-up lines; project-notes ≤ `notesCharLimit` (4000); auto-recall fence ≤ 1200 chars. Standing per-mode cost over the golden fixture is measured in §7.9 (policy-only ≈344 tokens flat regardless of store size).
 - **Cache stability:** snapshots freeze at session creation and refresh only at `compaction/end` (prefix rebuilds there anyway); auto-recall touches only the step's trailing message channel, leaving the system-prompt prefix intact.
 - **Extraction spend:** charged per trigger (drain / compaction / dispose / curator tick) against a per-session budget (default 20); reuses the session's provider/model unless overridden.
-- **Notes cost:** renders synchronously and purely in memory at freeze time — zero file I/O since 0.6 (ADR-6); the one-time ≤0.5.x artifact cleanup runs once per project root per process.
+- **Notes cost:** renders synchronously and purely in memory at freeze time — zero file I/O since 0.6 (see the [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)); the one-time ≤0.5.x artifact cleanup runs once per project root per process.
 - **I/O:** one JSON file; writes serialize on the domain write chain; reads are in-memory.
 
 ---
@@ -882,4 +883,4 @@ src/
 
 ---
 
-*Companion documents: [README.md](../README.md) (user guide), [README.zh.md](../README.zh.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh.md)), [中文版技术方案](./TECH_DESIGN.zh.md), [Client UI Lessons](./CLIENT_UI_LESSONS.zh.md) (zh-CN), [Index-mode evaluation](./INDEX_MODE_EVALUATION.zh.md) (retrieval/injection-cost experiment), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*
+*Companion documents: [README.md](../README.md) (user guide), [README.zh.md](../README.zh.md), [Sequence Diagrams](./SEQUENCE_DIAGRAMS.md) ([中文版](./SEQUENCE_DIAGRAMS.zh.md)), [中文版技术方案](./TECH_DESIGN.zh.md), [Client UI Lessons](./CLIENT_UI_LESSONS.zh.md) (zh-CN), the [decision Agent Notes](../.agents/notes/README.md) (injection-mode default, prompt-only notes projection), [Memory-plugins comparison](./archive/memory-plugins-comparison-zh.md) (the P0/P1 program, archived).*

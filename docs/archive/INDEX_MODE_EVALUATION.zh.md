@@ -1,5 +1,7 @@
 # Index 模式转正评估报告（P1-8）
 
+> **已归档（2026-08-31）**：裁决已随 v0.6.0 落地，由 Agent Note 承载：[.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.md](../../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md)（policy-only 保持默认的裁决、理由与重引入条件）。本文保留实验设置与实测数字作为决策依据；数字可按 §五 用 `tests/recall-golden.spec.ts` 再生，阈值护栏见 [../testing.zh.md](../testing.zh.md)。
+
 > 对应 `docs/archive/memory-plugins-comparison-zh.md` §四 P1-8：*「用 P1-4 评测基线对 policy-only / index / full 三档做召回准确率 × 注入 token 成本的对照实验，裁决 index 是否提为推荐默认档」*。
 > 实验代码：`src/benchmark/index.ts`（fixture 与度量）+ `tests/recall-golden.spec.ts`（可重复运行，输出本报告全部数字）。
 > 实验日期：2026-08-26。数字由当次真实运行产生，非估算。
