@@ -465,6 +465,112 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
   })
 })
 
+// entries-cap (§ write-path governance): the entries table trims back to its
+// cap on every successful new-entry write. Eviction order: pinned exempt →
+// ascending accessCount → ascending lastRecalledAt ?? createdAt. Like the
+// janitor's own removals, each eviction is audited as op 'remove' with source
+// 'janitor' (system-initiated lifecycle write; AuditSource is a fixed enum).
+describe('entries-cap (DomainMemoryStore)', () => {
+  const makeStore = (entriesCap: number) =>
+    new DomainMemoryStore(memTable(), memTable(), memTable(), 200, 200, undefined, entriesCap)
+
+  /** Advance monotonic-ish timestamps between adds so createdAt orders stably. */
+  const tick = () => new Promise(resolve => { setTimeout(resolve, 5) })
+
+  it('trims back to the cap on add, keeping pinned and high-accessCount entries', async () => {
+    const store = makeStore(5)
+    // Two protected entries first, so they are the OLDEST rows: a createdAt-
+    // only eviction order would sacrifice them before any filler, making this
+    // test discriminate accessCount/pin protection from recency.
+    const { entry: pinned } = await store.add({ scope: 'global', content: 'pinned survivor' })
+    await store.pin(pinned.id)
+    const { entry: recalled } = await store.add({ scope: 'global', content: 'recalled survivor' })
+    store.markRecalled([recalled.id as string])
+    await tick()
+    // Five fillers: never recalled, never accessed — eviction fodder.
+    for (let i = 0; i < 5; i++) {
+      await store.add({ scope: 'global', content: `filler ${i}` })
+      await tick()
+    }
+    // Two more fillers push the table to 9 > cap 5.
+    await store.add({ scope: 'global', content: 'overflow a' })
+    await store.add({ scope: 'global', content: 'overflow b' })
+
+    expect(store.list().length).toBe(5)
+    expect(store.get(pinned.id)).toBeDefined()
+    expect(store.get(recalled.id)!.accessCount).toBe(1)
+    // The evicted five are the lowest-signal fillers (accessCount 0, oldest
+    // first); the last two fillers are newer, so they outlive the early ones.
+    const remainingContents = store.list().map(e => e.content)
+    expect(remainingContents).not.toContain('filler 0')
+    expect(remainingContents).not.toContain('filler 1')
+    expect(remainingContents).not.toContain('filler 2')
+    expect(remainingContents).toContain('overflow a')
+    expect(remainingContents).toContain('overflow b')
+  })
+
+  it('an old never-recalled entry (accessCount 0) is evicted before a fresh never-recalled one', async () => {
+    const store = makeStore(2)
+    const { entry: old } = await store.add({ scope: 'global', content: 'ancient untouched' })
+    await tick()
+    const { entry: fresh } = await store.add({ scope: 'global', content: 'just written' })
+    // Third add crosses the cap: the oldest accessCount-0 entry must go.
+    await store.add({ scope: 'global', content: 'the newest one' })
+    expect(store.get(old.id)).toBeUndefined()
+    expect(store.get(fresh.id)).toBeDefined()
+    expect(store.list().length).toBe(2)
+  })
+
+  it('all-pinned overflow is left above the cap (soft target, no forced delete)', async () => {
+    // Soft-target scenario: the store already holds more pinned entries than
+    // the cap allows (e.g. a deployment lowered entriesCap under a pinned-
+    // heavy store). Seeded directly — pin-after-add would leave the new entry
+    // itself as the only unpinned candidate.
+    const seeded = memTable<MemoryId, MemoryEntry>()
+    const base = 1_700_000_000_000
+    for (let i = 0; i < 4; i++) {
+      await seeded.put(MemoryId(), {
+        id: MemoryId(),
+        scope: 'global',
+        content: `pinned ${i}`,
+        createdAt: base + i,
+        updatedAt: base + i,
+        pinned: true,
+      } as MemoryEntry)
+    }
+    const store = new DomainMemoryStore(seeded, memTable(), memTable(), 200, 200, undefined, 2)
+    await store.add({ scope: 'global', content: 'one more on top' })
+
+    // Cap 2 vs 5 rows: the only unpinned candidate is the fresh add itself —
+    // strict eviction order sacrifices it, and then the loop breaks on the
+    // pinned wall. No pinned entry is ever force-deleted; the table stays
+    // above the cap (the cap is a soft target).
+    expect(store.list().length).toBe(4)
+    expect(store.list().filter(e => e.pinned === true)).toHaveLength(4)
+  })
+
+  it('each eviction appends an audit record with op remove and source janitor', async () => {
+    const store = makeStore(2)
+    for (let i = 0; i < 3; i++) {
+      await store.add({ scope: 'global', content: `audited ${i}` })
+      await tick()
+    }
+    const evictions = store.listAudit().filter(r => r.op === 'remove' && r.source === 'janitor')
+    expect(evictions).toHaveLength(1)
+    expect(evictions[0]!.contentPreview).toContain('audited 0')
+  })
+
+  it('update and markRecalled never trigger eviction (cap is write-path only)', async () => {
+    const store = makeStore(2)
+    const { entry: a } = await store.add({ scope: 'global', content: 'entry a' })
+    const { entry: b } = await store.add({ scope: 'global', content: 'entry b' })
+    await store.update(a.id, { content: 'entry a updated' })
+    store.markRecalled([a.id as string, b.id as string])
+    await tick()
+    expect(store.list().length).toBe(2)
+  })
+})
+
 // janitor-pin-toctou: the janitor's pin exemption must be decided on the
 // record current at its write-chain slot, not on the iteration snapshot —
 // a pin that lands between the snapshot pass and the write must win over

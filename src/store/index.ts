@@ -14,7 +14,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { z } from 'zod'
+import z from '@deepseek-ai/schemastery'
+import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import type {
@@ -34,50 +35,50 @@ import type {
 } from '../types.ts'
 
 /** Zod schema for one memory entry record on the durable medium. */
-const memoryEntrySchema = z.object({
-  id: z.string().min(1),
-  scope: z.enum(['global', 'project', 'user']),
-  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
-  content: z.string(),
-  summary: z.string().optional(),
-  projectName: z.string().optional(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  pinned: z.boolean().optional(),
-  lastRecalledAt: z.number().optional(),
-  staleSince: z.number().optional(),
-  accessCount: z.number().optional(),
-  importance: z.number().optional(),
+const memoryEntrySchema = zod.object({
+  id: zod.string().min(1),
+  scope: zod.enum(['global', 'project', 'user']),
+  category: zod.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
+  content: zod.string(),
+  summary: zod.string().optional(),
+  projectName: zod.string().optional(),
+  createdAt: zod.number(),
+  updatedAt: zod.number(),
+  pinned: zod.boolean().optional(),
+  lastRecalledAt: zod.number().optional(),
+  staleSince: zod.number().optional(),
+  accessCount: zod.number().optional(),
+  importance: zod.number().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
-const auditEntrySchema = z.object({
-  id: z.string().min(1),
-  op: z.enum(['add', 'update', 'remove', 'readRaw']),
-  entryId: z.string().min(1),
-  scope: z.enum(['global', 'project', 'user']),
-  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
-  source: z.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
-  sessionId: z.string().optional(),
-  ts: z.number(),
-  seq: z.number().optional(),
-  contentPreview: z.string(),
+const auditEntrySchema = zod.object({
+  id: zod.string().min(1),
+  op: zod.enum(['add', 'update', 'remove', 'readRaw']),
+  entryId: zod.string().min(1),
+  scope: zod.enum(['global', 'project', 'user']),
+  category: zod.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
+  source: zod.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
+  sessionId: zod.string().optional(),
+  ts: zod.number(),
+  seq: zod.number().optional(),
+  contentPreview: zod.string(),
 })
 
 /** Zod schema for one pending suggestion in the human-review queue (P1-1). */
-const suggestionSchema = z.object({
-  id: z.string().min(1),
-  scope: z.enum(['global', 'project', 'user']),
-  category: z.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
-  content: z.string(),
-  summary: z.string().optional(),
-  projectName: z.string().optional(),
-  hits: z.number(),
-  firstSeenAt: z.number(),
-  lastSeenAt: z.number(),
-  targetEntryId: z.string().optional(),
-  source: z.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
-  sessionId: z.string().optional(),
+const suggestionSchema = zod.object({
+  id: zod.string().min(1),
+  scope: zod.enum(['global', 'project', 'user']),
+  category: zod.enum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk', 'procedure']).optional(),
+  content: zod.string(),
+  summary: zod.string().optional(),
+  projectName: zod.string().optional(),
+  hits: zod.number(),
+  firstSeenAt: zod.number(),
+  lastSeenAt: zod.number(),
+  targetEntryId: zod.string().optional(),
+  source: zod.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
+  sessionId: zod.string().optional(),
 })
 
 /**
@@ -91,9 +92,9 @@ const memoryDomainSpec = defineDomain({
   name: 'memory',
   version: 0,
   tables: {
-    entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as z.ZodType<MemoryEntry>),
-    audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as z.ZodType<AuditEntry>),
-    suggestions: domainTable<SuggestionId, MemorySuggestion>(suggestionSchema as unknown as z.ZodType<MemorySuggestion>),
+    entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as zod.ZodType<MemoryEntry>),
+    audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as zod.ZodType<AuditEntry>),
+    suggestions: domainTable<SuggestionId, MemorySuggestion>(suggestionSchema as unknown as zod.ZodType<MemorySuggestion>),
   },
 })
 
@@ -109,8 +110,30 @@ type AuditTable = KvTable<AuditId, AuditEntry>
 /** The suggestions table from the opened domain (P1-1 review queue). */
 type SuggestionsTable = KvTable<SuggestionId, MemorySuggestion>
 
-/** Maximum audit records retained; oldest are trimmed on overflow. */
+/**
+ * Maximum audit records retained; oldest are trimmed on overflow. Protocol
+ * default like {@link DEFAULT_ENTRIES_CAP}: settable per deployment through
+ * the `config:` entry on the `memory-store` composition row.
+ */
 const DEFAULT_AUDIT_CAP = 200
+
+/**
+ * Maximum memory entries retained in the `entries` table. Write paths
+ * (`add`, and `adoptSuggestion`'s new-entry path which delegates to `add`)
+ * trim back to this cap after a successful write, evicting by use signal.
+ *
+ * Why 500: the durable medium is one JSON file — it tolerates thousands of
+ * entries before size/migration pressure becomes real — so the cap only has
+ * to bound runaway extraction, not normal growth. 200 (the audit/suggestion
+ * cap precedent) would evict healthy, actively-recalled stores; the
+ * recall-golden fixture (24 entries) and integration suites sit far below it.
+ *
+ * Soft cap: entries that survive eviction (pinned, or high `accessCount`)
+ * may push the table past the cap; eviction never runs when every remaining
+ * candidate is protected. Settable per deployment through the `config:`
+ * entry on the `memory-store` composition row.
+ */
+const DEFAULT_ENTRIES_CAP = 500
 
 /**
  * Maximum pending suggestions retained (P1-1). Overflow evicts the
@@ -151,11 +174,31 @@ export const name = 'memory-store-domain'
 export const inject = ['storageDomain']
 
 /**
+ * Configuration for the memory store provider, settable from a `config:`
+ * entry on the `memory-store` composition row.
+ */
+export interface StoreConfig {
+  /**
+   * Maximum entries retained in the `entries` table; write paths trim back
+   * to it (pinned entries exempt, lowest use signal evicted first). Default
+   * {@link DEFAULT_ENTRIES_CAP}. Settable from `cordis.patch.yml` under the
+   * "no hardcoded tunables" rule.
+   */
+  entriesCap: number
+}
+
+/** Schemastery configuration for the `memory-store` composition row. */
+export const Config = z.object({
+  entriesCap: z.number().step(1).min(1).default(DEFAULT_ENTRIES_CAP),
+})
+
+/**
  * Mount the storage-domain memory store provider. Opens the `memory` domain
  * and registers a {@link MemoryStore} subclass on `ctx.memory`.
  * @param ctx - Cordis context with `storageDomain` injected.
+ * @param config - row config; only `entriesCap` is read here.
  */
-export async function apply(ctx: Context): Promise<void> {
+export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DEFAULT_ENTRIES_CAP }): Promise<void> {
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
@@ -163,7 +206,7 @@ export async function apply(ctx: Context): Promise<void> {
 
   ctx.effect(() => async () => { await domain.close() })
 
-  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger))
+  ctx.provide('memory', new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap))
 }
 
 /**
@@ -178,6 +221,7 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly suggestions: SuggestionsTable
   private readonly auditCap: number
   private readonly suggestionCap: number
+  private readonly entriesCap: number
   /** Warn channel for swallowed background-path failures; the host `ctx.logger`. */
   private readonly failureLogger: { warn(message: string): void } | undefined
   /** Per-site counts of swallowed failures, surfaced through `health()`. */
@@ -192,6 +236,7 @@ export class DomainMemoryStore extends MemoryStore {
     auditCap: number = DEFAULT_AUDIT_CAP,
     suggestionCap: number = DEFAULT_SUGGESTION_CAP,
     failureLogger?: { warn(message: string): void },
+    entriesCap: number = DEFAULT_ENTRIES_CAP,
   ) {
     super()
     this.entries = entries
@@ -199,6 +244,7 @@ export class DomainMemoryStore extends MemoryStore {
     this.suggestions = suggestions
     this.auditCap = auditCap
     this.suggestionCap = suggestionCap
+    this.entriesCap = entriesCap
     this.failureLogger = failureLogger
   }
 
@@ -244,6 +290,9 @@ export class DomainMemoryStore extends MemoryStore {
     }
     await this.entries.put(id, entry)
     await this.appendAudit('add', id, entry, input.source, input.sessionId)
+    // Both new-entry write paths land here (adoptSuggestion's new-entry branch
+    // delegates to add), so the cap is enforced at this one chokepoint.
+    await this.trimEntries()
     return { entry }
   }
 
@@ -573,6 +622,46 @@ export class DomainMemoryStore extends MemoryStore {
     const excess = all.length - this.suggestionCap
     for (let i = 0; i < excess; i++) {
       await this.suggestions.delete(all[i]!.id)
+    }
+  }
+
+  /**
+   * Trim the entries table to {@link DEFAULT_ENTRIES_CAP} / the configured
+   * `entriesCap` after a successful write. Awaited inline like
+   * {@link trimSuggestions} (not failure-shielded like {@link trimAudit}):
+   * an eviction failure propagates to the add caller even though the added
+   * row landed. Eviction runs in one pass down TO the cap (not one per add),
+   * ordered by the use signal — pinned entries are exempt; the rest go by
+   * ascending `accessCount` (never-recalled reads as 0), then ascending
+   * `lastRecalledAt` ?? `createdAt` (longest-unrecalled first). When every
+   * remaining candidate is protected (e.g. all pinned), the table is allowed
+   * to exceed the cap — the cap is a soft target, eviction never deletes a
+   * protected entry to reach it.
+   *
+   * Audit trail: the eviction records `op: 'remove'`, `source: 'janitor'`.
+   * The janitor source names system-initiated lifecycle writes (decay,
+   * dormancy), and `AuditSource` is a fixed schema enum — extending it would
+   * change the durable record shape — so the store's own eviction reuses it.
+   */
+  private async trimEntries(): Promise<void> {
+    if (this.entries.size <= this.entriesCap) return
+    const all: MemoryEntry[] = []
+    for (const [, entry] of this.entries.entries()) all.push(entry)
+    // Eviction order (ascending = evicted first): pinned last/never, then
+    // fewest recalls, then longest since last recall (never-recalled entries
+    // date from creation).
+    all.sort((a, b) =>
+      (a.pinned === true ? 1 : 0) - (b.pinned === true ? 1 : 0)
+      || (a.accessCount ?? 0) - (b.accessCount ?? 0)
+      || (a.lastRecalledAt ?? a.createdAt) - (b.lastRecalledAt ?? b.createdAt))
+    const excess = all.length - this.entriesCap
+    for (let i = 0; i < excess; i++) {
+      const victim = all[i]!
+      if (victim.pinned === true) break
+      const removed = await this.entries.delete(victim.id)
+      if (removed) {
+        await this.appendAudit('remove', victim.id, victim, 'janitor', undefined)
+      }
     }
   }
 
