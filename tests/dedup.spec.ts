@@ -1,53 +1,91 @@
 import { describe, it, expect } from 'vitest'
 import {
-  tokenize,
-  jaccardSimilarity,
   findDuplicate,
   mergeContent,
   toDedupCandidate,
+  DEDUP_SIMILARITY_THRESHOLD,
   JUDGE_SYSTEM_PROMPT,
   buildJudgePrompt,
   parseJudgeVerdict,
 } from '../src/review/dedup.ts'
+import {
+  buildCorpusStats,
+  uniqueTokens,
+  weightedOverlapSimilarity,
+  tokenizeForSearch,
+} from '../src/store/bm25.ts'
 import type { MemoryEntry } from '../src/types.ts'
 
-describe('tokenize', () => {
+describe('uniqueTokens (shared tokenizer, replaces the per-character dedup tokenizer)', () => {
   it('splits Latin words into lowercase tokens', () => {
-    expect(tokenize('Use pnpm here')).toEqual(new Set(['use', 'pnpm', 'here']))
+    expect(uniqueTokens('Use pnpm here')).toEqual(new Set(['use', 'pnpm', 'here']))
   })
 
-  it('matches CJK characters per-character, filtering stop characters', () => {
-    // '用' is a CJK stop char (high-frequency verb), so it's filtered.
-    expect(tokenize('用户偏好简洁回答')).toEqual(new Set(['户', '偏', '好', '简', '洁', '回', '答']))
+  it('emits CJK unigrams AND adjacent bigrams (same vocabulary as BM25 search)', () => {
+    // 用 no stop-word table: every character survives, word-level bigrams added.
+    expect(uniqueTokens('用户偏好简洁回答')).toEqual(new Set([
+      '用', '户', '偏', '好', '简', '洁', '回', '答',
+      '用户', '户偏', '偏好', '好简', '简洁', '洁回', '回答',
+    ]))
   })
 
-  it('deduplicates repeated tokens', () => {
-    expect(tokenize('pnpm pnpm pnpm')).toEqual(new Set(['pnpm']))
+  it('collapses duplicates into a set', () => {
+    expect(uniqueTokens('pnpm pnpm pnpm')).toEqual(new Set(['pnpm']))
   })
 
   it('returns empty set for empty/whitespace content', () => {
-    expect(tokenize('')).toEqual(new Set())
-    expect(tokenize('   ')).toEqual(new Set())
+    expect(uniqueTokens('')).toEqual(new Set())
+    expect(uniqueTokens('   ')).toEqual(new Set())
+  })
+
+  it('is exactly tokenizeForSearch deduplicated (one shared tokenizer)', () => {
+    expect([...uniqueTokens('记忆系统')]).toEqual([...new Set(tokenizeForSearch('记忆系统'))])
   })
 })
 
-describe('jaccardSimilarity', () => {
+describe('weightedOverlapSimilarity (IDF-weighted overlap, shared by dedup + conflict)', () => {
   it('returns 1 for identical sets', () => {
-    const a = tokenize('use pnpm here')
-    expect(jaccardSimilarity(a, a)).toBe(1)
+    const a = uniqueTokens('use pnpm here')
+    expect(weightedOverlapSimilarity(buildCorpusStats(['use pnpm here']), a, a)).toBe(1)
   })
 
   it('returns 0 for disjoint sets', () => {
-    expect(jaccardSimilarity(new Set(['a']), new Set(['b']))).toBe(0)
-  })
-
-  it('returns correct fraction for partial overlap', () => {
-    // a = {a, b, c}, b = {b, c, d} → intersection=2, union=4 → 0.5
-    expect(jaccardSimilarity(new Set(['a', 'b', 'c']), new Set(['b', 'c', 'd']))).toBe(0.5)
+    const stats = buildCorpusStats(['alpha', 'beta'])
+    expect(weightedOverlapSimilarity(stats, new Set(['alpha']), new Set(['beta']))).toBe(0)
   })
 
   it('returns 0 for both empty', () => {
-    expect(jaccardSimilarity(new Set(), new Set())).toBe(0)
+    expect(weightedOverlapSimilarity(buildCorpusStats(['x']), new Set(), new Set())).toBe(0)
+  })
+
+  it('ACCEPTANCE: 上海/海南 and 中国/美国 score far below the old no-IDF Jaccard (0.5)', () => {
+    // Old per-character tokenizer + unweighted Jaccard scored both pairs 0.5,
+    // pushing unrelated place/country names into the duplicate band. Under
+    // corpus-IDF weighting the only shared token (海 / 国) is downweighted to
+    // near zero — the pairs must stay strictly below the dedup line.
+    for (const [a, b] of [['上海', '海南'], ['中国', '美国']] as const) {
+      const stats = buildCorpusStats([a, b])
+      const score = weightedOverlapSimilarity(stats, uniqueTokens(a), uniqueTokens(b))
+      expect(score, `${a} vs ${b} = ${score}`).toBeLessThan(DEDUP_SIMILARITY_THRESHOLD)
+      expect(score).toBeLessThan(0.2)
+    }
+  })
+
+  it('same-template sentences about different tools stay far below full overlap', () => {
+    // 旧度量(等权 Jaccard 0.6)会把这判成重复。真实 store 的 corpus 含多
+    // 条不同模板的条目,重复 bigram 的 IDF 被压低——这里用两条不同结构的
+    // 条目作背景,断言这对的相似度显著低于完全同模板的两条。
+    const a = '这个项目使用vitest'
+    const b = '这个项目使用pnpm'
+    const stats = buildCorpusStats([a, b, '用户偏好简洁的回答', 'deploy the service on friday'])
+    const sameTemplate = weightedOverlapSimilarity(stats, uniqueTokens(a), uniqueTokens(b))
+    expect(sameTemplate).toBeLessThan(0.8)
+    // 对照:同模板但词面几乎不重叠的真重写(同义改写)在同一 corpus 下
+    // 分数反而低——重写的分数主要由改写的词决定,不靠模板字符支撑;
+    // 这正是 IDF 加权相对等权 Jaccard 的行为变化(旧度量两者都在 0.4+)。
+    const synonymRewrite = weightedOverlapSimilarity(stats, uniqueTokens(a), uniqueTokens('项目选了vitest当测试器'))
+    expect(synonymRewrite).toBeLessThan(DEDUP_SIMILARITY_THRESHOLD)
+    expect(sameTemplate).toBeGreaterThan(synonymRewrite)
   })
 })
 
@@ -82,7 +120,7 @@ describe('findDuplicate', () => {
 
   it('respects the threshold', () => {
     // Low threshold: even loosely similar entries match.
-    const dup = findDuplicate('user prefers answers concise', 'global', existing, 0.3)
+    const dup = findDuplicate('user prefers answers concise', 'global', existing, 0.1)
     expect(dup).toBe('e1')
     // High threshold: a candidate sharing fewer content words doesn't match.
     const nodup = findDuplicate('user wants different content entirely', 'global', existing, 0.9)
@@ -137,21 +175,31 @@ describe('CJK dedup (Chinese context)', () => {
   })
 
   it('handles mixed CJK + Latin content', () => {
-    const existing = [
-      { id: 'm1', scope: 'global', content: '这个项目使用pnpm' },
+    // The two candidate rewrites share structural bigrams (项/目/使, 项目/
+    // 使用) with the stored entry; a corpus of only those two texts cannot
+    // tell them apart (no frequency signal) — so this pins the ranking, not
+    // the absolute line: with unrelated corpus entries present, the shared
+    // pnpm rewrite must score above the vitest one.
+    const stored = '这个项目使用pnpm'
+    const others = [
+      '用户偏好简洁的回答',
+      'the network blocks npm proxy x',
+      'kubernetes autoscaling needs spot pools',
     ]
+    const scoreOf = (content: string): number => {
+      const corpus = [content, ...others, stored]
+      const stats = buildCorpusStats(corpus)
+      return weightedOverlapSimilarity(stats, uniqueTokens(content), uniqueTokens(stored))
+    }
     // Rewrite mixes Chinese and English — shares the key content token 'pnpm'.
-    expect(findDuplicate('项目使用pnpm作为包管理器', 'global', existing)).toBe('m1')
-    // Different tool with shared structural chars '项/目/使' — at the cheap
-    // prefilter level this is a known limitation: shared CJK content chars
-    // can cause a false merge. The LLM judge (§3.4 future enhancement) would
-    // distinguish these. The prefilter merges (no data loss); distinct tools
-    // in separate sessions produce separate entries naturally.
-    // This test documents the behavior, not aspirational correctness.
-    const dup = findDuplicate('项目使用vitest作为测试框架', 'global', existing)
-    // Either it matches (FP from shared '项/目') or doesn't — both are
-    // acceptable prefilter outcomes; the key assertion is no crash.
-    expect(typeof dup === 'string' || dup === undefined).toBe(true)
+    expect(findDuplicate('项目使用pnpm作为包管理器', 'global', [
+      { id: 'c1', scope: 'user', content: others[0]! },
+      { id: 'm1', scope: 'global', content: stored },
+    ])).toBe('m1')
+    // The pnpm rewrite outscores the vitest one against the same entry —
+    // corpus IDF downweights the shared frame, unlike the old unweighted
+    // prefilter where both merged on the template characters alone.
+    expect(scoreOf('项目使用pnpm作为包管理器')).toBeGreaterThan(scoreOf('项目使用vitest作为测试框架'))
   })
 })
 

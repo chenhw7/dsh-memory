@@ -441,9 +441,9 @@ Fully-automatic extraction has a structural flaw: a wrong extraction is written 
 #### 7.3.7 Dedup pipeline (`src/review/dedup.ts`)
 
 1. **Prefilter (embedding-free):**
-   - `tokenize(content)`: lowercase; Latin word tokens minus English stop words and single characters; CJK per-character minus a curated stop-char set (的/了/是/这/… high-frequency grammatical particles that inflate similarity between unrelated Chinese sentences). Returns a `Set` of unique tokens.
-   - `jaccardSimilarity(a, b)`: `|A ∩ B| / |A ∪ B|`.
-   - `findDuplicate(candidate, scope, existing, threshold = 0.15)`: same-scope-only comparison; returns the best-matching entry id above the threshold, or `undefined`.
+   - `uniqueTokens(text)`: reuses the BM25 tokenizer (`tokenizeForSearch` — Latin word tokens + CJK unigrams and bigrams, one tokenizer for retrieval and dedup, no separate stop-word list). Returns a `Set` of unique tokens.
+   - `weightedOverlapSimilarity(stats, a, b)`: IDF-weighted overlap `Σidf(intersection) / Σidf(union)` — the IDF comes from the shared `buildCorpusStats` over the compared texts (non-negative Robertson/Sparck-Jones), so high-frequency grammatical particles weigh ~0 without a hand-maintained stop list.
+   - `findDuplicate(candidate, scope, existing)`: same-scope-only comparison; returns the best-matching entry id above `DEDUP_SIMILARITY_THRESHOLD` (0.15), or `undefined`.
 2. **LLM judge (optional):**
    - `JUDGE_SYSTEM_PROMPT`: one-word protocol — `duplicate` (same fact, different wording → keep existing), `update` (correction/more precise → replace), `new` (genuinely different fact → keep both).
    - `parseJudgeVerdict(text)`: lowercases, trims, matches the three words; anything unrecognized defaults to `duplicate` (merge rather than create a spurious duplicate).

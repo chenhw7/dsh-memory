@@ -16,8 +16,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
-import { Bm25Index, tokenizeForSearch } from './bm25.ts'
-import { jaccardSimilarity, tokenize } from '../review/dedup.ts'
+import { Bm25Index, tokenizeForSearch, buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -120,12 +119,15 @@ const DEFAULT_AUDIT_CAP = 200
 const DEFAULT_SUGGESTION_CAP = 200
 
 /**
- * Jaccard similarity above which two same-scope proposals count as the same
- * suggestion (re-observation, not a new row). Matches the entry-dedup
- * prefilter threshold so "the model keeps proposing X" and "X is already
- * stored" draw the same near-duplicate line.
+ * IDF-weighted overlap above which two same-scope proposals count as the
+ * same suggestion (re-observation, not a new row). Sits below the entry-dedup
+ * prefilter line (DEDUP_SIMILARITY_THRESHOLD, 0.15) so a proposal is never
+ * silently dropped on this signal alone, while "the model keeps proposing X"
+ * still accumulates `hits` on one row instead of flooding the queue. The
+ * metric is the shared {@link ../store/bm25.ts weightedOverlapSimilarity}
+ * measured over the live queue as corpus.
  */
-const SUGGESTION_DUP_THRESHOLD = 0.15
+const SUGGESTION_DUP_THRESHOLD = 0.3
 
 /**
  * Deterministic audit ordering: newest/oldest by `ts`, ties broken by the
@@ -321,7 +323,14 @@ export class DomainMemoryStore extends MemoryStore {
       // BM25 over the filtered set: relevance-weighted (IDF × saturation),
       // CJK bigrams for word-level Chinese precision. OR semantics preserved —
       // any shared term scores above zero and keeps the document in play.
-      const index = new Bm25Index(candidates.map(entry => tokenizeForSearch(entry.content)))
+      // The df table is built over the FULL corpus (every entry), not the
+      // filtered set: with a 3-entry candidate pool a per-pool df lets a pure
+      // function word present in 2 of 3 candidates earn the same IDF as a
+      // genuinely distinctive term, and the resulting noise reorders results.
+      // Full-corpus stats cost one tokenize pass over all entries per search
+      // — the same order as the candidate-set tokenization itself.
+      const corpus = buildCorpusStats([...this.entries.entries()].map(([, entry]) => entry.content))
+      const index = new Bm25Index(candidates.map(entry => tokenizeForSearch(entry.content)), corpus)
       const scores = index.scores(queryTokens)
       ranked = []
       candidates.forEach((entry, i) => {
@@ -436,7 +445,7 @@ export class DomainMemoryStore extends MemoryStore {
     }
     const now = Date.now()
     // Match against existing proposals: same target entry wins outright;
-    // otherwise nearest-content in the same scope above the dedup threshold.
+    // otherwise nearest-content in the same scope above the dup threshold.
     let matched: MemorySuggestion | undefined
     for (const [, suggestion] of this.suggestions.entries()) {
       if (input.targetEntryId !== undefined) {
@@ -444,7 +453,11 @@ export class DomainMemoryStore extends MemoryStore {
         continue
       }
       if (suggestion.scope !== input.scope) continue
-      const similarity = jaccardSimilarity(tokenize(input.content), tokenize(suggestion.content))
+      // The live queue is the corpus: at queue scale (≤ cap rows) rebuilding
+      // the df table per row would be wasteful, but the queue is tiny — and
+      // the table only needs building once per observe call, not per row.
+      const stats = buildCorpusStats([input.content, suggestion.content])
+      const similarity = weightedOverlapSimilarity(stats, uniqueTokens(input.content), uniqueTokens(suggestion.content))
       if (similarity > SUGGESTION_DUP_THRESHOLD) { matched = suggestion; break }
     }
     if (matched !== undefined) {

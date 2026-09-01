@@ -58,6 +58,98 @@ interface Bm25Doc {
 }
 
 /**
+ * Document frequencies over a fixed corpus, shared by {@link Bm25Index} and
+ * the dedup/conflict weighted-overlap similarity. Built from the FULL corpus
+ * (e.g. every entry in the store) rather than the handful of documents one
+ * call happens to score: when the df base is the per-call candidate set, a
+ * candidate pool of 3 entries lets a pure function word that appears in one
+ * of them earn the same IDF as a genuinely distinctive term, and the ranking
+ * noise dominates real signal at small pool sizes. Pure data — no caching,
+ * no cross-call state; callers rebuild it per search at the store's target
+ * scale (tens–hundreds of short entries), which is the same order as the
+ * tokenization the index build already does.
+ */
+export class CorpusStats {
+  /** Number of documents the frequencies were measured over. */
+  readonly documentCount: number
+  private readonly df: Map<string, number>
+
+  /**
+   * Build the frequency table from one token array per document.
+   * @param docsTokens - token bags (with duplicates) per document; a term
+   *   counts once per document regardless of its frequency inside it.
+   */
+  constructor(docsTokens: readonly (readonly string[])[]) {
+    this.documentCount = docsTokens.length
+    this.df = new Map()
+    for (const tokens of docsTokens) {
+      for (const term of new Set(tokens)) {
+        this.df.set(term, (this.df.get(term) ?? 0) + 1)
+      }
+    }
+  }
+
+  /** Documents (0–{@link documentCount}) containing the term. */
+  documentFrequency(term: string): number {
+    return this.df.get(term) ?? 0
+  }
+}
+
+/** Convenience: build {@link CorpusStats} directly from raw texts. */
+export function buildCorpusStats(texts: readonly string[]): CorpusStats {
+  return new CorpusStats(texts.map(text => tokenizeForSearch(text)))
+}
+
+/**
+ * The non-negative Robertson/Sparck-Jones IDF over a df table. A term present
+ * in every measured document still contributes a small positive weight, never
+ * a negative one — the same guarantee the index scorer relies on.
+ * @param stats - the df table to measure against.
+ * @param term - the term to weight.
+ */
+export function idfOf(stats: CorpusStats, term: string): number {
+  const df = stats.documentFrequency(term)
+  return Math.log(1 + (stats.documentCount - df + 0.5) / (df + 0.5))
+}
+
+/**
+ * Unique-token set for pairwise similarity: the shared {@link tokenizeForSearch}
+ * vocabulary (Latin words; CJK unigrams + bigrams) with duplicates collapsed —
+ * overlap similarity is a set notion; only BM25 term-frequency scoring wants
+ * the bag.
+ */
+export function uniqueTokens(text: string): Set<string> {
+  return new Set(tokenizeForSearch(text))
+}
+
+/**
+ * IDF-weighted overlap similarity between two token sets: Σ idf over shared
+ * tokens ÷ Σ idf over the union. The IDF weighting (measured on the caller's
+ * {@link CorpusStats}) is what keeps unrelated pairs apart WITHOUT a stop-word
+ * table: a function word shared by the pair but common across the corpus
+ * weighs ~0, while a content bigram shared only by the pair weighs full.
+ * Returns 0 when both sets are empty, and approaches 1 as the sets coincide.
+ */
+export function weightedOverlapSimilarity(
+  stats: CorpusStats,
+  a: ReadonlySet<string>,
+  b: ReadonlySet<string>,
+): number {
+  if (a.size === 0 && b.size === 0) return 0
+  let intersection = 0
+  let union = 0
+  for (const token of a) {
+    const w = idfOf(stats, token)
+    union += w
+    if (b.has(token)) intersection += w
+  }
+  for (const token of b) {
+    if (!a.has(token)) union += idfOf(stats, token)
+  }
+  return union === 0 ? 0 : intersection / union
+}
+
+/**
  * A prebuilt BM25 index over a fixed document set. Build once per search call;
  * at the store's target scale (tens–hundreds of short entries) construction is
  * negligible next to the O(n·q) scoring it enables.
@@ -65,12 +157,17 @@ interface Bm25Doc {
 export class Bm25Index {
   private readonly docs: readonly Bm25Doc[]
   private readonly avgLength: number
+  private readonly stats: CorpusStats
 
   /**
    * Build the index from one token array per document, in document order.
    * @param docsTokens - token bags (with duplicates) per document.
+   * @param corpusStats - optional df table measured over the FULL corpus; when
+   *   omitted the df is measured over exactly these documents (correct for
+   *   ad-hoc scoring, but see {@link CorpusStats} for why store search passes
+   *   a full-corpus table instead).
    */
-  constructor(docsTokens: readonly (readonly string[])[]) {
+  constructor(docsTokens: readonly (readonly string[])[], corpusStats?: CorpusStats) {
     this.docs = docsTokens.map(tokens => {
       const tf = new Map<string, number>()
       for (const token of tokens) tf.set(token, (tf.get(token) ?? 0) + 1)
@@ -78,6 +175,7 @@ export class Bm25Index {
     })
     const total = this.docs.reduce((sum, d) => sum + d.length, 0)
     this.avgLength = this.docs.length === 0 ? 0 : total / this.docs.length
+    this.stats = corpusStats ?? new CorpusStats(docsTokens)
   }
 
   /**
@@ -90,15 +188,6 @@ export class Bm25Index {
     if (queryTokens.length === 0 || this.docs.length === 0) {
       return this.docs.map(() => 0)
     }
-    // Document frequency per distinct query term.
-    const df = new Map<string, number>()
-    for (const term of new Set(queryTokens)) {
-      let count = 0
-      for (const doc of this.docs) {
-        if (doc.tf.has(term)) count++
-      }
-      df.set(term, count)
-    }
     const n = this.docs.length
     const avg = this.avgLength
     return this.docs.map(doc => {
@@ -106,9 +195,7 @@ export class Bm25Index {
       for (const term of new Set(queryTokens)) {
         const freq = doc.tf.get(term)
         if (freq === undefined) continue
-        const occurrences = df.get(term) ?? 0
-        // Non-negative IDF: a term in every document contributes ~0, never < 0.
-        const idf = Math.log(1 + (n - occurrences + 0.5) / (occurrences + 0.5))
+        const idf = idfOf(this.stats, term)
         const norm = freq * (K1 + 1) / (freq + K1 * (1 - B + B * (avg === 0 ? 0 : doc.length / avg)))
         score += idf * norm
       }

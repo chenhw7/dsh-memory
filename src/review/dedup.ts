@@ -1,8 +1,14 @@
 /**
  * Deduplication prefilter for the extraction path. A cheap, embedding-free
- * normalized-token Jaccard similarity check that runs before `add`: when a new
+ * IDF-weighted token-overlap check that runs before `add`: when a new
  * candidate is near-duplicate to an existing entry, the caller merges (update)
  * instead of creating a new entry.
+ *
+ * The comparison shares the retrieval plane's tokenizer
+ * ({@link tokenizeForSearch}: Latin words; CJK unigrams + adjacent bigrams)
+ * and weights shared tokens by corpus IDF — high-frequency function words
+ * weigh ~0 and content words weigh full, so unrelated pairs that share only
+ * sentence structure stay apart without any hand-maintained stop-word table.
  *
  * This module is pure and dependency-free — it operates on strings and
  * returned entry shapes, never touching the store or the LLM.
@@ -11,83 +17,21 @@
  */
 
 import type { MemoryEntry } from '../types.ts'
+import { buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from '../store/bm25.ts'
 
 /**
- * Common English stop words excluded from dedup tokenization. These carry
- * little semantic signal and inflate Jaccard similarity between unrelated
- * short sentences (e.g. "The server is unstable" vs "The tunnel is long"
- * share "the" and "is" but are unrelated). Removing them sharpens the
- * comparison toward content-bearing words.
+ * Overlap similarity above which two same-scope entries count as
+ * near-duplicates. Calibrated on the IDF-weighted metric with the candidate
+ * list itself as corpus (tests/dedup.spec.ts pins the pairs): true rewrites
+ * of one fact score 0.14–0.20, while the 「上海/海南」-class distractor pairs
+ * stay at ~0.06 and same-template-unrelated pairs ≤ ~0.09 — an order of
+ * magnitude below the true-duplicate band, because corpus IDF downweights the
+ * shared function characters that used to inflate the no-IDF Jaccard. 0.15
+ * keeps the whole true-duplicate band above the line with ~2× margin over
+ * the distractor band. The old no-IDF Jaccard also used 0.15, but with far
+ * less separation — the two bands overlapped there.
  */
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-  'to', 'of', 'in', 'on', 'at', 'for', 'with', 'by', 'from', 'as', 'or',
-  'and', 'not', 'no', 'do', 'does', 'did', 'has', 'have', 'had', 'this',
-  'that', 'these', 'those', 'it', 'its', 'but', 'so', 'if', 'then',
-])
-
-/**
- * Common CJK (Chinese) stop characters excluded from dedup tokenization.
- * These are high-frequency grammatical particles and structural words that
- * inflate Jaccard similarity between unrelated Chinese sentences (e.g.
- * "这个项目使用pnpm" vs "这个项目使用vitest" share 这/个/项/目/使/用 = 0.75,
- * but are about different tools). Removing them sharpens comparison toward
- * content-bearing characters.
- */
-const CJK_STOP_CHARS = new Set([
-  // 结构词：这个、那、些
-  '这', '个', '那', '些',
-  // 助词
-  '的', '了', '着', '过', '地', '得',
-  // 判断/系词
-  '是', '在', '为',
-  // 介词/连词
-  '和', '与', '或', '但', '而', '由', '于', '对', '向', '从', '把', '被', '将',
-  // 否定/副词
-  '不', '没', '也', '都', '就', '还', '只', '才', '已', '再',
-  // 动词虚化高频
-  '用', '有', '会', '能', '要', '可', '以',
-  // 量词/代词高频
-  '一', '上', '下', '中',
-])
-
-/**
- * Tokenize content for dedup comparison. Normalizes to lowercase, splits on
- * word boundaries for Latin, and matches CJK per-character. English stop words
- * are removed from Latin tokens; CJK stop characters (high-frequency
- * grammatical particles) are removed from CJK tokens so unrelated Chinese
- * sentences don't share too many tokens. Returns a Set of unique tokens.
- */
-export function tokenize(content: string): Set<string> {
-  const lowered = content.toLowerCase()
-  const tokens = new Set<string>()
-  const re = /[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/g
-  let match: RegExpExecArray | null
-  while ((match = re.exec(lowered)) !== null) {
-    const token = match[0]
-    // Filter English stop words from Latin tokens.
-    if (token.length > 1 && STOP_WORDS.has(token)) continue
-    if (token.length === 1 && /[a-z0-9]/.test(token)) continue
-    // Filter CJK stop characters (high-frequency grammatical particles).
-    if (CJK_STOP_CHARS.has(token)) continue
-    tokens.add(token)
-  }
-  return tokens
-}
-
-/**
- * Jaccard similarity between two token sets: |A ∩ B| / |A ∪ B|.
- * Returns 0 when both sets are empty (no meaningful overlap), 1 when identical.
- */
-export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0
-  let intersection = 0
-  for (const token of a) {
-    if (b.has(token)) intersection++
-  }
-  const union = a.size + b.size - intersection
-  return union === 0 ? 0 : intersection / union
-}
+export const DEDUP_SIMILARITY_THRESHOLD = 0.15
 
 /** One existing entry projected to the fields the dedup prefilter needs. */
 export interface DedupCandidate {
@@ -98,8 +42,9 @@ export interface DedupCandidate {
 
 /**
  * Find the best near-duplicate among existing entries for a new candidate.
- * Returns the matching entry id when similarity exceeds the threshold, or
- * `undefined` when no existing entry is close enough (a genuine new memory).
+ * Returns the matching entry id when the IDF-weighted overlap exceeds the
+ * threshold, or `undefined` when no existing entry is close enough (a
+ * genuine new memory).
  *
  * Only entries in the *same scope* are compared — a project convention and a
  * user preference are never duplicates even if they share words.
@@ -107,23 +52,30 @@ export interface DedupCandidate {
  * @param candidateContent - the new memory content to check.
  * @param candidateScope - the scope of the new memory.
  * @param existing - all current entries from the store.
- * @param threshold - Jaccard similarity above which two entries are duplicates.
+ * @param threshold - weighted-overlap similarity above which two entries are
+ *   duplicates (defaults to {@link DEDUP_SIMILARITY_THRESHOLD}).
  * @returns the existing entry id to merge into, or `undefined` for a new entry.
  */
 export function findDuplicate(
   candidateContent: string,
   candidateScope: string,
   existing: readonly DedupCandidate[],
-  threshold: number = 0.15,
+  threshold: number = DEDUP_SIMILARITY_THRESHOLD,
 ): string | undefined {
-  const candidateTokens = tokenize(candidateContent)
+  if (existing.length === 0) return undefined
+  // The candidate list IS the corpus the IDF is measured over — at the
+  // prefilter's call sites it is the store's current entries, so per-token
+  // weights reflect what actually repeats in memory, and rebuilding the table
+  // per call stays O(corpus tokens), the same order as the comparisons below.
+  const stats = buildCorpusStats([candidateContent, ...existing.map(entry => entry.content)])
+  const candidateTokens = uniqueTokens(candidateContent)
   if (candidateTokens.size === 0) return undefined
 
   let bestId: string | undefined
   let bestScore = threshold
   for (const entry of existing) {
     if (entry.scope !== candidateScope) continue
-    const score = jaccardSimilarity(candidateTokens, tokenize(entry.content))
+    const score = weightedOverlapSimilarity(stats, candidateTokens, uniqueTokens(entry.content))
     if (score > bestScore) {
       bestScore = score
       bestId = entry.id

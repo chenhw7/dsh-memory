@@ -2,11 +2,12 @@
  * Cross-session consistency: conflict detection between stored memories and
  * current-session facts (§3.11, exploratory).
  *
- * This module provides a pure, dependency-free conflict detector that flags
- * stored entries whose content contradicts facts stated in the current
- * session. The detector uses a lightweight signal-based prefilter (no LLM):
- * when a stored entry and a current-session fact share significant token
- * overlap but assert opposing values, the entry is flagged as `conflicting`.
+ * This module provides a pure conflict detector that flags stored entries
+ * whose content contradicts facts stated in the current session. The detector
+ * uses a lightweight signal-based prefilter (no LLM): when a stored entry and
+ * a current-session fact share significant weighted token overlap (the shared
+ * bm25 tokenizer and IDF weighting) but assert opposing values, the entry is
+ * flagged as `conflicting`.
  *
  * The full LLM-judge integration (§3.11 done-when) is a future enhancement:
  * it would run an LLM call on flagged pairs at context assembly time, which
@@ -17,9 +18,8 @@
  * @module @chenhw7/dsh-memory/context/conflict
  */
 
-import type { MemoryEntry, MemoryCategory } from '../types.ts'
-import { tokenize } from '../review/dedup.ts'
-import { jaccardSimilarity } from '../review/dedup.ts'
+import type { MemoryEntry } from '../types.ts'
+import { buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from '../store/bm25.ts'
 
 /** The minimal entry shape the conflict machinery needs. */
 type ConflictEntry = Pick<MemoryEntry, 'id' | 'content' | 'lastRecalledAt' | 'category'>
@@ -53,43 +53,71 @@ const CONTRADICTION_SIGNALS = [
 ]
 
 /**
+ * IDF-weighted overlap at or above which a correction fact counts as touching
+ * the entry's topic (`stale` floor). Measured on the two-text corpus the
+ * detector builds (tests/conflict.spec.ts pins the pairs): a same-topic
+ * rewrite scores 0.21–0.44, the 「上海/海南」-class distractor pairs ~0.06, and
+ * a correction naming the replaced value (`npm` for `pnpm`) 0.11–0.13 — the
+ * corpus IDF downweights the shared frame, which used to float unrelated
+ * template pairs to the same Jaccard band as real rewrites. 0.1 keeps every
+ * same-topic pair and every replace-value correction above the line while
+ * distractor pairs stay ~2× below it. The old no-IDF Jaccard line was 0.15.
+ */
+const CONFLICT_STALE_THRESHOLD = 0.1
+
+/**
+ * IDF-weighted overlap at or above which an overlap plus an explicit
+ * contradiction signal word flags a hard `conflicting`. Set equal to the
+ * stale line: on the IDF metric the old 0.2-separation between the two
+ * statuses inverted — the strongest old `conflicting` pairs (a correction
+ * that REPLACES a value, e.g. `npm`→`pnpm`) now score 0.11–0.13, BELOW the
+ * bare-topic `stale` pairs at 0.21–0.44, because the corpus IDF downweights
+ * the shared frame those pairs repeat. Requiring a higher overlap for
+ * `conflicting` than for `stale` would therefore invert the semantics
+ * (value-replacing corrections read as `stale`, bare rewrites as
+ * `conflicting`); the signal word is already the discriminating evidence,
+ * so the status split rides on it alone. The old no-IDF Jaccard line was 0.2.
+ */
+const CONFLICT_CONTRADICTION_THRESHOLD = 0.1
+
+/**
  * Detect whether a stored entry conflicts with current-session facts.
  *
  * A conflict is flagged when:
  * 1. A session fact is a correction (isCorrection=true) AND
- * 2. The fact shares significant token overlap with the entry (Jaccard ≥ 0.2) AND
- * 3. The fact contains a contradiction signal word.
- *
- * `stale` is returned when an entry has not been recalled recently and a
- * correction-type fact touches the same topic — a softer signal than
- * `conflicting`.
+ * 2. The fact's IDF-weighted token overlap with the entry is at least
+ *    {@link CONFLICT_STALE_THRESHOLD} AND
+ * 3. The fact contains a contradiction signal word with overlap at least
+ *    {@link CONFLICT_CONTRADICTION_THRESHOLD} (hard `conflicting`), or the
+ *    overlap alone is enough for the softer same-topic `stale`.
  */
 export function detectConflict(
   entry: ConflictEntry,
   facts: readonly SessionFact[],
 ): ConflictResult {
-  const entryTokens = tokenize(entry.content)
+  const entryTokens = uniqueTokens(entry.content)
 
   for (const fact of facts) {
     if (!fact.isCorrection) continue
 
-    const factTokens = tokenize(fact.text)
-    const similarity = jaccardSimilarity(entryTokens, factTokens)
+    const factTokens = uniqueTokens(fact.text)
+    // The entry + its facts form the corpus: IDF downweights function words
+    // shared by every pair, content words carry the similarity.
+    const stats = buildCorpusStats([entry.content, ...facts.map(f => f.text)])
+    const similarity = weightedOverlapSimilarity(stats, entryTokens, factTokens)
 
-    if (similarity < 0.15) continue
+    if (similarity < CONFLICT_STALE_THRESHOLD) continue
 
     // Check for contradiction signals in the fact text.
     const lowerFact = fact.text.toLowerCase()
     const hasSignal = CONTRADICTION_SIGNALS.some(sig => lowerFact.includes(sig))
 
-    if (hasSignal && similarity >= 0.2) {
+    if (hasSignal && similarity >= CONFLICT_CONTRADICTION_THRESHOLD) {
       return { entryId: entry.id as string, status: 'conflicting', conflictingFact: fact.text }
     }
 
     // Softer: correction touches the same topic but no explicit contradiction signal.
-    if (similarity >= 0.15) {
-      return { entryId: entry.id as string, status: 'stale', conflictingFact: fact.text }
-    }
+    return { entryId: entry.id as string, status: 'stale', conflictingFact: fact.text }
   }
 
   return { entryId: entry.id as string, status: 'fresh' }

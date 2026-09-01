@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tokenizeForSearch, Bm25Index, rankTexts } from '../src/store/bm25.ts'
+import { tokenizeForSearch, Bm25Index, rankTexts, buildCorpusStats, idfOf } from '../src/store/bm25.ts'
 
 describe('tokenizeForSearch', () => {
   it('splits Latin runs into lowercase word tokens', () => {
@@ -59,6 +59,32 @@ describe('Bm25Index', () => {
     // A ubiquitous term still scores ≥ 0 but strictly less than a rare one.
     expect(scores[0]).toBeGreaterThanOrEqual(0)
     expect(uniqueScores[0]).toBeGreaterThan(scores[0]!)
+  })
+
+  it('ACCEPTANCE: a small candidate pool cannot inflate a common term when full-corpus stats are injected', () => {
+    // Corpus: 8 documents, a pure function particle ('的') in all 8, a content
+    // bigram ('记忆') in 4. The filtered pool holds only 3 of them.
+    const corpus = [
+      '记忆的持久化', '记忆的检索', '记忆的注入', '记忆的衰减',
+      '条目的折叠', '条目的排序', '条目的导出', '条目的合并',
+    ]
+    const stats = buildCorpusStats(corpus)
+    expect(stats.documentCount).toBe(8)
+    expect(stats.documentFrequency('的')).toBe(8)
+    // Full-corpus idf for the particle is near zero…
+    const particleIdf = idfOf(stats, '的')
+    expect(particleIdf).toBeLessThan(0.1)
+    // …while pool-local measurement over the 3-doc subset inflates it >2×.
+    const poolStats = buildCorpusStats([corpus[0]!, corpus[1]!, corpus[4]!])
+    expect(idfOf(poolStats, '的')).toBeGreaterThan(particleIdf * 2)
+    // End to end: scoring the 3-doc pool WITH full-corpus stats weights the
+    // content bigram strictly above the ubiquitous particle — under pool-local
+    // stats the particle's idf would approach the content term's.
+    const pool = [corpus[0]!, corpus[1]!, corpus[4]!]
+    const contentIdf = idfOf(stats, '记忆')
+    expect(contentIdf).toBeGreaterThan(particleIdf * 5)
+    const withCorpus = new Bm25Index(pool.map(c => tokenizeForSearch(c)), stats).scores(tokenizeForSearch('记忆'))
+    expect(withCorpus[0]).toBeGreaterThan(0)
   })
 })
 

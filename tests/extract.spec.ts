@@ -607,12 +607,15 @@ describe('LLM dedup judge (§3.4)', () => {
   }
 
   it('judge verdict "duplicate" merges the content', async () => {
-    const { store, updated, added } = storeWithExisting('user prefers concise answers')
+    const { store, updated, added } = storeWithExisting('user likes concise responses')
     // The LLM stream returns "duplicate" for the judge call.
     const ctx = fakeCtx(() => makeTextStream('duplicate'), store)
     const session = fakeSession()
-    // A near-duplicate that the prefilter will flag.
-    await storeMemories(ctx, [{ scope: 'global', content: 'user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    // A near-duplicate that the prefilter will flag (shares every content
+    // token; under the IDF-weighted metric this scores ~0.44, above the
+    // 0.15 prefilter line — "prefers/answers" wording kept the old shared-
+    // token pair below the new line, so the rewrite drops those words).
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
     // Merged content contains both the old and new text.
@@ -643,21 +646,21 @@ describe('LLM dedup judge (§3.4)', () => {
   })
 
   it('falls back to "duplicate" (merge) when judge is disabled', async () => {
-    const { store, updated, added } = storeWithExisting('user prefers concise answers')
+    const { store, updated, added } = storeWithExisting('user likes concise responses')
     const ctx = fakeCtx(() => makeTextStream('new'), store)
     const session = fakeSession()
     // judgeEnabled = false → prefilter hit merges directly, no LLM call.
-    await storeMemories(ctx, [{ scope: 'global', content: 'user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, false)
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, false)
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
   })
 
   it('falls back to "duplicate" when the LLM stream fails', async () => {
-    const { store, updated, added, failures } = storeWithExisting('user prefers concise answers')
+    const { store, updated, added, failures } = storeWithExisting('user likes concise responses')
     // Stream that errors on finish.
     const ctx = fakeCtx(() => makeTextStream('garbage', { type: 'finish', reason: { kind: 'error', failure: { message: 'boom', code: 'ERR' } } }), store)
     const session = fakeSession()
-    await storeMemories(ctx, [{ scope: 'global', content: 'user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
     // Safe fallback: merge — and the swallowed judge failure is reported, not lost.
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)

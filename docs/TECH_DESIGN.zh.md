@@ -441,9 +441,9 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 #### 7.3.7 去重管线（`src/review/dedup.ts`）
 
 1. **预过滤（无 embedding）：**
-   - `tokenize(content)`：小写化；Latin 词元剔除英文停用词与单字符；CJK 逐字剔除精选停用字集合（的/了/是/这/… 等高频语法成分——它们会让无关中文句子虚高相似度）。返回去重 token `Set`。
-   - `jaccardSimilarity(a, b)`：`|A ∩ B| / |A ∪ B|`。
-   - `findDuplicate(candidate, scope, existing, threshold = 0.15)`：仅同作用域比较；返回超阈值的最佳匹配条目 id 或 `undefined`。
+   - `uniqueTokens(text)`：复用 BM25 的 `tokenizeForSearch` 分词（Latin 词元 + CJK 字 + 相邻 bigram，与检索同一套，无独立停用表），返回唯一 token `Set`。
+   - `weightedOverlapSimilarity(stats, a, b)`：IDF 加权重叠度 `Σidf(交集) / Σidf(并集)`——IDF 由共享的 `buildCorpusStats` 在参与比较的文本上统计（非负 Robertson/Sparck-Jones），高频语法成分的权重自然趋零，无需手写停用表。
+   - `findDuplicate(candidate, scope, existing)`：仅同作用域比较；返回超过 `DEDUP_SIMILARITY_THRESHOLD`（0.15）的最佳匹配条目 id 或 `undefined`。
 2. **LLM judge（可选）：**
    - `JUDGE_SYSTEM_PROMPT`：单词协议——`duplicate`（同一事实换个说法 → 保留既有）、`update`（修正/更精确 → 替换）、`new`（碰巧共享词语的不同事实 → 两者都留）。
    - `parseJudgeVerdict(text)`：小写、修剪、匹配三个词；无法识别一律回退 `duplicate`（宁可合并不可制造伪重复）。
