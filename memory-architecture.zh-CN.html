@@ -187,7 +187,7 @@ figcaption{margin-top:14px;font-size:13px;color:var(--faint);letter-spacing:.04e
 .gate.bad .ic{border-color:var(--red);box-shadow:0 0 18px rgba(224,96,74,.4);background:rgba(224,96,74,.08);animation:shake .5s}
 .gate.bad .gt{color:var(--red)}
 @keyframes shake{20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
-.chip{position:absolute;top:33px;left:8%;width:66px;z-index:5;transition:left 1.05s cubic-bezier(.5,0,.3,1)}
+.chip{position:absolute;top:33px;left:8%;width:66px;z-index:5;transition:left 1.05s cubic-bezier(.5,0,.3,1),top 1.05s cubic-bezier(.5,0,.3,1)}
 .chip .payload{font-family:var(--mono);font-size:10px;background:#241f15;border:1px solid var(--amber);color:var(--amber-hi);border-radius:8px;padding:6px 8px;text-align:center;box-shadow:0 0 16px rgba(232,168,62,.35);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip.evil .payload{border-color:var(--red);color:#ffb0a0;box-shadow:0 0 16px rgba(224,96,74,.35)}
 .gate-btns{display:flex;gap:12px;margin:26px 0 6px;flex-wrap:wrap}
@@ -314,11 +314,72 @@ footer p{font-size:12.5px;color:var(--faint);margin-top:8px;max-width:420px;line
 footer .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);line-height:2.1;text-align:right}
 footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10px;margin-bottom:6px}
 
+/* ── 移动端适配（≤900px 箭头转向 / ≤760px 主断点 / ≤520px 收尾） ── */
+@keyframes hint2v{50%{transform:rotate(90deg) translateX(6px)}}
+/* defense 卡片 ≤900px 已单列：箭头数组旋转为纵向 */
+@media(max-width:900px){.def-arrow{animation-name:hint2v}}
+
 @media(max-width:760px){
-  .wrap{padding:0 22px}
-  .sec-num{font-size:56px}
-  section{padding:90px 0 60px}
-  .hstat{padding-right:24px;margin-right:24px}
+  body{font-size:15.5px}
+  .wrap{padding:0 20px}
+  section{padding:84px 0 56px}
+  .kicker{font-size:11px}
+  .sec-head{flex-wrap:wrap;gap:10px 18px;margin-bottom:10px}
+  .sec-num{font-size:50px}
+  .sec-sub{font-size:15.5px;margin-bottom:34px}
+  p.lede{font-size:17px}
+  /* hero：计数卡两列，canvas 光核随 JS 移回画面中心 */
+  .hero-stats{display:grid;grid-template-columns:1fr 1fr;gap:22px 16px;margin-top:52px}
+  .hstat{padding:0;margin:0;border-right:none}
+  .hstat b{font-size:32px}
+  .hstat b i{font-size:17px}
+  a.gh-corner{width:44px;height:44px;top:12px;right:14px}
+  .fig-panel{padding:22px 16px;border-radius:14px}
+  figcaption{font-size:12px}
+  .formula{font-size:12px;padding:12px 14px}
+  /* FIG.2 写入闸门：竖排流动；连接线改为贯穿图标列的竖线，chip 沿纵轴移动（见 JS setChip） */
+  .gates{position:relative;flex-direction:column;gap:44px;align-items:stretch;margin:30px auto 8px}
+  .gates::before{content:"";position:absolute;left:29px;top:26px;bottom:26px;width:1px;background:var(--line2);z-index:1}
+  .gate{min-height:52px;padding:0 8px 0 72px;text-align:left;display:flex;flex-direction:column;justify-content:center}
+  .gate::before{display:none}
+  .gate .ic{position:absolute;left:8px;top:50%;transform:translateY(-50%);margin:0;width:44px;height:44px;font-size:19px;z-index:2}
+  .gate-btns{margin:22px 0 4px}
+  .gate-btns .btn{flex:1 1 100%;text-align:center}
+  .gate-log{font-size:11px}
+  /* FIG.0 环路图：节点收缩防 390px 视口越界 */
+  .loop-node{width:104px;margin-left:-52px}
+  .loop-node .dot{width:10px;height:10px;margin-bottom:5px}
+  .loop-node .lb{font-size:11.5px}
+  .loop-node .sb{font-size:9px}
+  .loop-core b{font-size:15px}
+  .loop-core span{font-size:9px}
+  /* 代码向内容：内部横向滚动，不顶破版面 */
+  .anat-card{font-size:12px;padding:16px 18px;overflow-x:auto;line-height:1.9}
+  .anat-item{align-items:flex-start;line-height:1.6}
+  .mode-view{font-size:11.5px;padding:16px 14px;min-height:0}
+  /* FIG.1 双栏演示头部允许换行 */
+  .sim-head{flex-wrap:wrap;gap:6px}
+  /* 检索演示：字号保持 16px 防 iOS 聚焦自动缩放 */
+  .bm-query{font-size:16px;padding:12px 14px}
+  .bm-row{grid-template-columns:22px 1fr 58px;gap:10px;padding:10px 12px}
+  .bm-row .tx{font-size:12.5px}
+  .bm-row .sc{font-size:11px}
+  .bm-stamp{display:block;margin-left:0;font-size:9.5px}
+  /* 待确认队列：要点挤到下一行 */
+  .q-row{grid-template-columns:44px 1fr;gap:10px;padding:11px 12px}
+  .q-row .qa{grid-column:1/-1;justify-content:flex-end}
+  .life-now{font-size:40px}
+  .life-days{font-size:10px}
+  footer .src{text-align:left;margin-top:28px}
+}
+
+@media(max-width:520px){
+  .mode-btn{font-size:12px;padding:8px 13px;letter-spacing:0}
+  .sig-card{padding:22px 18px}
+  .tbl{padding:16px}
+  .creed div{padding:26px 20px}
+  .creed b{font-size:19px}
+  .bm-chip{font-size:11px;padding:6px 12px}
 }
 </style>
 </head>
@@ -704,7 +765,7 @@ setTimeout(()=>{if(!document.querySelector('.rv.in'))document.querySelectorAll('
 (function(){
 const cv=document.getElementById('heroCanvas'),cx=cv.getContext('2d');
 let W,H,ps=[],core={x:0,y:0};
-function rs(){W=cv.width=cv.offsetWidth*devicePixelRatio;H=cv.height=cv.offsetHeight*devicePixelRatio;cx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);core={x:cv.offsetWidth*.76,y:cv.offsetHeight*.42}}
+function rs(){W=cv.width=cv.offsetWidth*devicePixelRatio;H=cv.height=cv.offsetHeight*devicePixelRatio;cx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);const w=cv.offsetWidth;core={x:w*(w<760?.5:.76),y:cv.offsetHeight*.42}}
 rs();addEventListener('resize',rs);
 const N=90;
 for(let i=0;i<N;i++)ps.push({x:Math.random()*2000,y:Math.random()*1200,vx:.12+Math.random()*.3,vy:(Math.random()-.5)*.14,r:1+Math.random()*1.8,c:Math.random()<.82?'232,168,62':'78,201,176',a:.15+Math.random()*.5,ph:Math.random()*6.28});
@@ -867,15 +928,26 @@ const chip=document.getElementById('chip'),payload=document.getElementById('payl
       bC=document.getElementById('runClean'),bE=document.getElementById('runEvil');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let seq=42,busy=false;
-const pos=['9.5%','34.5%','59.5%','84.5%'];
+const gatesHost=document.getElementById('gates');
+const POS=['9.5%','34.5%','59.5%','84.5%'];
+const isNarrow=()=>matchMedia('(max-width:760px)').matches;
+// chip 位置改为按 gate 元素实测：桌面沿横线左移，≤760px 竖排时沿纵线下移——
+// 断点切换、字体差异、滚动期间触发都不会让轨道漂移。
+function setChip(i){
+  if(isNarrow()){
+    const host=gatesHost.getBoundingClientRect(),r=gates[i].getBoundingClientRect();
+    chip.style.left='-3px';
+    chip.style.top=(r.top+r.height/2-host.top-chip.offsetHeight/2)+'px';
+  }else{chip.style.left=POS[i];chip.style.top='33px'}
+}
 function reset(){gates.forEach(g=>g.classList.remove('ok','bad'))}
 async function run(evil){
   if(busy)return;busy=true;bC.disabled=bE.disabled=true;reset();
   chip.classList.toggle('evil',evil);
   payload.textContent=evil?'sk-ant-api03…':'user: 偏好逐条评审';
-  chip.style.left=pos[0];log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
+  setChip(0);log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
   await sleep(900);
-  gates[0].classList.add('ok');chip.style.left=pos[1];
+  gates[0].classList.add('ok');setChip(1);
   log.innerHTML='// scanContent：扫描 37 条模式 …';
   await sleep(1100);
   if(evil){
@@ -883,10 +955,10 @@ async function run(evil){
     log.innerHTML='<span class="err">✗ secret: Anthropic API key — 内容被扫描器拒绝，永不落库</span>';
     await sleep(1600);
   }else{
-    gates[1].classList.add('ok');chip.style.left=pos[2];
+    gates[1].classList.add('ok');setChip(2);
     log.innerHTML='// scanContent ✓ → entries.put(mem_7a41…)';
     await sleep(1000);
-    gates[2].classList.add('ok');chip.style.left=pos[3];
+    gates[2].classList.add('ok');setChip(3);
     const row=document.createElement('div');row.className='ms-row';
     row.textContent='entry mem_7a41… · user/preference · "代码评审意见必须逐条给出理由"';
     store.prepend(row);
@@ -898,7 +970,7 @@ async function run(evil){
     log.innerHTML='<span class="ok">✓ 落库完成，审计追加（seq 单调递增，cap 200 滚动）</span>';
     await sleep(1600);
   }
-  chip.style.left=pos[0];busy=false;bC.disabled=bE.disabled=false;
+  setChip(0);busy=false;bC.disabled=bE.disabled=false;
 }
 bC.onclick=()=>run(false);bE.onclick=()=>run(true);
 })();
