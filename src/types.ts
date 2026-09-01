@@ -110,7 +110,7 @@ export interface MemorySearchQuery {
   readonly category?: MemoryCategory
   /** Restrict `project`-scoped entries to this project name. */
   readonly projectName?: string
-  /** Substring search over entry content (case-insensitive). */
+  /** Relevance-ranked keyword search over entry content: case-insensitive whole-token matching, not substrings. */
   readonly query?: string
   /** Maximum results to return. */
   readonly limit?: number

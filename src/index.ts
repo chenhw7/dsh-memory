@@ -110,7 +110,9 @@ export abstract class MemoryStore {
   abstract remove(id: MemoryId): Promise<boolean>
 
   /**
-   * Search entries by scope, category, project, and substring.
+   * Search entries by scope, category, project, and a text query. The text
+   * matching algorithm is implementation-defined; `DomainMemoryStore` ranks by
+   * BM25 relevance over whole tokens.
    * @param query - The search parameters. When `query.recordRecall` is false
    * the read must not count as a recall: no `lastRecalledAt` stamping and no
    * dormant revival (the management UI browses through this flag).

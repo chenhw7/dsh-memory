@@ -81,4 +81,10 @@ describe('rankTexts (store search seam)', () => {
     expect(scores[1]).toBeGreaterThan(0)
     expect(scores[2]).toBe(0)
   })
+
+  // Pins the semantics the memory_search query description promises to the model.
+  it('does not match a substring of a Latin token', () => {
+    expect(rankTexts('ython', ['we write python scripts'])[0]).toBe(0)
+    expect(rankTexts('python', ['we write python scripts'])[0]).toBeGreaterThan(0)
+  })
 })

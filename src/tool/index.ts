@@ -240,7 +240,7 @@ export function apply(ctx: Context, config: Config): void {
       scope: { type: 'string', enum: [...SCOPES], description: 'Restrict to entries matching this scope.' },
       category: { type: 'string', enum: [...CATEGORIES], description: 'Restrict to entries matching this category.' },
       projectName: { type: 'string', description: 'Restrict project-scoped entries to this project name.' },
-      query: { type: 'string', description: 'Substring search over entry content (case-insensitive).' },
+      query: { type: 'string', description: 'Relevance-ranked keyword search over entry content. Matches whole tokens case-insensitively, not substrings; any one query token is enough to match, so extra words broaden the results rather than narrowing them.' },
       limit: { type: 'integer', description: 'Maximum results to return; defaults to the deployment cap.' },
     },
     output: {

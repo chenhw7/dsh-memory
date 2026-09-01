@@ -155,6 +155,16 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       await fiber.dispose()
       expect(ctx.tools.schemas().some(s => s.name === 'memory_add')).toBe(false)
     })
+
+    // Model-visible wording: it steers how queries are built, so it must not promise
+    // substring matching, which the BM25 plane does not implement (see tests/bm25.spec.ts).
+    it('describes memory_search query as whole-token matching, not substring', async () => {
+      const { ctx } = await setup()
+      const schema = ctx.tools.schemas().find(s => s.name === 'memory_search')!
+      const { properties } = schema.parameters as { properties: Record<string, { description?: string }> }
+      expect(properties.query?.description ?? '').toMatch(/not substrings/)
+      expect(properties.query?.description ?? '').not.toMatch(/substring search/i)
+    })
   })
 
   describe('memory_add', () => {
