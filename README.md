@@ -34,7 +34,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 
 - **Persistent memory** — facts, preferences, and conventions stored in a durable KV backend with audit logging.
 - **Three-layer scoping** — `global` (cross-project), `project` (per-repo, auto-detected), and `user` (cross-project profile).
-- **Eight model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`.
+- **Nine model-facing tools** — `memory_search`, `memory_add`, `memory_replace`, `memory_remove`, `memory_list`, `memory_get`, `memory_pin`, `memory_unpin`, `memory_forget`.
 - **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches. Retrieval quality is not vibes: a fixed golden set (35 entries × 35 query sets, English + Chinese) is evaluated in CI — success@5 = 100%, MRR = 0.902 — with injection-cost numbers per prompt mode (see [TECH_DESIGN §7.9](docs/TECH_DESIGN.md)).
 - **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate. Admission rules exclude anything the repository already records (code structure, git history, fixed-bug narratives), and model-handwritten date prefixes are stripped so timestamps always come from the program.
 - **Project notes prompt section** — coding conventions and a pitfall log render into every session's system prompt (`project-notes` section). Nothing is written into your repository: memory lives entirely in the host-side store, is managed in the Memory settings UI, and upgrades automatically clean up notes files left by ≤0.5.x installs.
@@ -341,7 +341,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
 | `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue tables), registers `ctx.memory` (BM25 search + two-tier decay) |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (confirm-mode writes queue as proposals) |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (confirm-mode writes queue as proposals) |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection (render conventions/pitfalls into the `project-notes` section; no repo files), registers `ctx.projectNotes`; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |

@@ -31,7 +31,7 @@
 
 - **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
-- **八个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`。
+- **九个模型可用工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`、`memory_forget`。
 - **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（35 条 × 35 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.902——并附各注入模式的成本数字（见 [TECH_DESIGN §7.9](docs/TECH_DESIGN.zh.md)）。
 - **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。准入规则排除一切"仓库已记录的内容"（代码结构、git 历史、已修复 bug 的经过），模型手写的日期前缀会被剥离，时间戳永远由程序盖戳。
 - **项目笔记 prompt 段落** — 编码约定与踩坑日志渲染进每次会话的 system prompt（`project-notes` 段）。不向仓库写入任何文件：记忆完全保存在 host 侧存储中，在 Memory 设置 UI 里管理；升级时自动清理 ≤0.5.x 留下的笔记文件。
@@ -338,7 +338,7 @@ memory:
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
 | `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列三张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（人审模式下写入改为入队） |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（人审模式下写入改为入队） |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator + 人审队列），持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影（渲染约定/踩坑进 `project-notes` 段落；0.6 起不写仓库文件），注册 `ctx.projectNotes`；会话创建时清理 ≤0.5.x 的文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @90 + `project-notes` @91）、步级自动召回，持有 `memory` 设置命名空间 |

@@ -20,7 +20,7 @@
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
 | `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + **建议队列** 三张表） |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | 八个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin/forget`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + 去重 + janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
@@ -358,6 +358,7 @@ interface MemorySuggestion {
 | `memory_get` | `id`, `raw?` | `{ entry?, found }` | 读取即盖 `lastRecalledAt` 戳（避免读到一半就被衰减）；`raw: true` 返回未脱敏原文（破窗修复路径，每次调用记一条 `readRaw` 审计） |
 | `memory_pin` | `id` | `{ pinned }` | id 不存在 → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | id 不存在 → `unpinned: false` |
+| `memory_forget` | `topic`, `scope?`, `category?`, `projectName?`, `confirm` | `{ removedCount, removedIds, pinnedSkipped? }` | **危险批量删除**——按 BM25 词法匹配（content 与 summary，含休眠条目）删除主题相关条目；无 `confirm: true` 拒绝；pinned 条目永不删除（经 `pinnedSkipped` 报告）；批量超过搜索上限一半拒绝（失控护栏）；每条删除独立记一条 `remove` 审计 |
 
 设计要点：
 

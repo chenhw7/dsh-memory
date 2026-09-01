@@ -20,7 +20,7 @@
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
 | `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + **suggestion-queue** tables) |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | Eight model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
+| `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin/forget`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + dedup + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6 — [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt sections (`memory` @90, `project-notes` @91) + step-level auto-recall middleware; owns the `memory` settings namespace |
@@ -358,6 +358,7 @@ Eight tools registered through `defineTool` (schemastery-parameter schemas), eac
 | `memory_get` | `id`, `raw?` | `{ entry?, found }` | reading stamps `lastRecalledAt` (keeps read entries out of decay); `raw: true` returns the unredacted text (break-glass repair path; each call logs one `readRaw` audit record) |
 | `memory_pin` | `id` | `{ pinned }` | absent id → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | absent id → `unpinned: false` |
+| `memory_forget` | `topic`, `scope?`, `category?`, `projectName?`, `confirm` | `{ removedCount, removedIds, pinnedSkipped? }` | **DANGEROUS batch delete** — removes every entry lexically related to the topic (BM25 token match over content AND summaries, stale included); refuses without `confirm: true`, never touches pinned entries (reported via `pinnedSkipped`), refuses batches above half the search ceiling, and logs one `remove` audit per entry |
 
 Design notes:
 
