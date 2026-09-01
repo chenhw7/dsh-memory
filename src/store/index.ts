@@ -210,6 +210,10 @@ export class DomainMemoryStore extends MemoryStore {
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
     }
+    const summaryScan = scanContent(input.summary ?? '')
+    if (!summaryScan.allowed) {
+      throw new Error(`memory summary rejected by scanner: ${summaryScan.reasons.join('; ')}`)
+    }
     const now = Date.now()
     const id = MemoryId()
     const entry: MemoryEntry = {
@@ -249,6 +253,12 @@ export class DomainMemoryStore extends MemoryStore {
     const scan = scanContent(newContent)
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    // Scans only what this call writes: an entry stored before summary scanning
+    // existed stays updatable, so its summary can still be repaired or cleared.
+    const summaryScan = scanContent(input.summary ?? '')
+    if (!summaryScan.allowed) {
+      throw new Error(`memory summary rejected by scanner: ${summaryScan.reasons.join('; ')}`)
     }
     // summary semantics: `undefined` = keep existing; `''` = explicitly clear;
     // a non-empty string = replace. Build the updated entry accordingly.
@@ -361,7 +371,7 @@ export class DomainMemoryStore extends MemoryStore {
    * `hits: 1`.
    * @param input - the proposal to record.
    * @returns the stored suggestion (existing row updated, or newly created).
-   * @throws when the proposed content fails validation or the scanner.
+   * @throws when the proposed content or summary fails validation or the scanner.
    */
   override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
     validateProjectScope({ ...input, projectName: input.projectName ?? (input.targetEntryId !== undefined ? this.entries.get(input.targetEntryId)?.projectName : undefined) })
@@ -369,6 +379,10 @@ export class DomainMemoryStore extends MemoryStore {
     const scan = scanContent(input.content)
     if (!scan.allowed) {
       throw new Error(`suggestion content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const summaryScan = scanContent(input.summary ?? '')
+    if (!summaryScan.allowed) {
+      throw new Error(`suggestion summary rejected by scanner: ${summaryScan.reasons.join('; ')}`)
     }
     const now = Date.now()
     // Match against existing proposals: same target entry wins outright;
