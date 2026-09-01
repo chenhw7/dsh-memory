@@ -445,3 +445,86 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
     expect(final.accessCount).toBe(2)
   })
 })
+
+// janitor-pin-toctou: the janitor's pin exemption must be decided on the
+// record current at its write-chain slot, not on the iteration snapshot —
+// a pin that lands between the snapshot pass and the write must win over
+// the delete/stamp, exactly like the stampRecalled discipline above.
+describe('janitor-pin-toctou (DomainMemoryStore)', () => {
+  const day = 24 * 60 * 60 * 1000
+  const decayDays = 30
+
+  /**
+   * countingTable variant whose update transform can be hooked: each
+   * `beforeUpdate` runs inside the transform, before the janitor's own
+   * check — the stand-in for "another caller pinned it first in the
+   * write chain".
+   */
+  function interceptingTable<K extends string, V>() {
+    const map = new Map<K, V>()
+    let beforeUpdate: ((key: K) => void) | undefined
+    const table = {
+      get: (key: K) => map.get(key),
+      entries: () => map.entries(),
+      keys: () => map.keys(),
+      get size() { return map.size },
+      put: async (key: K, value: V) => { map.set(key, value) },
+      update: async (key: K, fn: (current: V) => V) => {
+        // The hook runs first and mutates the map synchronously (the
+        // concurrent caller's write already landed); the transform then reads
+        // the record current at its chain slot, like the real KvTable.
+        beforeUpdate?.(key)
+        const cur = map.get(key)
+        if (cur === undefined) throw new Error(`no record '${String(key)}' to update`)
+        const next = fn(cur)
+        map.set(key, next)
+        return next
+      },
+      delete: async (key: K) => map.delete(key),
+    }
+    return { table: table as KvTable<K, V>, setHook: (fn: (key: K) => void) => { beforeUpdate = fn } }
+  }
+
+  it('a pin landing between the snapshot and the soft-decay stamp keeps the entry unstamped', async () => {
+    const entries = interceptingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'pin me before decay' })
+
+    // The concurrent pin lands inside the janitor's own write-chain slot,
+    // before its transform runs — the stamp must observe pinned and skip.
+    entries.setHook(key => { store.pin(key) })
+    await store.janitor(decayDays, Date.now() + decayDays * day)
+
+    const survivor = store.get(entry.id)!
+    expect(survivor.pinned).toBe(true)
+    expect(survivor.staleSince).toBeUndefined()
+    expect(store.listAudit().filter(r => r.source === 'janitor')).toHaveLength(0)
+  })
+
+  it('a pin landing between the snapshot and the hard-decay guard keeps a project entry', async () => {
+    const entries = interceptingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const { entry } = await store.add({ scope: 'project', content: 'pinned project fact', projectName: 'demo' })
+
+    entries.setHook(key => { store.pin(key) })
+    const removed = await store.janitor(decayDays, Date.now() + decayDays * day)
+
+    expect(removed).toBe(0)
+    const survivor = store.get(entry.id)!
+    expect(survivor.pinned).toBe(true)
+    expect(store.listAudit().filter(r => r.op === 'remove' && r.source === 'janitor')).toHaveLength(0)
+  })
+
+  it('an unpinned overdue global entry is still soft-decayed through the update slot', async () => {
+    const entries = interceptingTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'decay me normally' })
+
+    entries.setHook(() => { /* no concurrent pin this time */ })
+    const overdue = Date.now() + decayDays * day
+    await store.janitor(decayDays, overdue)
+
+    const stamped = store.get(entry.id)!
+    expect(stamped.staleSince).toBe(overdue)
+  })
+})

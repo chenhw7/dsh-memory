@@ -612,6 +612,10 @@ export class DomainMemoryStore extends MemoryStore {
    * - `global`/`user` entries overdue (pinned exempt) are soft-decayed: the
    *   first overdue pass stamps `staleSince`, which hides them from injection
    *   surfaces while keeping them searchable; a later recall clears the stamp.
+   * The snapshot iteration is only a pre-filter: every delete and stamp
+   * re-decides on the record current at its write-chain slot (the same
+   * atomic RMW discipline as `stampRecalled`), so a pin landing between the
+   * snapshot and the write is honored.
    * @param decayDays - days without recall before the policy applies.
    * @param now - evaluation clock; defaults to wall time (tests inject fixed clocks).
    * @returns the number of project entries removed.
@@ -620,31 +624,75 @@ export class DomainMemoryStore extends MemoryStore {
     if (decayDays <= 0) return 0
     const decayMs = decayDays * 24 * 60 * 60 * 1000
     let removed = 0
-    for (const [, entry] of this.entries.entries()) {
-      if (entry.pinned === true) continue
-      // Use lastRecalledAt if available, otherwise fall back to createdAt.
-      const lastActive = entry.lastRecalledAt ?? entry.createdAt
+    for (const [, snapshot] of this.entries.entries()) {
+      if (snapshot.pinned === true) continue
+      // Snapshot pass is a cheap pre-filter only: every decision below is
+      // re-made on the record current at its write-chain slot, so a pin that
+      // lands between this iteration and the write is still honored.
+      const lastActive = snapshot.lastRecalledAt ?? snapshot.createdAt
       if (now - lastActive < decayMs) continue
-      if (entry.scope === 'project') {
-        // Hard decay: remove and log to the audit store.
-        const didRemove = await this.entries.delete(entry.id)
+      if (snapshot.scope === 'project') {
+        // Hard decay: KvTable.update cannot express delete, so the pinned
+        // re-check runs as a guard update (returning `current` unchanged —
+        // one empty write) and only an unpinned result reaches the delete.
+        // Residual TOCTOU window: a pin landing AFTER the guard's chain slot
+        // but BEFORE the delete is not observed; the single-process write
+        // chain serializes these two calls, but nothing narrower than
+        // "guard → delete" exists on KvTable to close the gap. Covered by
+        // the janitor-pin-toctou contract test.
+        let pinnedAtSlot = false
+        try {
+          await this.entries.update(snapshot.id, current => {
+            pinnedAtSlot = current.pinned === true
+            return current
+          })
+        } catch (error) {
+          // A missing id means the entry was removed by another caller
+          // between the snapshot and this guard — nothing left to decay.
+          if (error instanceof Error && !error.message.includes('no record')) {
+            this.reportFailure('janitor', error)
+          }
+        }
+        if (pinnedAtSlot) continue
+        const didRemove = await this.entries.delete(snapshot.id)
         if (didRemove) {
           removed++
-          await this.appendAudit('remove', entry.id, entry, 'janitor', undefined)
+          await this.appendAudit('remove', snapshot.id, snapshot, 'janitor', undefined)
         }
         continue
       }
-      // global/user: soft decay only — stamp once, never auto-delete. A
-      // model-assessed importance of 4–5 extends the grace window 1.5×: a
-      // "this matters" judgment should survive a longer quiet period, while
-      // low or unassessed entries keep the plain clock. Recall (accessCount)
-      // stays the stronger signal — it clears decay outright via stampRecalled.
-      const graceFactor = entry.importance !== undefined && entry.importance >= 4 ? 1.5 : 1
-      if (now - lastActive < decayMs * graceFactor) continue
-      if (entry.staleSince !== undefined) continue
-      const stamped: MemoryEntry = { ...entry, staleSince: now }
-      await this.entries.put(entry.id, stamped)
-      await this.appendAudit('update', entry.id, stamped, 'janitor', undefined)
+      // global/user: soft decay only — stamp once, never auto-delete. The
+      // whole decision re-runs on the record current at its chain slot, so
+      // the stamp is atomic: a pin or a fresh recall that lands between the
+      // snapshot and here skips it, and an already-stamped entry is left
+      // untouched. A model-assessed importance of 4–5 extends the grace
+      // window 1.5×: a "this matters" judgment should survive a longer quiet
+      // period, while low or unassessed entries keep the plain clock. Recall
+      // (accessCount) stays the stronger signal — it clears decay outright
+      // via stampRecalled.
+      let didStamp = false
+      let stamped: MemoryEntry | undefined
+      try {
+        stamped = await this.entries.update(snapshot.id, current => {
+          const lastActiveNow = current.lastRecalledAt ?? current.createdAt
+          if (now - lastActiveNow < decayMs) return current
+          const graceFactor = current.importance !== undefined && current.importance >= 4 ? 1.5 : 1
+          if (now - lastActiveNow < decayMs * graceFactor) return current
+          if (current.pinned === true) return current
+          if (current.staleSince !== undefined) return current
+          didStamp = true
+          return { ...current, staleSince: now }
+        })
+      } catch (error) {
+        // A missing id (entry removed between the snapshot and this slot) or
+        // a domain going away mid-pass is a normal end of life for a stamp.
+        if (error instanceof Error && !error.message.includes('no record')) {
+          this.reportFailure('janitor', error)
+        }
+      }
+      if (didStamp && stamped !== undefined) {
+        await this.appendAudit('update', snapshot.id, stamped, 'janitor', undefined)
+      }
     }
     return removed
   }
