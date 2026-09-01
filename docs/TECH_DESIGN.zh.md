@@ -470,7 +470,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`policy-only`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
+| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
 
 两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
@@ -616,7 +616,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 - **Golden 夹具：** `GOLDEN_ENTRIES` —— 35 条跨三个作用域的条目：原 24 条主题互不重叠（12 英文 / 6 中文 / 6 混合，故意放了几枚诱饵词元——两条条目共享 端口/port），加同义改写切片（查询词只出现在条目 summary 里，含双语镜像条目）与词形变化切片——以及 `GOLDEN_CASES` —— 35 组 查询→相关 id 对。
 - **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 82.9%、MRR = 0.902（P@1 被同义切片引入的同主题多条 summary 候选稀释；原 24 条基线为 P@1 91.7% / MRR 0.958）。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
-- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——默认档决策的依据（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md)）：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
+- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——默认档决策的依据（见 [Agent Note](../.agents/notes/implemented/architecture/2026-09-01-index-default-promotion.zh.md)：第三波检索升级后 `index` 升为出厂默认，超越原 policy-only 裁定；被超越 note 记录了当时的证据）。
 - **已知边界，记录在案：** 纯中文查询对纯英文条目零词法重叠、必然漏检——词法 BM25 不承诺跨语言语义召回；那是 embedding 层的问题，属于另一个工程量级。
 
 模块以 `@chenhw7/dsh-memory/benchmark` 导出（含类型），夹具与指标可在 spec 之外复用。

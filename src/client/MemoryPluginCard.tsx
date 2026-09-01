@@ -72,7 +72,7 @@ const MODES = ['policy-only', 'full', 'index', 'custom', 'off'] as const
 
 /** Default draft when the namespace section has not arrived yet. */
 const DEFAULTS: MemoryConfig = {
-  memoryMode: 'policy-only',
+  memoryMode: 'index',
   memoryPolicyCustomText: '',
   memoryCharLimit: 5000,
   memoryMaxEntries: 20,

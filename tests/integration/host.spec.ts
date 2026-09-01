@@ -134,7 +134,7 @@ describe('integration: host services (P1-3)', () => {
     expect(text).toContain('helpful context')
   })
 
-  it('default policy-only mode injects zero entry content into the prompt', async () => {
+  it('the shipping default (index) injects existence lines, not full content', async () => {
     // Re-boot with the shipping default instead of the test's full-mode base.
     await root.dispose()
     rmSync(dir, { recursive: true, force: true })
@@ -145,12 +145,14 @@ describe('integration: host services (P1-3)', () => {
     store = env.store
     session = env.session
     sectionText = env.sectionText
-    await store.add({ scope: 'global', content: 'must not leak into the policy-only prompt', source: 'ui' })
+    await store.add({ scope: 'global', content: 'plain default-mode entry. ' + 'Detail sentence number two lives here so the body exceeds the index-line prefix cut. '.repeat(4) + 'The tail of this body must not appear verbatim in the prompt.', source: 'ui' })
     ctx.emit('session/created', env.session)
 
     const text = await sectionText()
-    expect(text).toContain('policy')
-    expect(text).not.toContain('must not leak into the policy-only prompt')
+    // The index frame + one existence line: entry BODIES stay out of the
+    // prompt (the index line shows only a truncated prefix), ids stay in.
+    expect(text).toContain('<memory-index>')
+    expect(text).not.toContain('The tail of this body must not appear verbatim')
   })
 
   it('index mode renders one id-addressed existence line per entry, preferring summaries', async () => {

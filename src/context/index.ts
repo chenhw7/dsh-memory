@@ -62,7 +62,12 @@ export const inject = ['systemPrompt']
 /** The settings namespace this plugin owns. */
 const NS = 'memory'
 
-const DEFAULT_MEMORY_MODE: MemoryMode = 'policy-only'
+// Factory default is `index`: every entry is visible to the model as an
+// existence line without it having to guess that a memory might exist. The
+// superseded policy-only default and its measured costs are recorded in the
+// implemented Agent Note (index-default-promotion); deployments with tight
+// context budgets set policy-only or off explicitly.
+const DEFAULT_MEMORY_MODE: MemoryMode = 'index'
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
 const DEFAULT_MAX_SEARCH_RESULTS = 50
 const DEFAULT_DECAY_DAYS = 30

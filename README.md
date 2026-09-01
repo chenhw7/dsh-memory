@@ -223,7 +223,7 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `memoryMode` | `policy-only` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
+| `memoryMode` | `index` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
 | `memoryCharLimit` | `5000` | Character budget for the frozen per-session memory snapshot injected in `full` mode (`0` = no content). |
 | `memoryMaxEntries` | `20` | Entry-count cap for the same frozen snapshot (`0` = no limit). The snapshot ends with a `≈N tokens` estimate so injection cost stays visible. |
@@ -280,7 +280,7 @@ Example `$DSH_HOME/settings.yaml` (both namespaces):
 
 ```yaml
 memory:
-  memoryMode: policy-only
+  memoryMode: index
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
   memoryMaxEntries: 20

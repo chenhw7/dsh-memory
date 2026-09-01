@@ -220,7 +220,7 @@ dsh web
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
-| `memoryMode` | `policy-only` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
+| `memoryMode` | `index` | `full`：注入记忆内容 + 指引；`policy-only`：只注入指引，模型按需搜索；`custom`：注入用户自定义策略文本；`off`：不注入；`index`：注入存在性索引（每个条目一行），模型可看见存了什么并路由到 `memory_get`/`memory_search`。 |
 | `memoryPolicyCustomText` | — | 当 `memoryMode` 为 `custom` 时使用的自定义策略文本。 |
 | `memoryCharLimit` | `5000` | 会话内冻结记忆快照注入 `full` 模式时的字符预算（`0` = 不注入内容）。 |
 | `memoryMaxEntries` | `20` | 同一冻结快照的条目数上限（`0` = 无限制）。快照尾部附 `≈N tokens` 估算，注入成本始终可见。 |
@@ -277,7 +277,7 @@ memory-review:
 
 ```yaml
 memory:
-  memoryMode: policy-only
+  memoryMode: index
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
   memoryMaxEntries: 20
