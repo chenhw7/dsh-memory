@@ -778,10 +778,10 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **28 个 vitest spec 文件、533 个用例**（527 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **28 个 vitest spec 文件、547 个用例**（541 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
-2. **契约** —— `store-contract.spec`（14）：内存版 `TestMemoryStore` 验证抽象契约（CRUD/search/pin/archive/janitor 两层衰减/health/audit、扫描拒绝、project 作用域校验）。
+2. **契约** —— `store-contract.spec`（40：同一契约体分别对内存版 `TestMemoryStore` 与真实 `DomainMemoryStore` 各跑一遍；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
 5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（4）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
