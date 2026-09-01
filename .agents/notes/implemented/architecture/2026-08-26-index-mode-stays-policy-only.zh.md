@@ -4,6 +4,8 @@ Status: implemented
 
 [English](2026-08-26-index-mode-stays-policy-only.md) | 中文
 
+> 2026-09-01 被超越:[出厂默认提升为 index 模式](2026-09-01-index-default-promotion.zh.md)——会话采集遥测始终不可获得后,改进计划反转了举证责任。本 note 的基准证据仍有效;它守护的默认值已不再是出厂值。
+
 ## 问题
 
 memory 段在 `off`/`custom` 之外支持三种常驻注入模式：`policy-only`（只有引导文本，模型按需检索）、`index`（每条一条存在行）、`full`（完整内容）。在 golden-set 基准出现之前,默认档选 policy-only 仅出于保守直觉:没人知道召回质量与注入成本在库存增长时如何实际权衡。把 `index` 提为出厂默认是改进计划中的活跃选项([archive/memory-plugins-comparison-zh.md](../../../../docs/archive/memory-plugins-comparison-zh.md),P1-8),而没有证据支撑的默认档,无法在下一个"index 听起来严格更好"的提案面前自辩。

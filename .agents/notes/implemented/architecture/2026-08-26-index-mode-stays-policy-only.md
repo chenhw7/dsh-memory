@@ -4,6 +4,8 @@ Status: implemented
 
 English | [中文](2026-08-26-index-mode-stays-policy-only.zh.md)
 
+> Superseded 2026-09-01: [The factory default promotes to index mode](2026-09-01-index-default-promotion.md) — the improvement program flipped the evidence burden after the session-capture telemetry stayed unobtainable. The benchmark evidence below remains valid; the default it defended is no longer the shipping one.
+
 ## Problem
 
 The memory section supports three standing-injection modes beyond `off`/`custom`: `policy-only` (guidance text only, the model searches on demand), `index` (one existence line per entry), and `full` (full content). Before the golden-set benchmark existed, the default was policy-only by conservatism alone: no one knew how recall quality and injection cost actually traded against each other as the store grows. Promoting `index` to the factory default was a live option from the improvement program ([archive/memory-plugins-comparison-zh.md](../../../../docs/archive/memory-plugins-comparison-zh.md), P1-8), and a default chosen without evidence could not defend itself against the next "index sounds strictly better" proposal.
