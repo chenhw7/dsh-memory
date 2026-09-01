@@ -26,7 +26,7 @@
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
-记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（24 条 × 24 组查询，中英混合）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.958），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
+记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（35 条 × 35 组查询，中英混合，含同义改写切片与词形变化切片）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.902），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
 
 ---
 
@@ -613,8 +613,8 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 一个纯函数、零依赖的模块，把"检索很强"从结构性断言变成数字（P1-4/P1-8）：
 
-- **Golden 夹具：** `GOLDEN_ENTRIES` —— 24 条主题互不重叠、跨三个作用域的条目（12 英文 / 6 中文 / 6 混合），其中故意放了几枚诱饵词元（两条条目共享 端口/port），让精度保持诚实——以及 `GOLDEN_CASES` —— 24 组 查询→相关 id 对，混合关键词风格与提问风格。
-- **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 91.7%、MRR = 0.958。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
+- **Golden 夹具：** `GOLDEN_ENTRIES` —— 35 条跨三个作用域的条目：原 24 条主题互不重叠（12 英文 / 6 中文 / 6 混合，故意放了几枚诱饵词元——两条条目共享 端口/port），加同义改写切片（查询词只出现在条目 summary 里，含双语镜像条目）与词形变化切片——以及 `GOLDEN_CASES` —— 35 组 查询→相关 id 对。
+- **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 82.9%、MRR = 0.902（P@1 被同义切片引入的同主题多条 summary 候选稀释；原 24 条基线为 P@1 91.7% / MRR 0.958）。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
 - **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——默认档决策的依据（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md)）：保持 `policy-only` 为默认；`index` 是推荐的高级模式。
 - **已知边界，记录在案：** 纯中文查询对纯英文条目零词法重叠、必然漏检——词法 BM25 不承诺跨语言语义召回；那是 embedding 层的问题，属于另一个工程量级。
 
