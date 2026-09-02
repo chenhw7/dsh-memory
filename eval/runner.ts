@@ -52,11 +52,19 @@ export interface RunOptions {
   /** Model route; `external` injects a caller-supplied OpenAI-compatible endpoint. */
   readonly mode: 'mock' | 'real' | 'external'
   /**
-   * Model id for the initialize handshake (`real`/`external`); `undefined`
-   * keeps the boot default. The provider axis is not caller-selectable — the
-   * SDK profile mounts only `deepseek-official`.
+   * Provider + model id for the initialize handshake (`real`/`external`);
+   * `undefined` keeps the boot defaults. A non-DeepSeek provider is a pi-ai
+   * route: `real` only, with the deployment's `llm-pi-ai` settings section
+   * carried alongside.
    */
   readonly model?: string
+  /** Provider route for the handshake (default `deepseek-official`). */
+  readonly provider?: string
+  /**
+   * Rendered `llm-pi-ai:` settings section mirroring the deployment's provider
+   * profiles into the throwaway home; required when `provider` is non-DeepSeek.
+   */
+  readonly piAiSection?: string
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`. */
   readonly baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -426,6 +434,8 @@ function modelOptions(options: RunOptions): HarnessModelOptions {
   return {
     mode: options.mode,
     ...(options.model !== undefined ? { model: options.model } : {}),
+    ...(options.provider !== undefined ? { provider: options.provider } : {}),
+    ...(options.piAiSection !== undefined ? { piAiSection: options.piAiSection } : {}),
     ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   }

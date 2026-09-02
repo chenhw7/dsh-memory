@@ -196,14 +196,14 @@ describe('buildReport', () => {
       buildDir: '/builds/candidate',
       dataset: 'eval/datasets/core-v0.jsonl',
       memoryMode: 'index',
-      model: { mode: 'external', id: 'fuyao-work' },
+      model: { mode: 'external', provider: 'fuyao', id: 'fuyao-work' },
       rubricVersions: { storage: '1', recall: '1' },
       judge: { model: 'judge-x', baseUrl: 'http://judge/v1' },
       generatedAt: '2026-09-01T00:00:00.000Z',
     })
     expect(report.schema).toBe('eval-report-v0')
     expect(report.generatedAt).toBe('2026-09-01T00:00:00.000Z')
-    expect(report.model).toEqual({ mode: 'external', id: 'fuyao-work' })
+    expect(report.model).toEqual({ mode: 'external', provider: 'fuyao', id: 'fuyao-work' })
     expect(report.totals.questions).toBe(3)
     expect(report.slices.map(slice => slice.label)).toEqual([
       'kind=seed', 'kind=plant', 'domain=programming', 'domain=daily-work', 'domain=life',
@@ -218,7 +218,7 @@ describe('diffReports (A/B paired diff)', () => {
   const stamp = {
     dataset: 'eval/datasets/core-v0.jsonl',
     memoryMode: 'index' as const,
-    model: { mode: 'mock' as const, id: null },
+    model: { mode: 'mock' as const, provider: null, id: null },
     rubricVersions: { storage: '1', recall: '1' },
     judge: null,
   }
@@ -307,7 +307,7 @@ describe('markdown renderings', () => {
     buildDir: '/builds/x',
     dataset: 'eval/datasets/core-v0.jsonl',
     memoryMode: 'index',
-    model: { mode: 'external', id: 'fuyao-coding' },
+    model: { mode: 'external', provider: 'fuyao', id: 'fuyao-coding' },
     rubricVersions: { storage: '1', recall: '1' },
     judge: { model: 'judge-x', baseUrl: 'http://judge/v1' },
     generatedAt: '2026-09-01T00:00:00.000Z',
@@ -317,7 +317,7 @@ describe('markdown renderings', () => {
     const markdown = renderReportMarkdown(report)
     expect(markdown).toContain('# Eval report — eval/datasets/core-v0.jsonl')
     expect(markdown).toContain('- build under test: `/builds/x`')
-    expect(markdown).toContain('- model under test: fuyao-coding (external route)')
+    expect(markdown).toContain('- model under test: fuyao/fuyao-coding (external route)')
     expect(markdown).toContain('- rubric: storage v1, recall v1')
     expect(markdown).toContain('- judge: judge-x @ http://judge/v1')
     expect(markdown).toContain('| prog101-build-toolchain | plant | programming | zh | 2 | 1/2 |')
@@ -330,7 +330,7 @@ describe('markdown renderings', () => {
       buildDir: '/builds/x',
       dataset: 'd',
       memoryMode: 'off',
-      model: { mode: 'real', id: null },
+      model: { mode: 'real', provider: 'deepseek-official', id: null },
       rubricVersions: { storage: '1', recall: '1' },
       judge: null,
       generatedAt: '2026-09-01T00:00:00.000Z',
@@ -340,8 +340,8 @@ describe('markdown renderings', () => {
 
   it('renders the A/B diff with per-scenario verdicts', () => {
     const diff = diffReports(
-      buildReport([result], { buildDir: '/b1', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', id: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
-      buildReport([result], { buildDir: '/b2', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', id: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
+      buildReport([result], { buildDir: '/b1', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
+      buildReport([result], { buildDir: '/b2', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
     )
     const markdown = renderAbDiffMarkdown(diff)
     expect(markdown).toContain('# Eval A/B — /b1 (baseline) vs /b2 (candidate)')

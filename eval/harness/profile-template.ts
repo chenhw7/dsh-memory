@@ -47,6 +47,13 @@ export interface TemplateVars {
   buildDir: string
   /** Mock server base URL including the `/v1` namespace; required for mock runs. */
   mockBaseUrl?: string
+  /**
+   * Rendered `llm-pi-ai:` settings section mirroring the deployment's provider
+   * profiles into the throwaway home (the same activation the web Models page
+   * performs). Required when the model route names a non-DeepSeek provider;
+   * absent means the stock deepseek-official adapter stands.
+   */
+  piAiSection?: string
 }
 
 /** The `{{NAME}}` substitution used by the template files. */
@@ -66,8 +73,16 @@ export function renderProfilePackageJson(buildDir: string): string {
   return substitute(template, { BUILD_DIR: resolve(buildDir) })
 }
 
-/** Render the settings document for one run (`external` shares the real-mode document: it pins nothing). */
-export function renderSettingsYaml(mode: ModelMode, mockBaseUrl: string | undefined): string {
+/**
+ * Render the settings document for one run. `external` shares the real-mode
+ * document (it pins nothing); a pi-ai provider route replaces the empty real
+ * document with the deployment's mirrored `llm-pi-ai:` section — the section
+ * is a complete top-level mapping, so it stands alone.
+ */
+export function renderSettingsYaml(mode: ModelMode, mockBaseUrl: string | undefined, piAiSection?: string): string {
+  if (mode !== 'mock' && piAiSection !== undefined && piAiSection.length > 0) {
+    return piAiSection.endsWith('\n') ? piAiSection : `${piAiSection}\n`
+  }
   const file = mode === 'mock' ? 'settings.mock.yaml' : 'settings.real.yaml'
   const template = readFileSync(join(PROFILE_TEMPLATE_DIR, file), 'utf8')
   return substitute(template, mode === 'mock' ? { MOCK_BASE_URL: mockBaseUrl ?? '' } : {})
@@ -111,6 +126,9 @@ export function materializeProfile(dshHome: string, profileName: string, vars: T
   if (vars.mode === 'mock' && (vars.mockBaseUrl === undefined || vars.mockBaseUrl.length === 0)) {
     throw new Error('eval profile template: mock runs require a mockBaseUrl')
   }
+  if (vars.mode === 'mock' && vars.piAiSection !== undefined) {
+    throw new Error('eval profile template: mock runs must not carry an llm-pi-ai section (the mock route is deterministic)')
+  }
   const profileDir = resolve(dshHome, 'profiles', profileName)
   mkdirSync(profileDir, { recursive: true })
   const manifest = {
@@ -122,7 +140,7 @@ export function materializeProfile(dshHome: string, profileName: string, vars: T
   }
   writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`)
   writeFileSync(join(profileDir, 'cordis.patch.yml'), renderProfilePatchYaml())
-  writeFileSync(join(dshHome, 'settings.yaml'), renderSettingsYaml(vars.mode, vars.mockBaseUrl))
+  writeFileSync(join(dshHome, 'settings.yaml'), renderSettingsYaml(vars.mode, vars.mockBaseUrl, vars.piAiSection))
   const scopedDir = join(profileDir, 'node_modules', '@chenhw7')
   const link = join(scopedDir, 'dsh-memory')
   mkdirSync(scopedDir, { recursive: true })

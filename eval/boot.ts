@@ -72,6 +72,13 @@ export interface HarnessModelOptions {
   provider?: string
   /** Model route for the initialize handshake (default `deepseek-v4-flash`). */
   model?: string
+  /**
+   * Rendered `llm-pi-ai:` settings section mirroring the deployment's provider
+   * profiles into the throwaway home; required when `provider` names a
+   * non-DeepSeek route (the base bundle mounts the pi-ai adapter dormant, and
+   * this section is what activates its routes).
+   */
+  piAiSection?: string
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`, e.g. `http://127.0.0.1:<port>/v1`. */
   baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -177,6 +184,20 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
     }
     env['DEEPSEEK_BASE_URL'] = externalBaseUrl
     env['DEEPSEEK_API_KEY'] = options.model?.apiKey ?? 'eval-fake-key'
+  } else if (provider !== 'deepseek-official') {
+    // A pi-ai provider route: the base bundle mounts the adapter dormant and
+    // the mirrored `llm-pi-ai:` settings section activates its routes — the
+    // same activation the web Models page performs. The endpoint and key come
+    // from the provider profile (apiKeyEnv resolves per request through the
+    // credentials seam over the inherited environment), so none of the
+    // deepseek-adapter plumbing below applies. The route is inherently live:
+    // mock and external are deepseek-official shapes.
+    if (mode !== 'real') {
+      throw new Error(`eval boot: provider "${provider}" is a pi-ai route and only runs live — --mode real`)
+    }
+    if (options.model?.piAiSection === undefined || options.model.piAiSection.length === 0) {
+      throw new Error(`eval boot: provider "${provider}" needs the deployment's llm-pi-ai settings section`)
+    }
   } else {
     const apiKey = resolveRealApiKey(dshHome)
     if (apiKey === undefined) {
@@ -201,6 +222,9 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
       mode,
       buildDir: options.buildDir,
       ...(mock !== undefined ? { mockBaseUrl: mock.baseUrl } : {}),
+      ...(options.model?.piAiSection !== undefined && options.model.piAiSection.length > 0
+        ? { piAiSection: options.model.piAiSection }
+        : {}),
     })
 
     // Per-run configPatches land as overlay files under the throwaway home
@@ -281,6 +305,17 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
       if (notification.method === 'session.status'
         && notification.params['sessionId'] === sessionId
         && notification.params['status'] === 'idle') break
+    }
+    // A turn that ends idle without an assistant message is a failed turn (the
+    // agent loop appends an assistant message on every completed or interrupted
+    // step; a failed LLM call — a dead route, a missing credential — produces
+    // none). Silence here would let a real-mode run score `ok` with no answers,
+    // indistinguishable from a healthy judge-less run.
+    if (collector.finalText.length === 0) {
+      throw new Error(
+        'eval boot: turn ended without an assistant message — the model route produced no answer '
+        + `(last turn of session ${sessionId}); check the route's credentials and endpoint`,
+      )
     }
     if (collector.systemPrompt !== undefined) lastSystemPrompt = collector.systemPrompt
     return {

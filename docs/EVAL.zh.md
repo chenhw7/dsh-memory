@@ -29,7 +29,8 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
 | `--build <dir>` | 插件构建目录 | 单构建模式必填；须含 `package.json` + `lib/` |
 | `--baseline <dir>` / `--candidate <dir>` | 两个构建目录 | 仅 `eval:ab`；与 `--build` 互斥 |
 | `--mode <m>` | `mock` \| `real` \| `external` | 模型路由，默认 `mock`；`external` 必须配 `--base-url` |
-| `--model <id>` | 模型 id | 仅 `real`/`external`（mock 路由确定性，不接受该参数）；缺省取部署 home 的 `agent-default-model.model`，部署未声明时回退 `deepseek-v4-flash`——每次解析都打印来源行 |
+| `--provider <id>` | provider 路由 | 仅 `real`；缺省取部署 home 的 `agent-default-model.provider`，再缺省 `deepseek-official`。非 DeepSeek provider 走部署 `llm-pi-ai:` 分节镜像（`real` 专属） |
+| `--model <id>` | 模型 id | 仅 `real`/`external`（mock 路由确定性，不接受）；缺省取部署 home 的 `agent-default-model.model`，再缺省 `deepseek-v4-flash`——每次解析都打印来源行 |
 | `--base-url <url>` / `--api-key <key>` | OpenAI 兼容端点 | 仅 `external`；key 缺省 `eval-fake-key` |
 | `--judge` | 开关 | 请求 rubric 判定；判定环境缺失时判定层 skipped、确定性层照常 |
 | `--memory-mode <m>` | `index` \| `full` | 注入模式轴，默认 `index` |
@@ -62,19 +63,20 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . --filter prog105
 
 ### 被测模型路由（real / external）
 
-`real`/`external` 模式下被测模型有两层选择，每次运行都把解析结果打印到 stdout 并盖印进报告（`model under test`）：
+`real`/`external` 模式下被测模型由 **provider + model id** 双轴决定，每次运行都把解析结果打印到 stdout 并盖印进报告（`model under test`，含 `provider/id`）：
 
-- **provider 轴固定**：SDK profile 只挂 `deepseek-official` 适配器（宿主 `packages/sdk/server` 的 initialize 兜底路径），provider 不可选；**端点由路由决定**——`external` 用 `--base-url`，`real` 用 `DEEPSEEK_BASE_URL` 或官方 API。指向任意 OpenAI 兼容网关（如公司内 fuyao gateway）时走 `external`，deepseek 适配器对目录外模型 id 安全放行（视为 text-only，按默认上下文窗处理）。
-- **model id**：显式 `--model <id>` 优先；缺省读部署 home（`$DSH_HOME`，缺省 `~/.dsh`）`settings.yaml` 的 `agent-default-model.model`（含 provider 通报——SDK 固定适配器，非 DeepSeek 的部署 provider 只出现在提示行）；部署未声明时回退 `deepseek-v4-flash`。settings.yaml 存在但无法解析或 `agent-default-model` 畸形时报错退出，绝不静默。
+- **provider 轴**：显式 `--provider <id>` 优先；缺省读部署 home（`$DSH_HOME`，缺省 `~/.dsh`）`settings.yaml` 的 `agent-default-model.provider`；再缺省回退 `deepseek-official`。base bundle 已把 `dsh-llm-pi-ai` 适配器休眠挂载，deployment settings 的 `llm-pi-ai:` 分节即激活其路由——与 web Models 页的激活方式相同；`real` 模式遇到非 DeepSeek provider 时，eval 把该分节**镜像**进一次性 home 的 settings（按请求经凭据 seam 解析 `apiKeyEnv` 引用，配置文档永不含密钥），端点与密钥都来自 provider 档案本身。部署缺该分节或 provider 未定义时报错退出。
+- **model id**：显式 `--model <id>` 优先；缺省取同一 `agent-default-model.model`；再缺省回退 `deepseek-v4-flash`。settings.yaml 存在但无法解析、`agent-default-model` 畸形（含半截声明）、或镜像档案携带内联密钥时报错退出，绝不静默。
+- **模式语义**：`--mode mock`（缺省）是确定性 deepseek-official 形态，不读部署 home，拒绝 `--model/--provider`；`--mode external` 是 deepseek 适配器的 fake-LLM 伪装（`--base-url/--api-key`），provider 固定 `deepseek-official`、拒绝 `--provider`；`--mode real` 承接上述完整解析——DeepSeek provider 走 `DEEPSEEK_API_KEY`/`.credentials.yaml` 预检，pi-ai provider 走镜像路由。
 
 ```sh
-# fuyao 网关全链路示例（key 在环境变量 FUYAO_API_KEY 中，judge 同网关）
+# fuyao 网关全链路示例（部署 home 已声明 llm-pi-ai.providers.fuyao + agent-default-model=fuyao/fuyao-work）
+# key 在环境变量 FUYAO_API_KEY 中，judge 同网关；--model 可换 fuyao-coding 等
 EVAL_JUDGE_BASE_URL=http://fuyao-ai-gateway.xiaopeng.link/v1 \
 EVAL_JUDGE_API_KEY=$FUYAO_API_KEY \
 EVAL_JUDGE_MODEL=fuyao-work \
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . \
-  --mode external --base-url http://fuyao-ai-gateway.xiaopeng.link/v1 --api-key $FUYAO_API_KEY \
-  --judge --out /tmp/eval-real.json
+  --mode real --judge --out /tmp/eval-real.json
 ```
 
 ### plant 链路联调（fake LLM + external 模式）

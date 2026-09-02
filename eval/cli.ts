@@ -27,7 +27,7 @@ import { runScenarios, type RunOptions } from './runner.ts'
 import { parseDataset, type EvalScenario } from './schema.ts'
 
 const USAGE = `usage:
-  npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--model <id>] [--base-url <url>] [--api-key <key>]
+  npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>]
                   [--judge] [--memory-mode index|full] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N] [--out <file>]
   npm run eval:ab -- --baseline <dir> --candidate <dir> [same flags; --build not allowed]
 
@@ -36,8 +36,11 @@ flags:
   --build <dir>         plugin build under test: package.json + lib/ (eval mode, required)
   --baseline/--candidate <dir>   the two builds for the paired A/B run
   --mode mock|real|external      model route (default mock; external needs --base-url)
-  --model <id>          model id under test for real|external (default: the deployment
-                        home's agent-default-model, else deepseek-v4-flash; printed per run)
+  --provider <id>       provider route for --mode real (default: the deployment home's
+                        agent-default-model.provider, else deepseek-official); non-DeepSeek
+                        providers run through the deployment's llm-pi-ai settings section
+  --model <id>          model id for real|external (default: the deployment home's
+                        agent-default-model.model, else deepseek-v4-flash; printed per run)
   --judge               enable the rubric judge when the judge environment is present
   --memory-mode index|full       injection-mode axis (default index)
   --no-memory           memory injection off — the control group
@@ -51,6 +54,7 @@ interface CliArgs {
   readonly baseline?: string
   readonly candidate?: string
   readonly mode: 'mock' | 'real' | 'external'
+  readonly provider?: string
   readonly model?: string
   readonly baseUrl?: string
   readonly apiKey?: string
@@ -64,7 +68,7 @@ interface CliArgs {
 
 const BOOLEAN_FLAGS = new Set(['judge', 'no-memory'])
 const VALUE_FLAGS = new Set([
-  'dataset', 'build', 'baseline', 'candidate', 'mode', 'model', 'base-url', 'api-key',
+  'dataset', 'build', 'baseline', 'candidate', 'mode', 'provider', 'model', 'base-url', 'api-key',
   'memory-mode', 'filter', 'concurrency', 'out',
 ])
 
@@ -121,8 +125,10 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
   }
 
   // The boot contract routes keys per mode: mock starts the in-process mock,
-  // real resolves the key itself, external takes both from the caller.
+  // real resolves the key itself (or activates the deployment's pi-ai route),
+  // external takes both from the caller.
   const model = optional('model')
+  const provider = optional('provider')
   const baseUrl = optional('base-url')
   const apiKey = optional('api-key')
   if (mode === 'external' && baseUrl === undefined) {
@@ -131,8 +137,17 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
   if (mode !== 'external' && (baseUrl !== undefined || apiKey !== undefined)) {
     throw new Error(`eval cli: --base-url/--api-key apply only to --mode external\n${USAGE}`)
   }
-  if (mode === 'mock' && model !== undefined) {
-    throw new Error(`eval cli: --model applies only to --mode real|external (the mock route is deterministic)\n${USAGE}`)
+  if (mode === 'mock' && (model !== undefined || provider !== undefined)) {
+    throw new Error(
+      `eval cli: --model/--provider apply only to live routes — --mode mock is the deterministic `
+      + `deepseek-official shape and reads nothing\n${USAGE}`,
+    )
+  }
+  if (mode === 'external' && provider !== undefined) {
+    throw new Error(
+      `eval cli: --provider applies only to --mode real (external impersonates the deepseek-official `
+      + `adapter wire)\n${USAGE}`,
+    )
   }
 
   if (ab) {
@@ -154,6 +169,7 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
         ? { baseline: required('baseline'), candidate: required('candidate') }
         : { build: required('build') }),
       mode,
+      ...(provider !== undefined ? { provider } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(baseUrl !== undefined ? { baseUrl } : {}),
       ...(apiKey !== undefined ? { apiKey } : {}),
@@ -183,7 +199,8 @@ function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null
   return {
     buildDir,
     mode: args.mode,
-    ...(modelRoute !== null ? { model: modelRoute.model } : {}),
+    ...(modelRoute !== null ? { model: modelRoute.model, provider: modelRoute.provider } : {}),
+    ...(modelRoute?.piAiSection !== undefined ? { piAiSection: modelRoute.piAiSection } : {}),
     ...(args.baseUrl !== undefined ? { baseUrl: args.baseUrl } : {}),
     ...(args.apiKey !== undefined ? { apiKey: args.apiKey } : {}),
     memoryMode: args.memoryMode,
@@ -297,9 +314,22 @@ async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: J
   failOnErrors([...baselineReport.scenarios, ...candidateReport.scenarios], args.judge)
 }
 
-/** Report stamp for the scored model identity; the mock route has no model id. */
-function modelStampOf(args: CliArgs, modelRoute: EvalModelRoute | null): { mode: 'mock' | 'real' | 'external'; id: string | null } {
-  return { mode: args.mode, ...(modelRoute !== null ? { id: modelRoute.model } : { id: null }) }
+/** Flag pair for the model-route resolver; absent flags stay absent (exact optionals). */
+function flagsOf(args: CliArgs): { provider?: string; model?: string } {
+  return {
+    ...(args.provider !== undefined ? { provider: args.provider } : {}),
+    ...(args.model !== undefined ? { model: args.model } : {}),
+  }
+}
+
+/** Report stamp for the scored model identity; the mock route has none. */
+function modelStampOf(args: CliArgs, modelRoute: EvalModelRoute | null): { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null } {
+  return {
+    mode: args.mode,
+    ...(modelRoute !== null
+      ? { provider: modelRoute.provider, id: modelRoute.model }
+      : { provider: null, id: null }),
+  }
 }
 
 async function main(): Promise<void> {
@@ -307,15 +337,32 @@ async function main(): Promise<void> {
   const scenarios = parseDataset(readFileSync(args.dataset, 'utf8'), args.dataset)
   const matched = applyFilter(scenarios, args.filter)
 
-  // `real`/`external` name the model under test explicitly (`--model`) or via
-  // the deployment's agent-default-model; the mock route stays hermetic and
-  // resolves nothing.
-  const modelRoute = args.mode === 'mock' ? null : resolveEvalModel(args.model)
+  // `real` names the provider/model route explicitly or via the deployment
+  // home's agent-default-model (a non-DeepSeek provider rides the deployment's
+  // llm-pi-ai settings section); `external` impersonates the deepseek-official
+  // adapter wire, so its provider is fixed and only the model id resolves;
+  // the mock route stays hermetic and resolves nothing.
+  let modelRoute: EvalModelRoute | null = null
+  if (args.mode === 'real') {
+    modelRoute = resolveEvalModel(flagsOf(args))
+  } else if (args.mode === 'external') {
+    // External impersonates the deepseek-official wire: only the model id resolves.
+    const resolved = resolveEvalModel(args.model !== undefined ? { model: args.model } : {})
+    modelRoute = {
+      provider: 'deepseek-official',
+      model: resolved.model,
+      source: resolved.source,
+      ...(resolved.origin !== undefined ? { origin: resolved.origin } : {}),
+    }
+  }
   if (modelRoute !== null) {
-    const providerNotice = modelRoute.deploymentProvider !== undefined && modelRoute.deploymentProvider !== 'deepseek-official'
-      ? `; the SDK profile pins the provider adapter to deepseek-official — select the gateway with --base-url`
+    const piAiNotice = modelRoute.piAiSection !== undefined
+      ? ', llm-pi-ai routes mirrored from the deployment settings'
       : ''
-    process.stdout.write(`eval cli: model under test ${modelRoute.model} (${describeEvalModelRoute(modelRoute)})${providerNotice}\n`)
+    process.stdout.write(
+      `eval cli: model under test ${modelRoute.provider}/${modelRoute.model} `
+      + `(${describeEvalModelRoute(modelRoute)})${piAiNotice}\n`,
+    )
   }
   process.stdout.write(`eval: ${String(matched.length)}/${String(scenarios.length)} scenarios from ${args.dataset}`
     + `, mode ${args.mode}, memory ${args.noMemory ? 'off' : args.memoryMode}${args.judge ? ', judge requested' : ''}\n`)
