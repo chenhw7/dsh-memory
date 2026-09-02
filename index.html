@@ -111,25 +111,11 @@ section{padding:70px 0}
 
 /* ── development activity panel (live repo data, three-lane tiered; JS at page end) ─── */
 .pulse-lede{max-width:660px;margin:-14px auto 30px;text-align:center;font-size:15px;color:var(--muted);line-height:1.85}
-.pulse-lede code,.pulse-note code{font-family:var(--mono);font-size:.88em;color:var(--teal)}
+.pulse-lede code{font-family:var(--mono);font-size:.88em;color:var(--teal)}
 .pulse-panel{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:34px;position:relative;overflow:hidden}
 .pulse-panel::before{content:"";position:absolute;inset:0;background:radial-gradient(600px 200px at 20% -10%,rgba(232,168,62,.06),transparent 70%);pointer-events:none}
 .panel-tag{position:absolute;top:16px;right:18px;font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.1em}
-.pulse-note{margin-top:16px;font-size:13.5px;color:var(--faint);line-height:1.8}
-.repo-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:28px;align-items:start;margin-top:6px}
-@media(max-width:900px){.repo-grid{grid-template-columns:minmax(0,1fr)}}
 .rl-head{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.14em;margin-bottom:10px}
-.gl{display:flex;gap:9px;align-items:baseline;text-decoration:none;white-space:nowrap;overflow:hidden;color:#b8dccf;font-family:var(--mono);font-size:11.5px;line-height:1.55;padding:5px 10px 5px 9px;border-left:2px solid var(--teal);background:rgba(78,201,176,.04);border-radius:0 8px 8px 0;margin-bottom:5px}
-.gl:hover{border-left-color:var(--amber);background:var(--amber-dim)}
-.gl.hash-head{border-left-color:var(--amber)}
-.gl-h{color:var(--teal);flex:none}
-.gl-t{font-size:10px;padding:1px 7px;border-radius:99px;flex:none;letter-spacing:.06em}
-.tp-feat{background:var(--amber-dim);color:var(--amber)}
-.tp-fix{background:var(--red-dim);color:var(--red)}
-.tp-docs{background:rgba(156,147,127,.14);color:var(--muted)}
-.tp-chore,.tp-ci,.tp-style{color:var(--faint)}
-.gl .subj{overflow:hidden;text-overflow:ellipsis;min-width:0}
-.gl-w{margin-left:auto;flex:none;color:var(--faint);font-size:10.5px}
 .repo-plate{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
 .rp-v{font-family:var(--serif);font-size:46px;font-weight:900;color:var(--amber-hi);line-height:1;white-space:nowrap}
 .rp-gh{font-family:var(--mono);font-size:12px;color:var(--teal)}
@@ -140,14 +126,16 @@ section{padding:70px 0}
 .act-sum b{color:var(--amber-hi);font-weight:600}
 .act-note{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint);min-height:17px}
 .act-note .teal{color:var(--teal)}
-/* hover tooltip over the 14-day line chart: daily churn + up to 5 commits */
-.act-wrap{position:relative}
-.act-tip{position:absolute;z-index:3;min-width:170px;max-width:280px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:8px 10px;font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--ink);pointer-events:none;box-shadow:0 10px 26px rgba(0,0,0,.5)}
+/* day-detail readout pinned below the 14-day line chart: never overlays the
+   chart, min-height sized for a full day (date + counts + 5 commits + more) */
+.act-tip{margin-top:8px;min-height:116px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:9px 12px;font-family:var(--mono);font-size:10.5px;line-height:1.55;color:var(--ink);display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2fr);gap:2px 16px;align-content:start}
+.act-tip>*{min-width:0}
 .act-tip .at-d{color:var(--amber-hi);font-weight:600;margin-bottom:2px}
-.act-tip .at-c{color:var(--faint);margin-bottom:3px}
+.act-tip .at-c{color:var(--faint)}
 .act-tip .at-m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .act-tip .at-m span{color:var(--teal);margin-right:6px}
 .act-tip .at-more{color:var(--faint)}
+@media(max-width:640px){.act-tip{grid-template-columns:minmax(0,1fr);min-height:152px}}
 .live{position:absolute;top:44px;right:18px;display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
 .live i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
 .live.on i{background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s ease-in-out infinite}
@@ -247,23 +235,12 @@ footer .f-links a:hover{color:var(--amber)}
         <span class="rp-gh" id="rpGh">@chenhw7/dsh-memory</span>
       </div>
       <div class="rp-chips" id="rpChips"></div>
-      <div class="repo-grid">
-        <div>
-          <div class="rl-head">// git log main · latest 8</div>
-          <div id="repoLog"></div>
-        </div>
-        <div>
-          <div class="rl-head">// last 14 days · hover a day for churn &amp; commits</div>
-          <div class="act-wrap">
-            <canvas class="act" id="actCv"></canvas>
-            <div class="act-tip" id="actTip" hidden></div>
-          </div>
-          <div class="act-sum" id="actSum"></div>
-          <div class="act-note" id="actNote"></div>
-        </div>
-      </div>
+      <div class="rl-head">// last 14 days · hover a day for churn &amp; commits</div>
+      <canvas class="act" id="actCv"></canvas>
+      <div class="act-tip" id="actTip"></div>
+      <div class="act-sum" id="actSum"></div>
+      <div class="act-note" id="actNote"></div>
     </div>
-    <p class="pulse-note">The numbers degrade gracefully: same-origin <code>stats.json</code> (rebuilt daily by CI, full history with churn) → GitHub Commits API (today's increment, anonymous 60 req/h budget, per-commit line details only when ≤8 are missing) → baked snapshot (offline fallback, stamped with its date). The npm registry independently fact-checks the version plate. Append <code>?offline=1</code> to force the snapshot tier; churn not fetched in real time lands in the next scheduled build.</p>
   </div>
 </section>
 
@@ -317,7 +294,7 @@ footer .f-links a:hover{color:var(--amber)}
 (function(){
 const $=id=>document.getElementById(id);
 const pill=$('livePill'),liveTxt=$('liveTxt'),rpVer=$('rpVer'),rpChips=$('rpChips'),
-      logEl=$('repoLog'),cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote'),tip=$('actTip');
+      cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote'),tip=$('actTip');
 const OFF=new URLSearchParams(location.search).has('offline');
 
 /* offline fallback snapshot: main @ 089369c · built 2026-09-02 (refreshed with releases; forced by ?offline=1) */
@@ -341,9 +318,6 @@ const DAYKEY=new Date().toISOString().slice(0,10);
 const pad=n=>String(n).padStart(2,'0');
 const fmt=n=>Math.round(n).toLocaleString('en-US');
 function localKey(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
-function parseD(s){const p=s.split('-');return new Date(Date.UTC(+p[0],+p[1]-1,+p[2]))}
-function dayDiff(a,b){return Math.round((Date.UTC(a.getFullYear(),a.getMonth(),a.getDate())-Date.UTC(b.getFullYear(),b.getMonth(),b.getDate()))/864e5)}
-function relEn(ds){const d=new Date(ds);if(isNaN(d))return'';const n=dayDiff(new Date(),d);return n<=0?'today':n===1?'yesterday':n+'d ago'}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function fetchJson(url){
   const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),6000);
@@ -358,8 +332,6 @@ function cached(key,load){
   catch(_){/* sessionStorage unavailable → hit the network directly */}
   return load().then(v=>{try{sessionStorage.setItem(k,JSON.stringify(v))}catch(_){/* cache failure must not block rendering */}return v});
 }
-const TAGCLASS={feat:'tp-feat',fix:'tp-fix',docs:'tp-docs',chore:'tp-chore',ci:'tp-chore',style:'tp-chore'};
-function tagOf(msg){const m=/^([A-Za-z][A-Za-z]*)(?:\([^)]*\))?!?: /.exec(msg);return m?m[1].toLowerCase():null}
 
 let days=SNAP.days.map(q=>({d:q[0],c:q[1],a:q[2],del:q[3]}));
 let commits=SNAP.commits.map(r=>({h:r[0],d:r[1],s:r[2]}));
@@ -376,20 +348,10 @@ function renderPlate(live){
   if(npm.license)chips.push(npm.license);
   rpChips.innerHTML=chips.map(c=>'<span class="rp-chip">'+esc(c)+'</span>').join('');
 }
-function renderLog(){
-  logEl.innerHTML=commits.slice(0,8).map((c,i)=>{
-    const t=tagOf(c.s);
-    const tag=t?'<span class="gl-t '+(TAGCLASS[t]||'tp-chore')+'">'+esc(t)+'</span>':'';
-    return '<a class="gl'+(i===0?' hash-head':'')+'" href="https://github.com/chenhw7/dsh-memory/commit/'+esc(c.h)
-      +'" target="_blank" rel="noopener" title="'+esc(c.s)+'">'
-      +'<span class="gl-h">'+esc(c.h)+'</span>'+tag
-      +'<span class="subj">'+esc(c.s)+'</span>'
-      +'<span class="gl-w">'+relEn(c.d)+'</span></a>';
-  }).join('');
-}
 
 /* activity chart: 14-day line chart (last 14 local days; amber=added, red=deleted).
-   Hover a day point for that day's churn and commits — up to 5 listed, the rest collapsed. */
+   Hover a day point — the pinned readout below the chart shows that day's
+   churn and commits, up to 5 listed with the rest collapsed. */
 const WINDOW=14;
 let seq=[],byKey={},dayCommits={},hover=-1;
 function windowSeq(){
@@ -401,9 +363,9 @@ function windowSeq(){
     seq.push({d:k,row:byKey[k]||null});
   }
 }
-/* per-day commit lists for the tooltip, built from whichever commit feed is
-   active (snapshot bake → GitHub API once live) — the active feed can be
-   partial, and "… +N more" below accounts for the unlisted remainder */
+/* per-day commit lists for the day-detail readout, built from whichever
+   commit feed is active (snapshot bake → GitHub API once live) — the active
+   feed can be partial, and "… +N more" below accounts for the remainder */
 function rebuildDayCommits(){
   dayCommits={};
   commits.forEach(c=>{const k=localKey(new Date(c.d));(dayCommits[k]=dayCommits[k]||[]).push({h:c.h,s:c.s})});
@@ -421,7 +383,7 @@ function draw(){
         TEAL=(css.getPropertyValue('--teal')||'#4ec9b0').trim(),
         FAINT=(css.getPropertyValue('--faint')||'#7a7466').trim(),
         MONO=css.getPropertyValue('--mono')||'monospace';
-  /* layout constants shared with layoutTip/evIndex below */
+  /* layout constants — evIndex reuses the same numbers for hit-testing */
   const L=12,R=12,T=24,B=18,N=WINDOW;
   const step=(W-L-R)/(N-1),base=H-B,ph=H-T-B;
   const vmax=Math.max(1,...seq.map(q=>q.row&&!q.row.pending?Math.max(q.row.a,q.row.del):0));
@@ -455,54 +417,53 @@ function draw(){
   const skip=Math.max(1,Math.ceil(34/step));
   seq.forEach((q,i)=>{
     if(q.d===todayK){g.fillStyle=TEAL;g.textAlign='center';g.fillText('today',X(i),H-4)}
-    else if(i%skip===0){g.fillStyle=FAINT;g.textAlign='center';g.fillText(q.d.slice(5),Math.max(16,Math.min(W-16,X(i))),H-4)}
+    else if(i===hover||i%skip===0){g.fillStyle=i===hover?'#ece5d5':FAINT;g.textAlign='center';g.fillText(q.d.slice(5),Math.max(16,Math.min(W-16,X(i))),H-4)}
   });
   g.textAlign='left';
   g.fillStyle=AMB;g.fillRect(L+2,5,7,7);g.fillStyle=FAINT;g.fillText('added',L+13,12);
   g.fillStyle=RED;g.fillRect(L+52,5,7,7);g.fillStyle=FAINT;g.fillText('deleted',L+63,12);
 }
-function showTip(i){
+/* pinned day-detail readout: two grid cells — date/counts left, commits right;
+   lives below the canvas and never covers it */
+function renderDayDetail(i){
   const q=seq[i];if(!q)return;
   const r=q.row;
-  let h='<div class="at-d">'+q.d+(q.d===localKey(new Date())?' · today':'')+'</div>';
-  if(!r)h+='<div class="at-c">no commits</div>';
-  else{
-    if(r.pending)h+='<div class="at-c">'+r.c+' commit'+(r.c>1?'s':'')+' · churn pending next build</div>';
-    else h+='<div class="at-c"><span style="color:var(--amber)">+'+fmt(r.a)+'</span> / <span style="color:var(--red)">−'+fmt(r.del)+'</span> lines · '+r.c+' commit'+(r.c>1?'s':'')+'</div>';
+  let top='<div class="at-d">'+q.d+(q.d===localKey(new Date())?' · today':'')+'</div>';
+  if(!r)top+='<div class="at-c">no commits</div>';
+  else if(r.pending)top+='<div class="at-c">'+r.c+' commit'+(r.c>1?'s':'')+' · churn pending next build</div>';
+  else top+='<div class="at-c"><span style="color:var(--amber)">+'+fmt(r.a)+'</span> / <span style="color:var(--red)">−'+fmt(r.del)+'</span> lines · '+r.c+' commit'+(r.c>1?'s':'')+'</div>';
+  let bottom='';
+  if(r){
     const list=dayCommits[q.d]||[];
-    list.slice(0,5).forEach(c=>{h+='<div class="at-m"><span>'+esc(c.h)+'</span>'+esc(c.s)+'</div>'});
-    if(!list.length)h+='<div class="at-more">commit list unavailable at this tier</div>';
-    else if(r.c>Math.min(5,list.length))h+='<div class="at-more">… +'+(r.c-Math.min(5,list.length))+' more</div>';
+    list.slice(0,5).forEach(c=>{bottom+='<div class="at-m"><span>'+esc(c.h)+'</span>'+esc(c.s)+'</div>'});
+    if(!list.length)bottom='<div class="at-more">commit list unavailable at this tier</div>';
+    else if(r.c>Math.min(5,list.length))bottom+='<div class="at-more">… +'+(r.c-Math.min(5,list.length))+' more</div>';
   }
-  tip.innerHTML=h;tip.hidden=false;
-  /* measure, then place: above the day's highest point, flipping below if clipped */
-  const W=cv.clientWidth,H=cv.clientHeight,L=12,R=12,T=24,B=18;
-  const step=(W-L-R)/(WINDOW-1),x=L+i*step;
-  const vmax=Math.max(1,...seq.map(q2=>q2.row&&!q2.row.pending?Math.max(q2.row.a,q2.row.del):0));
-  const base=H-B,ph=H-T-B;
-  const py=r&&!r.pending?base-Math.max(r.a,r.del)/vmax*ph:base;
-  const tw=tip.offsetWidth,th=tip.offsetHeight;
-  tip.style.left=Math.max(4,Math.min(W-4-tw,x-tw/2))+'px';
-  tip.style.top=(py-th-8>=0?py-th-8:Math.min(H-th,py+10))+'px';
+  tip.innerHTML='<div>'+top+'</div><div>'+bottom+'</div>';
 }
-function hideTip(){tip.hidden=true}
+/* readout at rest: the latest day with commits (today in the common case) */
+function defaultIndex(){
+  for(let i=seq.length-1;i>=0;i--)if(seq[i].row)return i;
+  return seq.length-1;
+}
 function evIndex(e){
   const r=cv.getBoundingClientRect(),L=12,R=12;
   const i=Math.round((e.clientX-r.left-L)/((r.width-L-R)/(WINDOW-1)));
   return i>=0&&i<WINDOW?i:-1;
 }
-cv.addEventListener('pointermove',e=>{const i=evIndex(e);if(i!==hover){hover=i;draw();if(i>=0)showTip(i);else hideTip()}});
-cv.addEventListener('pointerdown',e=>{const i=evIndex(e);if(i>=0){hover=i;draw();showTip(i)}}); /* touch taps: pointermove may never fire */
-cv.addEventListener('pointerleave',()=>{hover=-1;draw();hideTip()});
+cv.addEventListener('pointermove',e=>{const i=evIndex(e);if(i<0||i===hover)return;hover=i;draw();renderDayDetail(i)});
+cv.addEventListener('pointerdown',e=>{const i=evIndex(e);if(i>=0){hover=i;draw();renderDayDetail(i)}}); /* touch taps: pointermove may never fire */
+cv.addEventListener('pointerleave',()=>{hover=-1;draw();renderDayDetail(defaultIndex())});
 function renderActivity(){
-  hover=-1;hideTip();
+  hover=-1;
   const nz=days.filter(d=>d.c>0);
   const c=nz.reduce((s,d)=>s+d.c,0),a=nz.reduce((s,d)=>s+d.a,0),dl=nz.reduce((s,d)=>s+d.del,0);
   sumEl.innerHTML='<b>'+nz.length+'</b> days with commits · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> lines <span style="color:var(--faint)">· all time</span>';
   draw();
+  renderDayDetail(defaultIndex());
 }
-if('ResizeObserver' in window)new ResizeObserver(()=>{draw();hideTip()}).observe(cv);
-else addEventListener('resize',()=>{draw();hideTip()},{passive:true});
+if('ResizeObserver' in window)new ResizeObserver(()=>draw()).observe(cv);
+else addEventListener('resize',()=>draw(),{passive:true});
 
 function setNote(){
   const todayK=localKey(new Date());
@@ -524,7 +485,7 @@ function setNote(){
 function settle(){
   setPill(tier==='live'?'on':tier==='stats'?'sh':'',
     tier==='live'?'● LIVE · GitHub API':tier==='stats'?'◐ STATS · '+statsDay:tier==='boot'?'·· connecting':'○ SNAPSHOT · '+SNAP.stamp);
-  rebuildDayCommits();renderLog();renderActivity();setNote();
+  rebuildDayCommits();renderActivity();setNote();
 }
 
 /* snapshot first (instant first paint), then three lanes race to upgrade */
