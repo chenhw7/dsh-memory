@@ -52,6 +52,13 @@ export interface EvalModelRoute {
    * deployment's managed credentials document.
    */
   readonly credentialEnvRefs?: readonly string[]
+  /**
+   * The deployment's declared thinking strength for the model under test
+   * (`agent-default-model.reasoningEffort`), passed through the initialize
+   * handshake so the scored run behaves like a real session. Absent = the
+   * adapter's model default.
+   */
+  readonly reasoningEffort?: string
 }
 
 /** One provider profile inside the deployment's `llm-pi-ai.providers` mapping. */
@@ -129,6 +136,10 @@ export function resolveEvalModel(
         throw new Error(`eval model-route: agent-default-model.${field} at ${settingsPath} must be a non-empty string`)
       }
     }
+    const effort = defaults['reasoningEffort']
+    if (effort !== undefined && (typeof effort !== 'string' || effort.length === 0)) {
+      throw new Error(`eval model-route: agent-default-model.reasoningEffort at ${settingsPath} must be a non-empty string`)
+    }
   }
 
   const provider = flags.provider ?? (defaults['provider'] as string | undefined) ?? FALLBACK_EVAL_PROVIDER
@@ -139,6 +150,7 @@ export function resolveEvalModel(
       model,
       source: sourceOf(flags, defaults),
       ...(document !== undefined ? { deploymentHome: dirname(settingsPath), origin: settingsPath } : {}),
+      ...effortOf(defaults),
     }
   }
 
@@ -172,7 +184,14 @@ export function resolveEvalModel(
     origin: settingsPath,
     piAiSection: stringify({ 'llm-pi-ai': piAi }),
     credentialEnvRefs,
+    ...effortOf(defaults),
   }
+}
+
+/** Optional reasoning-effort passthrough from the deployment's declared default. */
+function effortOf(defaults: Record<string, unknown>): { reasoningEffort?: string } {
+  const effort = defaults['reasoningEffort']
+  return typeof effort === 'string' && effort.length > 0 ? { reasoningEffort: effort } : {}
 }
 
 function sourceOf(flags: { provider?: string; model?: string }, defaults: Record<string, unknown>): 'flag' | 'agent-default-model' | 'fallback' {

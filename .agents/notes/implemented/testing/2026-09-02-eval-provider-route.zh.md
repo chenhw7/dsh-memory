@@ -13,7 +13,7 @@ Status: implemented
 1. **部署 home 的 `settings.yaml` 是唯一配置源。** eval 经 `$DSH_HOME`（harness 自己解析的同一变量，缺省 `~/.dsh`）读取——不新增 eval 专属 yaml、不硬编码路径，套件的跨环境可移植性由构造保证。
 2. **`agent-default-model` 是缺省路由（双轴）。** 一旦声明，`provider` 与 `model` 必须同时存在（半截声明会把部署 provider 与 eval 回退模型悄悄混合——响亮报错）。显式 `--provider`/`--model` 旗标逐轴覆盖；全缺省时回退出厂 `deepseek-official`/`deepseek-v4-flash` 组合。
 3. **`real` 模式把部署的 `llm-pi-ai:` 分节镜像进一次性 home**（解析在 `eval/model-route.ts`，物化在 `profile-template.ts`，该分节即一次性 settings 文档）。子进程的凭据行经 `credentials.path` 补丁指向**部署 home 的托管凭据文档**（`.credentials.yaml`——web Models 页写入的那份），每条 `apiKeyEnv` 引用按请求解析的方式与真实会话完全一致。eval 全程不解析凭据值——只探引用名（`assertCredentialRefsResolvable`），与 deepseek 密钥预检同一 probe-never-parse 原则。携带内联凭据字段的档案在镜像前响亮报错。
-4. **模式语义按路由形态各归其位。** `mock` 是确定性 deepseek-official 形态：不读任何东西、拒绝 `--model`/`--provider`。`external` 伪装 deepseek 适配器 wire：provider 固定 `deepseek-official`、拒绝 `--provider`。`real` 承接完整解析——DeepSeek provider 保留 DEEPSEEK 密钥预检；pi-ai provider 路由天然 live、必须有镜像分节（`eval/boot.ts` 双守）。报告把路由盖印为 `model: { mode, provider, id }`。
+4. **模式语义按路由形态各归其位。** `mock` 是确定性 deepseek-official 形态：不读任何东西、拒绝 `--model`/`--provider`。`external` 伪装 deepseek 适配器 wire：provider 固定 `deepseek-official`、拒绝 `--provider`。`real` 承接完整解析——DeepSeek provider 保留 DEEPSEEK 密钥预检；pi-ai provider 路由天然 live、必须有镜像分节（`eval/boot.ts` 双守）。报告把路由盖印为 `model: { mode, provider, id }`；同日稍后盖印还携带路由的 `reasoningEffort`（[测评仪器配置](2026-09-02-eval-judge-config.zh.md)）——部署声明的思考强度经 SDK 初始化握手生效，被打分的运行以真实会话的强度思考。
 
 ## 备选方案
 

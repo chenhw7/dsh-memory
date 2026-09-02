@@ -84,6 +84,8 @@ export interface HarnessModelOptions {
   deploymentHome?: string
   /** The mirrored profiles' `apiKeyEnv` reference names, for the boot preflight. */
   credentialEnvRefs?: readonly string[]
+  /** Thinking strength for the model under test (the deployment's declared default). */
+  reasoningEffort?: string
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`, e.g. `http://127.0.0.1:<port>/v1`. */
   baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -291,7 +293,12 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
       description: `dsh profile ${JSON.stringify(profileName)} (eval)`,
     })
     client.start()
-    await client.request('initialize', { cwd: dshHome, provider, model }, options.initializeTimeoutMs ?? 30_000)
+    const effort = options.model?.reasoningEffort
+    await client.request(
+      'initialize',
+      { cwd: dshHome, provider, model, ...(effort !== undefined && effort.length > 0 ? { reasoningEffort: effort } : {}) },
+      options.initializeTimeoutMs ?? 30_000,
+    )
   } catch (error) {
     // Startup-failure window teardown: stop the mock, reap the child (short
     // graces — a spawn failure has no live process to wait for), then rethrow

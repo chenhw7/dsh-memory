@@ -203,6 +203,7 @@ function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null
     ...(modelRoute?.piAiSection !== undefined ? { piAiSection: modelRoute.piAiSection } : {}),
     ...(modelRoute?.deploymentHome !== undefined ? { deploymentHome: modelRoute.deploymentHome } : {}),
     ...(modelRoute?.credentialEnvRefs !== undefined ? { credentialEnvRefs: modelRoute.credentialEnvRefs } : {}),
+    ...(modelRoute?.reasoningEffort !== undefined ? { reasoningEffort: modelRoute.reasoningEffort } : {}),
     ...(args.baseUrl !== undefined ? { baseUrl: args.baseUrl } : {}),
     ...(args.apiKey !== undefined ? { apiKey: args.apiKey } : {}),
     memoryMode: args.memoryMode,
@@ -325,12 +326,16 @@ function flagsOf(args: CliArgs): { provider?: string; model?: string } {
 }
 
 /** Report stamp for the scored model identity; the mock route has none. */
-function modelStampOf(args: CliArgs, modelRoute: EvalModelRoute | null): { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null } {
+function modelStampOf(args: CliArgs, modelRoute: EvalModelRoute | null): { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null; reasoningEffort: string | null } {
   return {
     mode: args.mode,
     ...(modelRoute !== null
-      ? { provider: modelRoute.provider, id: modelRoute.model }
-      : { provider: null, id: null }),
+      ? {
+          provider: modelRoute.provider,
+          id: modelRoute.model,
+          ...(modelRoute.reasoningEffort !== undefined ? { reasoningEffort: modelRoute.reasoningEffort } : { reasoningEffort: null }),
+        }
+      : { provider: null, id: null, reasoningEffort: null }),
   }
 }
 
@@ -361,9 +366,10 @@ async function main(): Promise<void> {
     const piAiNotice = modelRoute.piAiSection !== undefined
       ? ', llm-pi-ai routes mirrored from the deployment settings'
       : ''
+    const effortNotice = modelRoute.reasoningEffort !== undefined ? `, effort ${modelRoute.reasoningEffort}` : ''
     process.stdout.write(
       `eval cli: model under test ${modelRoute.provider}/${modelRoute.model} `
-      + `(${describeEvalModelRoute(modelRoute)})${piAiNotice}\n`,
+      + `(${describeEvalModelRoute(modelRoute)}${effortNotice})${piAiNotice}\n`,
     )
   }
   process.stdout.write(`eval: ${String(matched.length)}/${String(scenarios.length)} scenarios from ${args.dataset}`

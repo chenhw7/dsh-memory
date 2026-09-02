@@ -133,9 +133,16 @@ export interface EvalReport {
   readonly memoryMode: EffectiveMemoryMode
   /**
    * Model identity of the scored run: `provider`/`id` name the initialize
-   * handshake route; both `null` for the deterministic mock route.
+   * handshake route; both `null` for the deterministic mock route. The
+   * reasoning effort rides with the identity — answers differ by effort, so
+   * scores never leave it behind.
    */
-  readonly model: { readonly mode: 'mock' | 'real' | 'external'; readonly provider: string | null; readonly id: string | null }
+  readonly model: {
+    readonly mode: 'mock' | 'real' | 'external'
+    readonly provider: string | null
+    readonly id: string | null
+    readonly reasoningEffort: string | null
+  }
   readonly rubricVersions: { readonly storage: string; readonly recall: string }
   readonly judge: { readonly model: string; readonly baseUrl: string } | null
   readonly totals: SliceMetrics
@@ -264,7 +271,7 @@ export function buildReport(
     /**
      * Model identity of the scored run (provider/id `null` for the mock route).
      */
-    model: { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null }
+    model: { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null; reasoningEffort: string | null }
     rubricVersions: { storage: string; recall: string }
     judge: { model: string; baseUrl: string } | null
     generatedAt?: string
@@ -325,7 +332,7 @@ export function renderReportMarkdown(report: EvalReport): string {
   lines.push(`- generated: ${report.generatedAt}`)
   lines.push(`- model under test: ${report.model.id === null
     ? `mock (${report.model.mode} route, deterministic)`
-    : `${report.model.provider}/${report.model.id} (${report.model.mode} route)`}`)
+    : `${report.model.provider}/${report.model.id} (${report.model.mode} route${report.model.reasoningEffort === null ? '' : `, effort ${report.model.reasoningEffort}`})`}`)
   lines.push(`- memory mode: ${report.memoryMode}`)
   lines.push(`- rubric: storage v${report.rubricVersions.storage}, recall v${report.rubricVersions.recall}`)
   lines.push(`- judge: ${report.judge === null ? 'skipped (deterministic layer only)' : `${report.judge.model} @ ${report.judge.baseUrl}`}`)

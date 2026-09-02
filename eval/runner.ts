@@ -70,6 +70,8 @@ export interface RunOptions {
   readonly deploymentHome?: string
   /** The mirrored profiles' `apiKeyEnv` reference names, for the boot preflight. */
   readonly credentialEnvRefs?: readonly string[]
+  /** Thinking strength for the model under test (the deployment's declared default). */
+  readonly reasoningEffort?: string
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`. */
   readonly baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -443,6 +445,7 @@ function modelOptions(options: RunOptions): HarnessModelOptions {
     ...(options.piAiSection !== undefined ? { piAiSection: options.piAiSection } : {}),
     ...(options.deploymentHome !== undefined ? { deploymentHome: options.deploymentHome } : {}),
     ...(options.credentialEnvRefs !== undefined ? { credentialEnvRefs: options.credentialEnvRefs } : {}),
+    ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   }

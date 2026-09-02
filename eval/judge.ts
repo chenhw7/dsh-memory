@@ -27,6 +27,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z as zod } from 'zod'
 import type { ZodType } from 'zod'
+import { loadEvalYamlJudge } from './eval-config.ts'
 
 /** Rubric directory resolved next to this module (eval/rubric). */
 export const DEFAULT_RUBRIC_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'rubric')
@@ -47,6 +48,8 @@ export interface JudgeConfig {
   baseUrl: string
   apiKey: string
   model: string
+  /** Reasoning effort sent as the wire `reasoning_effort` param; absent = model default. */
+  reasoningEffort?: string
 }
 
 /**
@@ -200,12 +203,15 @@ function readRubricText(file: string): string {
 }
 
 /**
- * Resolve the judge configuration from the environment: the explicit
- * EVAL_JUDGE_* triple wins; when any of the three is missing the deployment's
- * DEEPSEEK credentials are used instead (DEEPSEEK_BASE_URL, else DeepSeek
- * official; model `deepseek-chat`); with no key at all, `null` — the caller
- * skips judged scoring instead of half-configuring an instrument. Empty
- * values count as absent.
+ * Resolve the judge configuration: the explicit EVAL_JUDGE_* environment
+ * triple wins; next the deployment home's `eval.yaml` `judge:` section (the
+ * operator-pasted instrument, see eval/eval-config.ts); when neither is
+ * present the deployment's DEEPSEEK credentials are used instead
+ * (DEEPSEEK_BASE_URL, else DeepSeek official; model `deepseek-chat`); with no
+ * key at all, `null` — the caller skips judged scoring instead of
+ * half-configuring an instrument. Empty values count as absent. A present
+ * eval.yaml judge section is required to be complete: a half-pasted instrument
+ * fails loud rather than silently skipping.
  */
 export function judgeFromEnv(): JudgeConfig | null {
   const readEnv = (name: string): string | undefined => {
@@ -218,6 +224,8 @@ export function judgeFromEnv(): JudgeConfig | null {
   if (evalBase !== undefined && evalKey !== undefined && evalModel !== undefined) {
     return { baseUrl: evalBase, apiKey: evalKey, model: evalModel }
   }
+  const yamlJudge = loadEvalYamlJudge()
+  if (yamlJudge !== null) return yamlJudge
   const deepseekKey = readEnv('DEEPSEEK_API_KEY')
   if (deepseekKey === undefined) return null
   return {
@@ -251,7 +259,14 @@ async function callJudgeModel(judge: JudgeConfig, messages: readonly ChatMessage
       'Content-Type': 'application/json',
       Authorization: `Bearer ${judge.apiKey}`,
     },
-    body: JSON.stringify({ model: judge.model, messages, temperature: 0 }),
+    body: JSON.stringify({
+      model: judge.model,
+      messages,
+      temperature: 0,
+      // openai-completions endpoints (the fuyao gateway among them) take the
+      // thinking strength here; the value is the wire form the endpoint accepts.
+      ...(judge.reasoningEffort !== undefined ? { reasoning_effort: judge.reasoningEffort } : {}),
+    }),
   })
   if (!response.ok) {
     throw new Error(`eval judge: chat completions returned ${String(response.status)}: ${(await response.text()).slice(0, 200)}`)

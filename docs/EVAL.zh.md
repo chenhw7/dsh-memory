@@ -126,15 +126,18 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . \
 
 评分锚定在 `eval/rubric/storage-v1.md` 与 `eval/rubric/recall-v1.md`：judge 的 system prompt 就是 rubric 文本逐字；每份报告盖印所用版本（首行 `Rubric version: <N>`）；改动锚点必须升版本，不同 rubric 版本的分数永不互比。judge 协议：temperature 0、严格 JSON 输出、解析失败重判一次，再失败记 invalid 并单列。
 
-judge 凭据按环境变量门控，三层回退：
+judge 配置按优先级回退：
 
-| 优先级 | 环境变量 | 行为 |
+| 优先级 | 来源 | 行为 |
 |---|---|---|
-| 1 | `EVAL_JUDGE_BASE_URL` + `EVAL_JUDGE_API_KEY` + `EVAL_JUDGE_MODEL` 三者齐备 | 判定打到该端点 |
-| 2 | `DEEPSEEK_API_KEY` 在场 | 用 DEEPSEEK 凭据（`DEEPSEEK_BASE_URL` 缺省官方端点，模型缺省 `deepseek-chat`） |
-| 3 | 全缺 | 判定层 skipped（报告标注 "judge: skipped (deterministic layer only)"），确定性层照常跑，退出码不受影响 |
+| 1 | 环境变量 `EVAL_JUDGE_BASE_URL` + `EVAL_JUDGE_API_KEY` + `EVAL_JUDGE_MODEL` 三者齐备 | 判定打到该端点 |
+| 2 | 部署 home 的 `eval.yaml` `judge:` 分节（`baseURL` + `apiKey` 或 `apiKeyEnv` + `model`，可选 `reasoningEffort`） | 判定打到该端点；分节存在但不完整（半截粘贴、空 key、未知字段）响亮报错，绝不静默跳过 |
+| 3 | `DEEPSEEK_API_KEY` 在场 | 用 DEEPSEEK 凭据（`DEEPSEEK_BASE_URL` 缺省官方端点，模型缺省 `deepseek-chat`） |
+| 4 | 全缺 | 判定层 skipped（报告标注 "judge: skipped (deterministic layer only)"），确定性层照常跑，退出码不受影响 |
 
-判定模型的凭据链与被测模型的相互独立：`--mode real` 的被测路由要 `DEEPSEEK_API_KEY` 环境变量或 `$DSH_HOME/.credentials.yaml` 里的 key（boot 前预检，缺密钥响亮失败），而判定路由只认上表两组变量。两类真模型调用都不进 CI。
+`eval.yaml` 是 eval 专属的仪器配置文件（`$DSH_HOME/eval.yaml`，缺省 `~/.dsh/eval.yaml`），与部署 settings.yaml 分离——**judge 刻意不缺省为被测模型**（同源自评偏置），模型身份随报告盖印。`judge.reasoningEffort` 透传为请求体的 `reasoning_effort` 参数（openai-completions 端点即 fuyao 网关接受的 wire 值）。
+
+判定模型的凭据链与被测模型的相互独立：`--mode real` 的被测路由经 `credentials.path` 补丁直接读部署 home 的托管凭据文档（`.credentials.yaml`，UI Models 页写入的那份）+ 继承环境（boot 前预检引用可达性，缺失响亮失败）；被测模型的思考强度透传部署 `agent-default-model.reasoningEffort`（如 `max`），经 SDK 初始化握手生效；判定路由只认上表来源。两类真模型调用都不进 CI。
 
 ## 隔离纪律
 

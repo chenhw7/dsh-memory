@@ -313,6 +313,8 @@ describe('judgeFromEnv', () => {
     'DEEPSEEK_API_KEY',
     'DEEPSEEK_BASE_URL',
     'DEEPSEEK_MODEL',
+    'DSH_HOME',
+    'FUYAO_API_KEY',
   ] as const
 
   let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {}
@@ -334,6 +336,18 @@ describe('judgeFromEnv', () => {
     for (const [name, value] of Object.entries(values)) {
       process.env[name] = value
     }
+    // judgeFromEnv reads the deployment home's eval.yaml — isolate every case
+    // from the real machine's file; cases that exercise the yaml chain set
+    // their own DSH_HOME explicitly.
+    if (process.env['DSH_HOME'] === undefined) process.env['DSH_HOME'] = scratchHome(null)
+  }
+
+  /** One scratch deployment home; `eval.yaml` content optional (empty dir by default). */
+  function scratchHome(evalYaml: string | null): string {
+    const home = mkdtempSync(join(tmpdir(), 'eval-judge-home-'))
+    tempDirs.push(home)
+    if (evalYaml !== null) writeFileSync(join(home, 'eval.yaml'), evalYaml)
+    return home
   }
 
   it('prefers a complete EVAL_JUDGE_* triple over the DEEPSEEK credentials', () => {
@@ -369,6 +383,37 @@ describe('judgeFromEnv', () => {
       apiKey: 'sk-deepseek',
       model: DEEPSEEK_JUDGE_FALLBACK_MODEL,
     })
+  })
+
+  it('falls back to the eval.yaml judge section when the env triple is partial', () => {
+    withEnv({
+      EVAL_JUDGE_BASE_URL: 'http://127.0.0.1:9999/v1',
+      DSH_HOME: scratchHome('judge:\n  baseURL: http://yaml-judge/v1\n  apiKey: yaml-key\n  model: judge-yaml\n  reasoningEffort: high\n'),
+    })
+    expect(judgeFromEnv()).toEqual({ baseUrl: 'http://yaml-judge/v1', apiKey: 'yaml-key', model: 'judge-yaml', reasoningEffort: 'high' })
+  })
+
+  it('the eval.yaml judge section wins over the DEEPSEEK fallback', () => {
+    withEnv({
+      DEEPSEEK_API_KEY: 'deepseek-key',
+      DSH_HOME: scratchHome('judge:\n  baseURL: http://yaml-judge/v1\n  apiKey: yaml-key\n  model: judge-yaml\n'),
+    })
+    expect(judgeFromEnv()).toEqual({ baseUrl: 'http://yaml-judge/v1', apiKey: 'yaml-key', model: 'judge-yaml' })
+  })
+
+  it('resolves judge.apiKeyEnv from the eval process environment', () => {
+    withEnv({
+      FUYAO_API_KEY: 'resolved-key',
+      DSH_HOME: scratchHome('judge:\n  baseURL: http://yaml-judge/v1\n  apiKeyEnv: FUYAO_API_KEY\n  model: judge-yaml\n'),
+    })
+    expect(judgeFromEnv()).toEqual({ baseUrl: 'http://yaml-judge/v1', apiKey: 'resolved-key', model: 'judge-yaml' })
+  })
+
+  it('fails loud on an incomplete eval.yaml judge section (half-pasted instrument)', () => {
+    withEnv({
+      DSH_HOME: scratchHome('judge:\n  baseURL: http://yaml-judge/v1\n  apiKey: \"\"\n  model: judge-yaml\n'),
+    })
+    expect(() => judgeFromEnv()).toThrow(/judge.apiKey .* is empty/)
   })
 
   it('returns null when the EVAL_JUDGE_* triple is partial and no DEEPSEEK key exists', () => {
