@@ -10,7 +10,7 @@ rubric judge 只有环境变量（`EVAL_JUDGE_*`）一条路，用起来是摩�
 
 ## 决策
 
-1. **`$DSH_HOME/eval.yaml`（缺省 `~/.dsh/eval.yaml`）是 eval 的仪器配置**（`eval/eval-config.ts`）——只管 judge，刻意为之：judge 绝不能缺省为被测模型（同源自评偏置），部署 settings.yaml 保持被测模型唯一来源，本文件不覆盖它。`judge:` 携带 `baseURL` + `apiKey`（直接粘贴）或 `apiKeyEnv`（从 eval 进程环境解析）+ `model`，可选 `reasoningEffort`。分节存在但不完整（贴了一半的 key、未知字段、两种凭据形式并存）响亮报错——半截配置的仪器不能静默退化为跳过判定。
+1. **`eval.yaml` 是 eval 的仪器配置**（`eval/eval-config.ts`），候选路径按序取第一个存在的：项目根 `eval.yaml`（推荐——粘贴 key 的那份，已 gitignore、保持 0600）→ 部署 home 的 `$DSH_HOME/eval.yaml`（缺省 `~/.dsh/eval.yaml`）；`$DSH_EVAL_CONFIG` 显式指定单一文件（测试/CI 用）——只管 judge，刻意为之：judge 绝不能缺省为被测模型（同源自评偏置），部署 settings.yaml 保持被测模型唯一来源，本文件不覆盖它。`judge:` 携带 `baseURL` + `apiKey`（直接粘贴）或 `apiKeyEnv`（从 eval 进程环境解析）+ `model`，可选 `reasoningEffort`。分节存在但不完整（贴了一半的 key、未知字段、两种凭据形式并存）响亮报错——半截配置的仪器不能静默退化为跳过判定。
 2. **优先级：`EVAL_JUDGE_*` 环境三元组 → eval.yaml `judge:` → `DEEPSEEK_*` 回退 → skipped。** yaml 压过泛化的 DEEPSEEK 回退（它是更具体的仪器声明）；环境三元组压过 yaml（逐次运行的显式覆盖本就该最高）。
 3. **思考强度端到端透传。** 被测模型：`agent-default-model.reasoningEffort` 随路由解析进 SDK 初始化握手（`boot.ts`），由 harness 侧按 provider 档案声明的档位校验（否则 `UNSUPPORTED_REASONING_EFFORT`）——被打分的运行以真实会话的强度思考。judge：`judge.reasoningEffort` 原样作为请求体的 `reasoning_effort` 参数（`openai-completions` 端点接受的参数；pi-ai 从档案映射派发同一 wire 值）。
 4. **报告盖印携带强度。** `EvalReport.model` 增加 `reasoningEffort`（mock/未声明为 `null`）——答案随强度变化，分数永不脱离它。

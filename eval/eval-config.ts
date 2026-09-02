@@ -1,12 +1,15 @@
 /**
- * Eval-owned configuration from the deployment home: `$DSH_HOME/eval.yaml`
- * (else `~/.dsh/eval.yaml`).
+ * Eval-owned configuration: `eval.yaml` in the project root (the repo the eval
+ * CLI runs from), falling back to the deployment home's `$DSH_HOME/eval.yaml`
+ * (else `~/.dsh/eval.yaml`), or the path named by `$DSH_EVAL_CONFIG` (tests and
+ * CI use it to pin one file and to opt out).
  *
  * The file configures the eval's instruments, not the system under test —
  * today that is the rubric judge, a deliberate choice the operator makes per
  * L2 run (same-source self-grading is exactly what the file exists to avoid
  * defaulting into). The deployment's own settings.yaml stays the source for
- * the model under test; this file never overrides it.
+ * the model under test; this file never overrides it. The project-root copy
+ * holds a pasted credential, so it must stay gitignored.
  *
  * @module eval/eval-config
  */
@@ -28,32 +31,46 @@ export interface EvalJudgeFileConfig {
   reasoningEffort?: string
 }
 
-/** Absolute path of the eval config document for one deployment home. */
-export function evalConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(env['DSH_HOME'] ?? join(homedir(), '.dsh'), 'eval.yaml')
+/**
+ * Candidate eval config paths, most specific first: `$DSH_EVAL_CONFIG` (an
+ * explicit pointer), the project root's `eval.yaml` (the repo the CLI runs
+ * from), then the deployment home's `eval.yaml`.
+ */
+export function evalConfigCandidates(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const explicit = env['DSH_EVAL_CONFIG']
+  if (explicit !== undefined && explicit.length > 0) return [explicit]
+  const deploymentHome = env['DSH_HOME'] ?? join(homedir(), '.dsh')
+  return [join(process.cwd(), 'eval.yaml'), join(deploymentHome, 'eval.yaml')]
 }
 
 /**
- * Load the `judge:` section of the deployment home's eval.yaml. Absent file or
- * absent section → `null` (the caller falls through its own chain). A present
- * section that is incomplete or malformed is a misconfiguration and fails loud:
- * a half-pasted instrument config must not silently degrade to skipped judging.
+ * Load the `judge:` section of the eval config. Absent files or an absent
+ * section → `null` (the caller falls through its own chain). A present section
+ * that is incomplete or malformed is a misconfiguration and fails loud: a
+ * half-pasted instrument config must not silently degrade to skipped judging.
  * `apiKeyEnv` resolves from the eval process environment at load time.
- * @throws when the document is unparseable or the `judge:` section is malformed.
+ * @throws when a candidate document is unparseable or its `judge:` section is malformed.
  */
 export function loadEvalYamlJudge(env: NodeJS.ProcessEnv = process.env): EvalJudgeFileConfig | null {
-  const documentPath = evalConfigPath(env)
-  let raw: string
-  try {
-    raw = readFileSync(documentPath, 'utf8')
-  } catch (error) {
-    // ENOENT is simply no eval-owned configuration; any other read failure is
-    // a broken deployment and must surface, not silently skip the judge.
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new Error(`eval eval-config: ${documentPath} cannot be read: ${String(error)}`)
+  for (const documentPath of evalConfigCandidates(env)) {
+    let raw: string
+    try {
+      raw = readFileSync(documentPath, 'utf8')
+    } catch (error) {
+      // ENOENT is simply no eval-owned configuration at this candidate; any
+      // other read failure is a broken deployment and must surface, not
+      // silently skip the judge.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`eval eval-config: ${documentPath} cannot be read: ${String(error)}`)
+      }
+      continue
     }
-    return null
+    return parseJudgeSection(documentPath, raw, env)
   }
+  return null
+}
+
+function parseJudgeSection(documentPath: string, raw: string, env: NodeJS.ProcessEnv): EvalJudgeFileConfig | null {
   let parsed: unknown
   try {
     parsed = parse(raw)

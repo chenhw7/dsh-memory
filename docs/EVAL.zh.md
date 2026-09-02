@@ -131,11 +131,11 @@ judge 配置按优先级回退：
 | 优先级 | 来源 | 行为 |
 |---|---|---|
 | 1 | 环境变量 `EVAL_JUDGE_BASE_URL` + `EVAL_JUDGE_API_KEY` + `EVAL_JUDGE_MODEL` 三者齐备 | 判定打到该端点 |
-| 2 | 部署 home 的 `eval.yaml` `judge:` 分节（`baseURL` + `apiKey` 或 `apiKeyEnv` + `model`，可选 `reasoningEffort`） | 判定打到该端点；分节存在但不完整（半截粘贴、空 key、未知字段）响亮报错，绝不静默跳过 |
+| 2 | eval 配置文件的 `judge:` 分节（`baseURL` + `apiKey` 或 `apiKeyEnv` + `model`，可选 `reasoningEffort`） | 判定打到该端点；分节存在但不完整（半截粘贴、空 key、未知字段）响亮报错，绝不静默跳过 |
 | 3 | `DEEPSEEK_API_KEY` 在场 | 用 DEEPSEEK 凭据（`DEEPSEEK_BASE_URL` 缺省官方端点，模型缺省 `deepseek-chat`） |
 | 4 | 全缺 | 判定层 skipped（报告标注 "judge: skipped (deterministic layer only)"），确定性层照常跑，退出码不受影响 |
 
-`eval.yaml` 是 eval 专属的仪器配置文件（`$DSH_HOME/eval.yaml`，缺省 `~/.dsh/eval.yaml`），与部署 settings.yaml 分离——**judge 刻意不缺省为被测模型**（同源自评偏置），模型身份随报告盖印。`judge.reasoningEffort` 透传为请求体的 `reasoning_effort` 参数（openai-completions 端点即 fuyao 网关接受的 wire 值）。
+`eval.yaml` 是 eval 专属的仪器配置文件，候选路径按序取第一个存在的：**项目根 `eval.yaml`**（推荐放这里，含粘贴 key，已 gitignore、保持 0600）→ 部署 home 的 `$DSH_HOME/eval.yaml`（缺省 `~/.dsh/eval.yaml`）；`$DSH_EVAL_CONFIG` 显式指定单一文件（测试/CI 用）。与部署 settings.yaml 分离——**judge 刻意不缺省为被测模型**（同源自评偏置），模型身份随报告盖印。`judge.reasoningEffort` 透传为请求体的 `reasoning_effort` 参数（openai-completions 端点即 fuyao 网关接受的 wire 值）。
 
 判定模型的凭据链与被测模型的相互独立：`--mode real` 的被测路由经 `credentials.path` 补丁直接读部署 home 的托管凭据文档（`.credentials.yaml`，UI Models 页写入的那份）+ 继承环境（boot 前预检引用可达性，缺失响亮失败）；被测模型的思考强度透传部署 `agent-default-model.reasoningEffort`（如 `max`），经 SDK 初始化握手生效；判定路由只认上表来源。两类真模型调用都不进 CI。
 
