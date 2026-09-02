@@ -131,6 +131,8 @@ export interface EvalReport {
   readonly buildDir: string
   readonly dataset: string
   readonly memoryMode: EffectiveMemoryMode
+  /** Model identity of the scored run: `id: null` for the deterministic mock route. */
+  readonly model: { readonly mode: 'mock' | 'real' | 'external'; readonly id: string | null }
   readonly rubricVersions: { readonly storage: string; readonly recall: string }
   readonly judge: { readonly model: string; readonly baseUrl: string } | null
   readonly totals: SliceMetrics
@@ -256,6 +258,8 @@ export function buildReport(
     buildDir: string
     dataset: string
     memoryMode: EffectiveMemoryMode
+    /** Model identity of the scored run (`id: null` for the mock route). */
+    model: { mode: 'mock' | 'real' | 'external'; id: string | null }
     rubricVersions: { storage: string; recall: string }
     judge: { model: string; baseUrl: string } | null
     generatedAt?: string
@@ -292,6 +296,7 @@ export function buildReport(
     buildDir: stamp.buildDir,
     dataset: stamp.dataset,
     memoryMode: stamp.memoryMode,
+    model: stamp.model,
     rubricVersions: stamp.rubricVersions,
     judge: stamp.judge,
     totals: sliceMetrics('total', results),
@@ -313,6 +318,7 @@ export function renderReportMarkdown(report: EvalReport): string {
   lines.push('')
   lines.push(`- build under test: \`${report.buildDir}\``)
   lines.push(`- generated: ${report.generatedAt}`)
+  lines.push(`- model under test: ${report.model.id === null ? `mock (${report.model.mode} route, deterministic)` : `${report.model.id} (${report.model.mode} route)`}`)
   lines.push(`- memory mode: ${report.memoryMode}`)
   lines.push(`- rubric: storage v${report.rubricVersions.storage}, recall v${report.rubricVersions.recall}`)
   lines.push(`- judge: ${report.judge === null ? 'skipped (deterministic layer only)' : `${report.judge.model} @ ${report.judge.baseUrl}`}`)

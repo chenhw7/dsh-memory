@@ -51,6 +51,12 @@ export interface RunOptions {
   readonly buildDir: string
   /** Model route; `external` injects a caller-supplied OpenAI-compatible endpoint. */
   readonly mode: 'mock' | 'real' | 'external'
+  /**
+   * Model id for the initialize handshake (`real`/`external`); `undefined`
+   * keeps the boot default. The provider axis is not caller-selectable — the
+   * SDK profile mounts only `deepseek-official`.
+   */
+  readonly model?: string
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`. */
   readonly baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -419,6 +425,7 @@ function statementOf(homes: Map<string, FactHome>, factId: string): string {
 function modelOptions(options: RunOptions): HarnessModelOptions {
   return {
     mode: options.mode,
+    ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   }

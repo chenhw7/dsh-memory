@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { judgeFromEnv, type JudgeConfig } from './judge.ts'
+import { describeEvalModelRoute, resolveEvalModel, type EvalModelRoute } from './model-route.ts'
 import {
   buildReport,
   diffReports,
@@ -26,7 +27,7 @@ import { runScenarios, type RunOptions } from './runner.ts'
 import { parseDataset, type EvalScenario } from './schema.ts'
 
 const USAGE = `usage:
-  npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--base-url <url>] [--api-key <key>]
+  npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--model <id>] [--base-url <url>] [--api-key <key>]
                   [--judge] [--memory-mode index|full] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N] [--out <file>]
   npm run eval:ab -- --baseline <dir> --candidate <dir> [same flags; --build not allowed]
 
@@ -35,6 +36,8 @@ flags:
   --build <dir>         plugin build under test: package.json + lib/ (eval mode, required)
   --baseline/--candidate <dir>   the two builds for the paired A/B run
   --mode mock|real|external      model route (default mock; external needs --base-url)
+  --model <id>          model id under test for real|external (default: the deployment
+                        home's agent-default-model, else deepseek-v4-flash; printed per run)
   --judge               enable the rubric judge when the judge environment is present
   --memory-mode index|full       injection-mode axis (default index)
   --no-memory           memory injection off — the control group
@@ -48,6 +51,7 @@ interface CliArgs {
   readonly baseline?: string
   readonly candidate?: string
   readonly mode: 'mock' | 'real' | 'external'
+  readonly model?: string
   readonly baseUrl?: string
   readonly apiKey?: string
   readonly judge: boolean
@@ -60,7 +64,7 @@ interface CliArgs {
 
 const BOOLEAN_FLAGS = new Set(['judge', 'no-memory'])
 const VALUE_FLAGS = new Set([
-  'dataset', 'build', 'baseline', 'candidate', 'mode', 'base-url', 'api-key',
+  'dataset', 'build', 'baseline', 'candidate', 'mode', 'model', 'base-url', 'api-key',
   'memory-mode', 'filter', 'concurrency', 'out',
 ])
 
@@ -118,6 +122,7 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
 
   // The boot contract routes keys per mode: mock starts the in-process mock,
   // real resolves the key itself, external takes both from the caller.
+  const model = optional('model')
   const baseUrl = optional('base-url')
   const apiKey = optional('api-key')
   if (mode === 'external' && baseUrl === undefined) {
@@ -125,6 +130,9 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
   }
   if (mode !== 'external' && (baseUrl !== undefined || apiKey !== undefined)) {
     throw new Error(`eval cli: --base-url/--api-key apply only to --mode external\n${USAGE}`)
+  }
+  if (mode === 'mock' && model !== undefined) {
+    throw new Error(`eval cli: --model applies only to --mode real|external (the mock route is deterministic)\n${USAGE}`)
   }
 
   if (ab) {
@@ -146,6 +154,7 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
         ? { baseline: required('baseline'), candidate: required('candidate') }
         : { build: required('build') }),
       mode,
+      ...(model !== undefined ? { model } : {}),
       ...(baseUrl !== undefined ? { baseUrl } : {}),
       ...(apiKey !== undefined ? { apiKey } : {}),
       judge: values.get('judge') === true,
@@ -170,10 +179,11 @@ function applyFilter(scenarios: readonly EvalScenario[], filter: string | undefi
   return matched
 }
 
-function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null): RunOptions {
+function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): RunOptions {
   return {
     buildDir,
     mode: args.mode,
+    ...(modelRoute !== null ? { model: modelRoute.model } : {}),
     ...(args.baseUrl !== undefined ? { baseUrl: args.baseUrl } : {}),
     ...(args.apiKey !== undefined ? { apiKey: args.apiKey } : {}),
     memoryMode: args.memoryMode,
@@ -228,13 +238,14 @@ function writeJson(path: string, payload: unknown): void {
   writeFileSync(path, `${JSON.stringify(payload, undefined, 2)}\n`)
 }
 
-async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null): Promise<void> {
+async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): Promise<void> {
   const buildDir = resolve(args.build ?? '')
-  const outcome = await runScenarios(scenarios, runOptionsOf(args, buildDir, judge))
+  const outcome = await runScenarios(scenarios, runOptionsOf(args, buildDir, judge, modelRoute))
   const report = buildReport(outcome.results, {
     buildDir,
     dataset: args.dataset,
     memoryMode: outcome.memoryMode,
+    model: modelStampOf(args, modelRoute),
     rubricVersions: outcome.rubricVersions,
     judge: outcome.judge,
   })
@@ -248,18 +259,20 @@ async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judg
   failOnErrors(report.scenarios, args.judge)
 }
 
-async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null): Promise<void> {
+async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): Promise<void> {
   const baselineDir = resolve(args.baseline ?? '')
   const candidateDir = resolve(args.candidate ?? '')
   process.stdout.write(`eval ab: baseline build ${baselineDir}\n`)
-  const baselineOutcome = await runScenarios(scenarios, runOptionsOf(args, baselineDir, judge))
+  const baselineOutcome = await runScenarios(scenarios, runOptionsOf(args, baselineDir, judge, modelRoute))
   process.stdout.write(`eval ab: candidate build ${candidateDir}\n`)
-  const candidateOutcome = await runScenarios(scenarios, runOptionsOf(args, candidateDir, judge))
+  const candidateOutcome = await runScenarios(scenarios, runOptionsOf(args, candidateDir, judge, modelRoute))
 
+  const modelStamp = modelStampOf(args, modelRoute)
   const baselineReport = buildReport(baselineOutcome.results, {
     buildDir: baselineDir,
     dataset: args.dataset,
     memoryMode: baselineOutcome.memoryMode,
+    model: modelStamp,
     rubricVersions: baselineOutcome.rubricVersions,
     judge: baselineOutcome.judge,
   })
@@ -267,6 +280,7 @@ async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: J
     buildDir: candidateDir,
     dataset: args.dataset,
     memoryMode: candidateOutcome.memoryMode,
+    model: modelStamp,
     rubricVersions: candidateOutcome.rubricVersions,
     judge: candidateOutcome.judge,
   })
@@ -283,10 +297,26 @@ async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: J
   failOnErrors([...baselineReport.scenarios, ...candidateReport.scenarios], args.judge)
 }
 
+/** Report stamp for the scored model identity; the mock route has no model id. */
+function modelStampOf(args: CliArgs, modelRoute: EvalModelRoute | null): { mode: 'mock' | 'real' | 'external'; id: string | null } {
+  return { mode: args.mode, ...(modelRoute !== null ? { id: modelRoute.model } : { id: null }) }
+}
+
 async function main(): Promise<void> {
   const { ab, args } = parseCliArgs(process.argv.slice(2))
   const scenarios = parseDataset(readFileSync(args.dataset, 'utf8'), args.dataset)
   const matched = applyFilter(scenarios, args.filter)
+
+  // `real`/`external` name the model under test explicitly (`--model`) or via
+  // the deployment's agent-default-model; the mock route stays hermetic and
+  // resolves nothing.
+  const modelRoute = args.mode === 'mock' ? null : resolveEvalModel(args.model)
+  if (modelRoute !== null) {
+    const providerNotice = modelRoute.deploymentProvider !== undefined && modelRoute.deploymentProvider !== 'deepseek-official'
+      ? `; the SDK profile pins the provider adapter to deepseek-official — select the gateway with --base-url`
+      : ''
+    process.stdout.write(`eval cli: model under test ${modelRoute.model} (${describeEvalModelRoute(modelRoute)})${providerNotice}\n`)
+  }
   process.stdout.write(`eval: ${String(matched.length)}/${String(scenarios.length)} scenarios from ${args.dataset}`
     + `, mode ${args.mode}, memory ${args.noMemory ? 'off' : args.memoryMode}${args.judge ? ', judge requested' : ''}\n`)
 
@@ -295,8 +325,8 @@ async function main(): Promise<void> {
     process.stderr.write('eval cli: --judge requested but no judge environment found '
       + '(EVAL_JUDGE_BASE_URL/EVAL_JUDGE_API_KEY/EVAL_JUDGE_MODEL or DEEPSEEK_* fallbacks); judged metrics will be skipped\n')
   }
-  if (ab) await runAb(matched, args, judge)
-  else await runSingle(matched, args, judge)
+  if (ab) await runAb(matched, args, judge, modelRoute)
+  else await runSingle(matched, args, judge, modelRoute)
 }
 
 try {
