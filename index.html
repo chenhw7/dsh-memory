@@ -314,7 +314,6 @@ const SNAP={
   days:[['2026-08-17',6,4137,36],['2026-08-18',4,1992,76],['2026-08-20',36,9456,2735],['2026-08-21',4,5648,601],['2026-08-24',7,8365,1968],['2026-08-25',5,1462,2019],['2026-08-26',2,3129,89],['2026-08-27',10,4138,1599],['2026-08-28',9,553,221],['2026-08-31',7,10198,5571],['2026-09-01',48,8651,1177],['2026-09-02',4,31,11]]
 };
 
-const DAYKEY=new Date().toISOString().slice(0,10);
 const pad=n=>String(n).padStart(2,'0');
 const fmt=n=>Math.round(n).toLocaleString('en-US');
 function localKey(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
@@ -325,12 +324,17 @@ function fetchJson(url){
     .then(r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
     .catch(e=>{clearTimeout(t);throw e});
 }
-/* per-day (UTC) session cache: re-renders in one tab don't burn the anonymous budget */
+/* short-TTL session cache, 5 minutes: bursts of reloads in one tab don't burn
+   the anonymous 60 req/h GitHub budget, but a refresh never shows data older
+   than five minutes either. No date key — entries simply expire, and values
+   written by the old per-day scheme lack .ts and are ignored. */
+const CACHETTL=5*60e3;
 function cached(key,load){
-  const k=key+':'+DAYKEY;
-  try{const hit=sessionStorage.getItem(k);if(hit)return Promise.resolve(JSON.parse(hit))}
-  catch(_){/* sessionStorage unavailable → hit the network directly */}
-  return load().then(v=>{try{sessionStorage.setItem(k,JSON.stringify(v))}catch(_){/* cache failure must not block rendering */}return v});
+  try{
+    const hit=JSON.parse(sessionStorage.getItem(key)||'null');
+    if(hit&&hit.ts&&Date.now()-hit.ts<CACHETTL)return Promise.resolve(hit.v);
+  }catch(_){/* sessionStorage unavailable or a foreign value → hit the network */}
+  return load().then(v=>{try{sessionStorage.setItem(key,JSON.stringify({ts:Date.now(),v}))}catch(_){/* cache failure must not block rendering */}return v});
 }
 
 let days=SNAP.days.map(q=>({d:q[0],c:q[1],a:q[2],del:q[3]}));
@@ -537,8 +541,9 @@ else (async()=>{
       const shas=[];
       targets.forEach(t=>t.grp.slice(0,t.grp.length-(t.row?t.row.c:0)).forEach(x=>shas.push(x.h)));
       try{
-        details=await Promise.all(shas.map(h=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits/'+h)
-          .then(j=>({h:h,a:+(j.stats&&j.stats.additions)||0,del:+(j.stats&&j.stats.deletions)||0}))));
+        /* per-commit detail calls are the quota hot spot (up to 8 per view) — cache them by sha set */
+        details=await cached('cairn-repo-det:'+shas.join(','),()=>Promise.all(shas.map(h=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits/'+h)
+          .then(j=>({h:h,a:+(j.stats&&j.stats.additions)||0,del:+(j.stats&&j.stats.deletions)||0})))));
       }catch(_){details=null;/* details unreachable: merge counts only, mark churn pending */}
     }
     if(missing>0&&!details)pendingChurn=true;
