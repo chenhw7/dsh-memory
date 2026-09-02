@@ -109,6 +109,49 @@ section{padding:70px 0}
 .links a:hover .ar{color:var(--amber);transform:translateX(4px)}
 @media(max-width:640px){.links{grid-template-columns:1fr}}
 
+/* ── development activity panel (live repo data, three-lane tiered; JS at page end) ─── */
+.pulse-lede{max-width:660px;margin:-14px auto 30px;text-align:center;font-size:15px;color:var(--muted);line-height:1.85}
+.pulse-lede code,.pulse-note code{font-family:var(--mono);font-size:.88em;color:var(--teal)}
+.pulse-panel{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:34px;position:relative;overflow:hidden}
+.pulse-panel::before{content:"";position:absolute;inset:0;background:radial-gradient(600px 200px at 20% -10%,rgba(232,168,62,.06),transparent 70%);pointer-events:none}
+.panel-tag{position:absolute;top:16px;right:18px;font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.1em}
+.pulse-note{margin-top:16px;font-size:13.5px;color:var(--faint);line-height:1.8}
+.repo-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:28px;align-items:start;margin-top:6px}
+@media(max-width:900px){.repo-grid{grid-template-columns:minmax(0,1fr)}}
+.rl-head{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.14em;margin-bottom:10px}
+.gl{display:flex;gap:9px;align-items:baseline;text-decoration:none;white-space:nowrap;overflow:hidden;color:#b8dccf;font-family:var(--mono);font-size:11.5px;line-height:1.55;padding:5px 10px 5px 9px;border-left:2px solid var(--teal);background:rgba(78,201,176,.04);border-radius:0 8px 8px 0;margin-bottom:5px}
+.gl:hover{border-left-color:var(--amber);background:var(--amber-dim)}
+.gl.hash-head{border-left-color:var(--amber)}
+.gl-h{color:var(--teal);flex:none}
+.gl-t{font-size:10px;padding:1px 7px;border-radius:99px;flex:none;letter-spacing:.06em}
+.tp-feat{background:var(--amber-dim);color:var(--amber)}
+.tp-fix{background:var(--red-dim);color:var(--red)}
+.tp-docs{background:rgba(156,147,127,.14);color:var(--muted)}
+.tp-chore,.tp-ci,.tp-style{color:var(--faint)}
+.gl .subj{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.gl-w{margin-left:auto;flex:none;color:var(--faint);font-size:10.5px}
+.repo-plate{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.rp-v{font-family:var(--serif);font-size:46px;font-weight:900;color:var(--amber-hi);line-height:1;white-space:nowrap}
+.rp-gh{font-family:var(--mono);font-size:12px;color:var(--teal)}
+.rp-chips{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 18px}
+.rp-chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);background:var(--panel2);border-radius:99px;padding:3px 11px}
+.act{border:1px solid var(--line);border-radius:10px;background:#100e0b;display:block;width:100%;height:150px}
+.act-sum{margin-top:10px;font-family:var(--mono);font-size:12px;color:#cfc7b4;line-height:1.75}
+.act-sum b{color:var(--amber-hi);font-weight:600}
+.act-note{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint);min-height:17px}
+.act-note .teal{color:var(--teal)}
+.live{position:absolute;top:44px;right:18px;display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.live.on i{background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s ease-in-out infinite}
+.live.sh i{background:var(--amber)}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.live i{animation:none}}
+@media(max-width:760px){
+  .pulse-panel{padding:22px 16px;border-radius:14px}
+  .live{position:static;margin:-4px 0 14px;justify-content:flex-end}
+  .rp-v{font-size:36px}
+}
+
 /* ── footer ─── */
 footer{border-top:1px solid var(--line);padding:48px 0 56px;margin-top:30px}
 footer .wrap{display:flex;justify-content:space-between;align-items:flex-start;gap:30px;flex-wrap:wrap}
@@ -128,6 +171,7 @@ footer .f-links a:hover{color:var(--amber)}
     <div class="tn-links">
       <a class="tn-doc" href="memory-architecture.html">Deep-dive <span class="tn-x">EN</span></a>
       <a class="tn-doc" href="memory-architecture.zh-CN.html">技术解析<span class="tn-x"> 中文</span></a>
+      <a href="#pulse">Activity</a>
       <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
       <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm</a>
     </div>
@@ -182,6 +226,36 @@ footer .f-links a:hover{color:var(--amber)}
   </div>
 </section>
 
+<!-- ═══════════ DEVELOPMENT ACTIVITY ═══════════ -->
+<section id="pulse">
+  <div class="wrap">
+    <div class="sec-head">Development activity</div>
+    <p class="pulse-lede">How often does this project move? Judge from the repo itself. This panel reads the project's real history the moment you open the page — the latest commits on <code>main</code>, plus per-day commit counts and line churn across the whole project.</p>
+    <div class="pulse-panel">
+      <span class="panel-tag">LIVE FROM THE REPO</span>
+      <div class="live" id="livePill"><i></i><span id="liveTxt">○ SNAPSHOT</span></div>
+      <div class="repo-plate">
+        <span class="rp-v" id="rpVer">v0.8.0</span>
+        <span class="rp-gh" id="rpGh">@chenhw7/dsh-memory</span>
+      </div>
+      <div class="rp-chips" id="rpChips"></div>
+      <div class="repo-grid">
+        <div>
+          <div class="rl-head">// git log main · latest 8</div>
+          <div id="repoLog"></div>
+        </div>
+        <div>
+          <div class="rl-head">// daily pulse · commits + line churn</div>
+          <canvas class="act" id="actCv"></canvas>
+          <div class="act-sum" id="actSum"></div>
+          <div class="act-note" id="actNote"></div>
+        </div>
+      </div>
+    </div>
+    <p class="pulse-note">The numbers degrade gracefully: same-origin <code>stats.json</code> (rebuilt daily by CI, full history with churn) → GitHub Commits API (today's increment, anonymous 60 req/h budget, per-commit line details only when ≤8 are missing) → baked snapshot (offline fallback, stamped with its date). The npm registry independently fact-checks the version plate. Append <code>?offline=1</code> to force the snapshot tier; churn not fetched in real time lands in the next scheduled build.</p>
+  </div>
+</section>
+
 <!-- ═══════════ EXPLORE ═══════════ -->
 <section id="explore">
   <div class="wrap">
@@ -226,6 +300,248 @@ footer .f-links a:hover{color:var(--amber)}
     </div>
   </div>
 </footer>
+
+<script>
+/* ═════════ development activity (three-lane live data: stats.json → GitHub API → baked snapshot; npm plate independent) ═════════ */
+(function(){
+const $=id=>document.getElementById(id);
+const pill=$('livePill'),liveTxt=$('liveTxt'),rpVer=$('rpVer'),rpChips=$('rpChips'),
+      logEl=$('repoLog'),cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote');
+const OFF=new URLSearchParams(location.search).has('offline');
+
+/* offline fallback snapshot: main @ 089369c · built 2026-09-02 (refreshed with releases; forced by ?offline=1) */
+const SNAP={
+  stamp:'2026-09-02',
+  version:'0.8.0',files:105,unpacked:863300,provenance:true,
+  commits:[
+    ['089369c','2026-09-02','chore(site): refresh stats.json [skip ci]'],
+    ['cba3eac','2026-09-02','docs(site): promote doc wayfinding to a sticky top nav'],
+    ['d1d0b65','2026-09-02','chore(site): refresh stats.json [skip ci]'],
+    ['b795250','2026-09-02','docs(site): refresh the index MRR figure to the re-measured baseline'],
+    ['05b033a','2026-09-01','docs(site): port the pulse section to the EN page'],
+    ['42036db','2026-09-01','docs(site): pulse section with live daily activity'],
+    ['b25572d','2026-09-01','ci(site): daily site stats pipeline for the Pages pulse section'],
+    ['fa9462b','2026-09-01','docs(site): port the v0.8.0 facts and mobile adaptation to the English page']
+  ],
+  days:[['2026-08-17',6,4137,36],['2026-08-18',4,1992,76],['2026-08-20',36,9456,2735],['2026-08-21',4,5648,601],['2026-08-24',7,8365,1968],['2026-08-25',5,1462,2019],['2026-08-26',2,3129,89],['2026-08-27',10,4138,1599],['2026-08-28',9,553,221],['2026-08-31',7,10198,5571],['2026-09-01',48,8651,1177],['2026-09-02',4,31,11]]
+};
+
+const DAYKEY=new Date().toISOString().slice(0,10);
+const pad=n=>String(n).padStart(2,'0');
+const fmt=n=>Math.round(n).toLocaleString('en-US');
+function localKey(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
+function parseD(s){const p=s.split('-');return new Date(Date.UTC(+p[0],+p[1]-1,+p[2]))}
+function dayDiff(a,b){return Math.round((Date.UTC(a.getFullYear(),a.getMonth(),a.getDate())-Date.UTC(b.getFullYear(),b.getMonth(),b.getDate()))/864e5)}
+function relEn(ds){const d=new Date(ds);if(isNaN(d))return'';const n=dayDiff(new Date(),d);return n<=0?'today':n===1?'yesterday':n+'d ago'}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fetchJson(url){
+  const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),6000);
+  return fetch(url,{signal:ctl.signal,cache:'no-store'})
+    .then(r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+    .catch(e=>{clearTimeout(t);throw e});
+}
+/* per-day (UTC) session cache: re-renders in one tab don't burn the anonymous budget */
+function cached(key,load){
+  const k=key+':'+DAYKEY;
+  try{const hit=sessionStorage.getItem(k);if(hit)return Promise.resolve(JSON.parse(hit))}
+  catch(_){/* sessionStorage unavailable → hit the network directly */}
+  return load().then(v=>{try{sessionStorage.setItem(k,JSON.stringify(v))}catch(_){/* cache failure must not block rendering */}return v});
+}
+const TAGCLASS={feat:'tp-feat',fix:'tp-fix',docs:'tp-docs',chore:'tp-chore',ci:'tp-chore',style:'tp-chore'};
+function tagOf(msg){const m=/^([A-Za-z][A-Za-z]*)(?:\([^)]*\))?!?: /.exec(msg);return m?m[1].toLowerCase():null}
+
+let days=SNAP.days.map(q=>({d:q[0],c:q[1],a:q[2],del:q[3]}));
+let commits=SNAP.commits.map(r=>({h:r[0],d:r[1],s:r[2]}));
+let npm={version:SNAP.version,files:SNAP.files,unpacked:SNAP.unpacked,provenance:SNAP.provenance};
+let tier=OFF?'snap':'boot',statsDay='',pendingChurn=false;
+
+function setPill(kind,label){pill.className='live'+(kind?' '+kind:'');liveTxt.textContent=label}
+function renderPlate(live){
+  rpVer.textContent='v'+npm.version;
+  const chips=[(live?'npm · latest':'npm snapshot')+' v'+npm.version];
+  if(npm.files)chips.push(npm.files+' files');
+  if(npm.unpacked)chips.push((npm.unpacked/1024).toFixed(1)+' KiB unpacked');
+  if(npm.provenance)chips.push('✓ SLSA provenance');
+  if(npm.license)chips.push(npm.license);
+  rpChips.innerHTML=chips.map(c=>'<span class="rp-chip">'+esc(c)+'</span>').join('');
+}
+function renderLog(){
+  logEl.innerHTML=commits.slice(0,8).map((c,i)=>{
+    const t=tagOf(c.s);
+    const tag=t?'<span class="gl-t '+(TAGCLASS[t]||'tp-chore')+'">'+esc(t)+'</span>':'';
+    return '<a class="gl'+(i===0?' hash-head':'')+'" href="https://github.com/chenhw7/dsh-memory/commit/'+esc(c.h)
+      +'" target="_blank" rel="noopener" title="'+esc(c.s)+'">'
+      +'<span class="gl-h">'+esc(c.h)+'</span>'+tag
+      +'<span class="subj">'+esc(c.s)+'</span>'
+      +'<span class="gl-w">'+relEn(c.d)+'</span></a>';
+  }).join('');
+}
+
+/* activity chart: continuous calendar window (ticks on zero-commit days); amber=added, red=deleted, count labels on top */
+const MAXD=90;
+function draw(){
+  const dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  if(!W)return;
+  cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,W,H);
+  const css=getComputedStyle(document.documentElement);
+  const AMB=(css.getPropertyValue('--amber')||'#d19a4a').trim(),
+        RED=(css.getPropertyValue('--red')||'#c25c5c').trim(),
+        TEAL=(css.getPropertyValue('--teal')||'#4ec9b0').trim(),
+        FAINT=(css.getPropertyValue('--faint')||'#7a7466').trim(),
+        MONO=css.getPropertyValue('--mono')||'monospace';
+  const byKey={};let minK=null;
+  days.forEach(d=>{if(d.c>0){byKey[d.d]=d;if(!minK||d.d<minK)minK=d.d}});
+  const todayK=localKey(new Date());
+  let start=parseD(minK||todayK);
+  const cap=parseD(todayK);cap.setUTCDate(cap.getUTCDate()-(MAXD-1));
+  if(start<cap)start=cap;
+  const seq=[];
+  for(let t=new Date(start);;){
+    const k=t.toISOString().slice(0,10);
+    seq.push(byKey[k]||{d:k,c:0,a:0,del:0});
+    if(k>=todayK)break;
+    t.setUTCDate(t.getUTCDate()+1);
+  }
+  const N=seq.length,L=10,R=6,T=24,B=16;
+  const step=(W-L-R)/N,barW=Math.min(26,Math.max(2.5,step*.55));
+  const vmax=Math.max(1,...seq.map(d=>d.a+d.del));
+  const base=H-B,ph=H-T-B;
+  const ti=seq.findIndex(d=>d.d===todayK);
+  if(ti>=0){g.fillStyle='rgba(78,201,176,.05)';g.fillRect(L+ti*step,T-10,step,ph+10);}
+  g.strokeStyle='rgba(156,147,127,.3)';g.beginPath();g.moveTo(L,base+.5);g.lineTo(W-R,base+.5);g.stroke();
+  g.font='9px '+MONO;
+  seq.forEach((d,i)=>{
+    const x=L+i*step;
+    if(parseD(d.d).getUTCDay()===1){
+      g.strokeStyle='rgba(156,147,127,.12)';g.beginPath();g.moveTo(x+.5,T-8);g.lineTo(x+.5,base);g.stroke();
+      g.fillStyle=FAINT;g.textAlign='left';g.fillText(d.d.slice(5),x+3,H-2);
+    }
+  });
+  seq.forEach((d,i)=>{
+    const x=L+i*step+(step-barW)/2;
+    const v=d.a+d.del;
+    if(d.c>0){
+      if(v>0){
+        const h=Math.max(3,v/vmax*ph),aH=h*d.a/v;
+        g.fillStyle=AMB;g.fillRect(x,base-h,barW,aH);
+        g.fillStyle=RED;g.fillRect(x,base-h+aH,barW,h-aH);
+        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-h-4);}
+      }else{
+        /* churn not yet landed (API-increment day): dashed hollow stub — counts without volume */
+        g.strokeStyle=AMB;g.setLineDash([2,2]);g.strokeRect(x+.5,base-10.5,barW-1,10);g.setLineDash([]);
+        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-14);}
+      }
+    }else{
+      g.fillStyle='rgba(156,147,127,.28)';g.fillRect(x+(barW>3?barW/2-2:0),base-1.5,4,1.5);
+    }
+  });
+  if(ti>=0){g.fillStyle=TEAL;g.textAlign='center';g.fillText('today',L+ti*step+step/2,H-2);}
+  g.textAlign='left';
+  g.fillStyle=AMB;g.fillRect(L+2,5,7,7);g.fillStyle=FAINT;g.fillText('added',L+13,12);
+  g.fillStyle=RED;g.fillRect(L+52,5,7,7);g.fillStyle=FAINT;g.fillText('deleted',L+63,12);
+}
+function renderActivity(){
+  const nz=days.filter(d=>d.c>0);
+  const c=nz.reduce((s,d)=>s+d.c,0),a=nz.reduce((s,d)=>s+d.a,0),dl=nz.reduce((s,d)=>s+d.del,0);
+  sumEl.innerHTML='<b>'+nz.length+'</b> days with commits · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> lines';
+  draw();
+}
+if('ResizeObserver' in window)new ResizeObserver(()=>draw()).observe(cv);
+else addEventListener('resize',()=>draw(),{passive:true});
+
+function setNote(){
+  const todayK=localKey(new Date());
+  const tr=days.find(d=>d.d===todayK);
+  let h='';
+  if(tier==='boot'){
+    h='<div>▸ connecting GitHub · npm · stats.json …</div>';
+  }else if(tier==='live'){
+    if(tr&&tr.c>0)h='<div><span class="teal">╰─ today LIVE · '+tr.c+' commits · +'+fmt(tr.a)+' / −'+fmt(tr.del)+' lines</span></div>';
+    else h='<div><span class="teal">╰─ no new commits today · live-synced from the GitHub API</span></div>';
+  }else if(tier==='stats'){
+    h='<div>▸ today&apos;s increment unreachable · chart as of the '+esc(statsDay||'stats.json')+' build</div>';
+  }else{
+    h='<div>▸ '+(OFF?'?offline=1 engaged · ':'live sources unreachable · ')+'showing the '+SNAP.stamp+' baked snapshot</div>';
+  }
+  if(pendingChurn)h+='<div>▸ churn for new commits lands in the next build · stats.json refreshes daily</div>';
+  noteEl.innerHTML=h;
+}
+function settle(){
+  setPill(tier==='live'?'on':tier==='stats'?'sh':'',
+    tier==='live'?'● LIVE · GitHub API':tier==='stats'?'◐ STATS · '+statsDay:tier==='boot'?'·· connecting':'○ SNAPSHOT · '+SNAP.stamp);
+  renderLog();renderActivity();setNote();
+}
+
+/* snapshot first (instant first paint), then three lanes race to upgrade */
+renderPlate(false);settle();
+if(OFF){/* ?offline=1: issue no network requests — pure snapshot demo */}
+else (async()=>{
+  cached('cairn-npm',()=>fetchJson('https://registry.npmjs.org/@chenhw7%2fdsh-memory/latest'))
+    .then(j=>{
+      if(!j||!j.version)return;
+      npm={version:j.version,files:j.dist&&j.dist.fileCount,unpacked:j.dist&&j.dist.unpackedSize,
+           provenance:!!(j.dist&&j.dist.attestations&&j.dist.attestations.provenance),license:j.license};
+      renderPlate(true);
+    })
+    .catch(_=>{/* npm unreachable: keep the snapshot plate */});
+  const [stats,api]=await Promise.all([
+    cached('cairn-repo-stats',()=>fetchJson('stats.json')).catch(()=>null),
+    cached('cairn-repo-feed',()=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits?per_page=100')).catch(()=>null)
+  ]);
+  if(stats&&Array.isArray(stats.days)&&stats.days.length){
+    days=stats.days.map(r=>({d:String(r.d||''),c:+r.c||0,a:+r.a||0,del:+r.del||0}))
+      .filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.d))
+      .sort((x,y)=>x.d<y.d?-1:1);
+    statsDay=(String(stats.generated||'')).slice(0,10);
+    tier='stats';
+  }
+  if(Array.isArray(api)&&api.length){
+    const list=api.map(x=>({
+      h:(x.sha||'').slice(0,7),
+      d:x.commit&&x.commit.author&&x.commit.author.date||'',
+      s:(x.commit&&x.commit.message||'').split('\n')[0]
+    })).filter(x=>x.h&&x.s&&x.d&&!isNaN(new Date(x.d)));
+    if(list.length){commits=list;tier='live';}
+    /* increment merge: group API commits by local day; per-day max against build data, new days push in */
+    const byDay={};
+    list.forEach(x=>{const k=localKey(new Date(x.d));(byDay[k]=byDay[k]||[]).push(x)});
+    const idx={};days.forEach((d,i)=>idx[d.d]=i);
+    /* collect row references up front — object references survive later push/sort */
+    const targets=Object.keys(byDay)
+      .filter(k=>idx[k]==null||days[idx[k]].c<byDay[k].length)
+      .map(k=>({k,grp:byDay[k],row:idx[k]==null?null:days[idx[k]]}));
+    const missing=targets.reduce((n,t)=>n+(t.row?t.grp.length-t.row.c:t.grp.length),0);
+    let details=null;
+    if(missing>0&&missing<=8){
+      const shas=[];
+      targets.forEach(t=>t.grp.slice(0,t.grp.length-(t.row?t.row.c:0)).forEach(x=>shas.push(x.h)));
+      try{
+        details=await Promise.all(shas.map(h=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits/'+h)
+          .then(j=>({h:h,a:+(j.stats&&j.stats.additions)||0,del:+(j.stats&&j.stats.deletions)||0}))));
+      }catch(_){details=null;/* details unreachable: merge counts only, mark churn pending */}
+    }
+    if(missing>0&&!details)pendingChurn=true;
+    let added=false;
+    targets.forEach(t=>{
+      const known=t.row?t.row.c:0;
+      const row=t.row||(t.row={d:t.k,c:0,a:0,del:0});
+      if(details){
+        const m={};details.forEach(x=>m[x.h]=x);
+        t.grp.slice(0,t.grp.length-known).forEach(x=>{const d2=m[x.h];if(d2&&d2.a+d2.del>0){row.a+=d2.a;row.del+=d2.del}});
+      }
+      row.c=Math.max(row.c,t.grp.length);
+      if(days.indexOf(row)<0){days.push(row);added=true}
+    });
+    if(added)days.sort((x,y)=>x.d<y.d?-1:1);
+  }
+  /* when every lane fails, land on the real snapshot tier (else the pill hangs in "connecting") */
+  if(tier==='boot')tier='snap';
+  settle();
+})();
+})();
+</script>
 
 </body>
 </html>

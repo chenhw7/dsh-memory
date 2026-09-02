@@ -382,41 +382,6 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
   .bm-chip{font-size:11px;padding:6px 12px}
 }
 
-/* ── FIG.7 repo pulse（git log 即仓库的 audit 流，复用 ms-row 语汇） ── */
-.repo-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:28px;align-items:start;margin-top:6px}
-@media(max-width:900px){.repo-grid{grid-template-columns:minmax(0,1fr)}}
-.rl-head{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.14em;margin-bottom:10px}
-.gl{display:flex;gap:9px;align-items:baseline;text-decoration:none;white-space:nowrap;overflow:hidden;color:#b8dccf;font-family:var(--mono);font-size:11.5px;line-height:1.55;padding:5px 10px 5px 9px;border-left:2px solid var(--teal);background:rgba(78,201,176,.04);border-radius:0 8px 8px 0;margin-bottom:5px}
-.gl:hover{border-left-color:var(--amber);background:var(--amber-dim)}
-.gl.hash-head{border-left-color:var(--amber)}
-.gl-h{color:var(--teal);flex:none}
-.gl-t{font-size:10px;padding:1px 7px;border-radius:99px;flex:none;letter-spacing:.06em}
-.tp-feat{background:var(--amber-dim);color:var(--amber)}
-.tp-fix{background:var(--red-dim);color:var(--red)}
-.tp-docs{background:rgba(156,147,127,.14);color:var(--muted)}
-.tp-chore,.tp-ci,.tp-style{color:var(--faint)}
-.gl .subj{overflow:hidden;text-overflow:ellipsis;min-width:0}
-.gl-w{margin-left:auto;flex:none;color:var(--faint);font-size:10.5px}
-.repo-plate{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
-.rp-v{font-family:var(--serif);font-size:46px;font-weight:900;color:var(--amber-hi);line-height:1;white-space:nowrap}
-.rp-gh{font-family:var(--mono);font-size:12px;color:var(--teal)}
-.rp-chips{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 18px}
-.rp-chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);background:var(--panel2);border-radius:99px;padding:3px 11px}
-.act{border:1px solid var(--line);border-radius:10px;background:#100e0b;display:block;width:100%;height:150px}
-.act-sum{margin-top:10px;font-family:var(--mono);font-size:12px;color:#cfc7b4;line-height:1.75}
-.act-sum b{color:var(--amber-hi);font-weight:600}
-.act-note{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint);min-height:17px}
-.act-note .teal{color:var(--teal)}
-.live{position:absolute;top:44px;right:18px;display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
-.live i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
-.live.on i{background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s ease-in-out infinite}
-.live.sh i{background:var(--amber)}
-@keyframes pulse{50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.live i{animation:none}}
-@media(max-width:760px){
-  .live{position:static;margin:-4px 0 14px;justify-content:flex-end}
-  .rp-v{font-size:36px}
-}
 </style>
 </head>
 <body>
@@ -435,7 +400,6 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
   <a href="#inject"><i></i><span>上下文注入</span></a>
   <a href="#lifecycle"><i></i><span>生命周期</span></a>
   <a href="#guard"><i></i><span>安全与人审</span></a>
-  <a href="#signal"><i></i><span>仓库脉搏</span></a>
 </nav>
 
 <!-- ═══════════ HERO ═══════════ -->
@@ -769,47 +733,11 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
   </div>
 </section>
 
-<section id="signal">
-  <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">07</div><h2 class="sec-title">尾声：仓库的脉搏</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">每条记忆入库都盖审计章。那仓库自己呢？</p>
-
-    <div class="col rv" style="--d:.15s">
-      <p>仓库的 audit 流是公开的：<code>git log</code> 就是它逐条盖下的核对记录。下面这块面板不是截图——它在你打开页面的这一刻发起请求：同源的 <code>stats.json</code>（由 CI 每日重新构建）给出全量历史的每日 commit 数与行数增删，GitHub Commits API 补上构建之后的新提交，npm registry 端上的版本铭牌实时校对。全部不可达时回落到内置快照，并如实亮出右上角的数据层级。</p>
-    </div>
-
-    <figure class="rv" style="--d:.2s">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.7 — REPO, LIVE</span>
-        <div class="live" id="livePill"><i></i><span id="liveTxt">○ SNAPSHOT</span></div>
-        <div class="repo-plate">
-          <span class="rp-v" id="rpVer">v0.8.0</span>
-          <span class="rp-gh" id="rpGh">@chenhw7/dsh-memory</span>
-        </div>
-        <div class="rp-chips" id="rpChips"></div>
-        <div class="repo-grid">
-          <div>
-            <div class="rl-head">// git log main · 最近 8 条</div>
-            <div id="repoLog"></div>
-          </div>
-          <div>
-            <div class="rl-head">// 每日心跳 · commits + 行数增删</div>
-            <canvas class="act" id="actCv"></canvas>
-            <div class="act-sum" id="actSum"></div>
-            <div class="act-note" id="actNote"></div>
-          </div>
-        </div>
-      </div>
-      <figcaption>数据在浏览时实时获取，分三层降级：同站 stats.json（每日构建，含全量行数）→ GitHub Commits API（当日增量，匿名限 60 次/小时，行数明细 ≤8 条补拉）→ 本页内置快照（离线兜底，标明日戳）；npm registry 独立校对版本铭牌。URL 加 <code>?offline=1</code> 可强制查看快照层。当日行数未实时补全时，随下一次构建入库。</figcaption>
-    </figure>
-  </div>
-</section>
-
 <footer>
   <div class="wrap">
     <div>
       <div class="f-t">Cairn · dsh-memory</div>
-      <p>Long-term memory for the DeepSeek Harness — 一个可安装的 profile bundle。FIG.0–FIG.6 的演示均为同构算法在页面内的真实运行，数据为演示用例；FIG.7 的仓库数据在浏览时实时获取（stats.json → GitHub API → 内置快照三层降级），不落任何硬编码拷贝。<a href="https://github.com/chenhw7/dsh-memory">在 GitHub 查看 →</a></p>
+      <p>Long-term memory for the DeepSeek Harness — 一个可安装的 profile bundle。FIG.0–FIG.6 的演示均为同构算法在页面内的真实运行，数据为演示用例。<a href="https://github.com/chenhw7/dsh-memory">在 GitHub 查看 →</a></p>
     </div>
     <div class="src">
       <b>SOURCE REFERENCES</b>
@@ -817,8 +745,7 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
       src/store/ · KV 存储 + BM25 检索<br>
       src/context/ · 注入策略与冲突标注<br>
       src/scanner.ts · 双向内容防线<br>
-      src/notes/ · 仓库内笔记投影<br>
-      scripts/build-site-stats.cjs · FIG.7 每日数据管线
+      src/notes/ · 仓库内笔记投影
     </div>
   </div>
 </footer>
@@ -1274,246 +1201,6 @@ rows.forEach(r=>{
   d.querySelector('.reject').onclick=()=>{d.classList.add('rejected');d.querySelector('.qa').innerHTML='<span style="font-family:var(--mono);font-size:11px;color:var(--faint)">已丢弃</span>'};
   box.appendChild(d);
 });
-})();
-
-/* ═════════ repo pulse（FIG.7 · 三层实时数据：stats.json → GitHub API → 内置快照，npm 铭牌独立） ═════════ */
-(function(){
-const $=id=>document.getElementById(id);
-const pill=$('livePill'),liveTxt=$('liveTxt'),rpVer=$('rpVer'),rpChips=$('rpChips'),
-      logEl=$('repoLog'),cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote');
-const OFF=new URLSearchParams(location.search).has('offline');
-
-/* 离线兜底快照：main @ 0eec191 · 2026-09-01 构建（发布页同步刷新；?offline=1 强制此行） */
-const SNAP={
-  stamp:'2026-09-01',
-  version:'0.8.0',files:105,unpacked:863300,provenance:true,
-  commits:[
-    ["0eec191","2026-09-01","0.8.0"],
-    ["19d1c20","2026-09-01","chore: enable remote writes for the management UI in the shipped composition"],
-    ["7f40f5c","2026-09-01","docs(notes): program note execution complete — all items closed, index-default promoted"],
-    ["432ed61","2026-09-01","docs(notes): re-record superseded-note sidecar hashes after cross-link"],
-    ["d1bfeba","2026-09-01","docs(notes): cross-link the superseded policy-only note to the index-default promotion"],
-    ["f815f72","2026-09-01","feat(context): promote index to the factory injection default"],
-    ["2f30528","2026-09-01","docs: wave-4 progress in the program note"],
-    ["abf817c","2026-09-01","docs: memory_forget in tool tables and README tool list, wave-4 gate note triplet"]
-  ],
-  days:[["2026-08-17",6,4137,36],["2026-08-18",4,1992,76],["2026-08-20",36,9456,2735],["2026-08-21",4,5648,601],["2026-08-24",7,8365,1968],["2026-08-25",5,1462,2019],["2026-08-26",2,3129,89],["2026-08-27",10,4138,1599],["2026-08-28",9,553,221],["2026-08-31",7,10198,5571],["2026-09-01",42,7609,1107]]
-};
-
-const DAYKEY=new Date().toISOString().slice(0,10);
-const pad=n=>String(n).padStart(2,'0');
-const fmt=n=>Math.round(n).toLocaleString('en-US');
-function localKey(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
-function parseD(s){const p=s.split('-');return new Date(Date.UTC(+p[0],+p[1]-1,+p[2]))}
-function dayDiff(a,b){return Math.round((Date.UTC(a.getFullYear(),a.getMonth(),a.getDate())-Date.UTC(b.getFullYear(),b.getMonth(),b.getDate()))/864e5)}
-function relZh(ds){const d=new Date(ds);if(isNaN(d))return'';const n=dayDiff(new Date(),d);return n<=0?'今天':n===1?'昨天':n+' 天前'}
-function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function fetchJson(url){
-  const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),6000);
-  return fetch(url,{signal:ctl.signal,cache:'no-store'})
-    .then(r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
-    .catch(e=>{clearTimeout(t);throw e});
-}
-/* 当日（UTC）会话级缓存：同标签页重复渲染不重复消耗匿名限额 */
-function cached(key,load){
-  const k=key+':'+DAYKEY;
-  try{const hit=sessionStorage.getItem(k);if(hit)return Promise.resolve(JSON.parse(hit))}
-  catch(_){/* sessionStorage 不可用时直取网络 */}
-  return load().then(v=>{try{sessionStorage.setItem(k,JSON.stringify(v))}catch(_){/* 缓存失败不影响渲染 */}return v});
-}
-const TAGCLASS={feat:'tp-feat',fix:'tp-fix',docs:'tp-docs',chore:'tp-chore',ci:'tp-chore',style:'tp-chore'};
-function tagOf(msg){const m=/^([A-Za-z][A-Za-z]*)(?:\([^)]*\))?!?: /.exec(msg);return m?m[1].toLowerCase():null}
-
-let days=SNAP.days.map(q=>({d:q[0],c:q[1],a:q[2],del:q[3]}));
-let commits=SNAP.commits.map(r=>({h:r[0],d:r[1],s:r[2]}));
-let npm={version:SNAP.version,files:SNAP.files,unpacked:SNAP.unpacked,provenance:SNAP.provenance};
-let tier=OFF?'snap':'boot',statsDay='',pendingChurn=false;
-
-function setPill(kind,label){pill.className='live'+(kind?' '+kind:'');liveTxt.textContent=label}
-function renderPlate(live){
-  rpVer.textContent='v'+npm.version;
-  const chips=[(live?'npm · latest':'npm 快照')+' v'+npm.version];
-  if(npm.files)chips.push(npm.files+' files');
-  if(npm.unpacked)chips.push((npm.unpacked/1024).toFixed(1)+' KiB unpacked');
-  if(npm.provenance)chips.push('✓ SLSA provenance');
-  if(npm.license)chips.push(npm.license);
-  rpChips.innerHTML=chips.map(c=>'<span class="rp-chip">'+esc(c)+'</span>').join('');
-}
-function renderLog(){
-  logEl.innerHTML=commits.slice(0,8).map((c,i)=>{
-    const t=tagOf(c.s);
-    const tag=t?'<span class="gl-t '+(TAGCLASS[t]||'tp-chore')+'">'+esc(t)+'</span>':'';
-    return '<a class="gl'+(i===0?' hash-head':'')+'" href="https://github.com/chenhw7/dsh-memory/commit/'+esc(c.h)
-      +'" target="_blank" rel="noopener" title="'+esc(c.s)+'">'
-      +'<span class="gl-h">'+esc(c.h)+'</span>'+tag
-      +'<span class="subj">'+esc(c.s)+'</span>'
-      +'<span class="gl-w">'+relZh(c.d)+'</span></a>';
-  }).join('');
-}
-
-/* 活动图：连续日历窗口（含零提交日 tick），琥珀=新增行 · 红=删除行 · 柱上标注 commits */
-const MAXD=90;
-function draw(){
-  const dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
-  if(!W)return;
-  cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
-  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
-  g.clearRect(0,0,W,H);
-  const css=getComputedStyle(document.documentElement);
-  const AMB=(css.getPropertyValue('--amber')||'#d19a4a').trim(),
-        RED=(css.getPropertyValue('--red')||'#c25c5c').trim(),
-        TEAL=(css.getPropertyValue('--teal')||'#4ec9b0').trim(),
-        FAINT=(css.getPropertyValue('--faint')||'#7a7466').trim(),
-        MONO=css.getPropertyValue('--mono')||'monospace';
-  const byKey={};let minK=null;
-  days.forEach(d=>{if(d.c>0){byKey[d.d]=d;if(!minK||d.d<minK)minK=d.d}});
-  const todayK=localKey(new Date());
-  let start=parseD(minK||todayK);
-  const cap=parseD(todayK);cap.setUTCDate(cap.getUTCDate()-(MAXD-1));
-  if(start<cap)start=cap;
-  const seq=[];
-  for(let t=new Date(start);;){
-    const k=t.toISOString().slice(0,10);
-    seq.push(byKey[k]||{d:k,c:0,a:0,del:0});
-    if(k>=todayK)break;
-    t.setUTCDate(t.getUTCDate()+1);
-  }
-  const N=seq.length,L=10,R=6,T=24,B=16;
-  const step=(W-L-R)/N,barW=Math.min(26,Math.max(2.5,step*.55));
-  const vmax=Math.max(1,...seq.map(d=>d.a+d.del));
-  const base=H-B,ph=H-T-B;
-  const ti=seq.findIndex(d=>d.d===todayK);
-  if(ti>=0){g.fillStyle='rgba(78,201,176,.05)';g.fillRect(L+ti*step,T-10,step,ph+10);}
-  g.strokeStyle='rgba(156,147,127,.3)';g.beginPath();g.moveTo(L,base+.5);g.lineTo(W-R,base+.5);g.stroke();
-  g.font='9px '+MONO;
-  seq.forEach((d,i)=>{
-    const x=L+i*step;
-    if(parseD(d.d).getUTCDay()===1){
-      g.strokeStyle='rgba(156,147,127,.12)';g.beginPath();g.moveTo(x+.5,T-8);g.lineTo(x+.5,base);g.stroke();
-      g.fillStyle=FAINT;g.textAlign='left';g.fillText(d.d.slice(5),x+3,H-2);
-    }
-  });
-  seq.forEach((d,i)=>{
-    const x=L+i*step+(step-barW)/2;
-    const v=d.a+d.del;
-    if(d.c>0){
-      if(v>0){
-        const h=Math.max(3,v/vmax*ph),aH=h*d.a/v;
-        g.fillStyle=AMB;g.fillRect(x,base-h,barW,aH);
-        g.fillStyle=RED;g.fillRect(x,base-h+aH,barW,h-aH);
-        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-h-4);}
-      }else{
-        /* 行数尚未入库（API 增量日）：虚线空心小柱，注数不注量 */
-        g.strokeStyle=AMB;g.setLineDash([2,2]);g.strokeRect(x+.5,base-10.5,barW-1,10);g.setLineDash([]);
-        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-14);}
-      }
-    }else{
-      g.fillStyle='rgba(156,147,127,.28)';g.fillRect(x+(barW>3?barW/2-2:0),base-1.5,4,1.5);
-    }
-  });
-  if(ti>=0){g.fillStyle=TEAL;g.textAlign='center';g.fillText('今日',L+ti*step+step/2,H-2);}
-  g.textAlign='left';
-  g.fillStyle=AMB;g.fillRect(L+2,5,7,7);g.fillStyle=FAINT;g.fillText('新增行',L+13,12);
-  g.fillStyle=RED;g.fillRect(L+46,5,7,7);g.fillStyle=FAINT;g.fillText('删除行',L+57,12);
-}
-function renderActivity(){
-  const nz=days.filter(d=>d.c>0);
-  const c=nz.reduce((s,d)=>s+d.c,0),a=nz.reduce((s,d)=>s+d.a,0),dl=nz.reduce((s,d)=>s+d.del,0);
-  sumEl.innerHTML='共 <b>'+nz.length+'</b> 天有提交 · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> 行';
-  draw();
-}
-if('ResizeObserver' in window)new ResizeObserver(()=>draw()).observe(cv);
-else addEventListener('resize',()=>draw(),{passive:true});
-
-function setNote(){
-  const todayK=localKey(new Date());
-  const tr=days.find(d=>d.d===todayK);
-  let h='';
-  if(tier==='boot'){
-    h='<div>▸ 正在连接 GitHub · npm · stats.json …</div>';
-  }else if(tier==='live'){
-    if(tr&&tr.c>0)h='<div><span class="teal">╰─ 今日 LIVE · '+tr.c+' commits · +'+fmt(tr.a)+' / −'+fmt(tr.del)+' 行</span></div>';
-    else h='<div><span class="teal">╰─ 今日暂无新提交 · 数据实时同步自 GitHub API</span></div>';
-  }else if(tier==='stats'){
-    h='<div>▸ 今日增量暂不可达 · 图表截至 '+esc(statsDay||'stats.json')+' 构建</div>';
-  }else{
-    h='<div>▸ '+(OFF?'?offline=1 已启用 · ':'数据源暂不可达 · ')+'展示 '+SNAP.stamp+' 内置快照</div>';
-  }
-  if(pendingChurn)h+='<div>▸ 新增提交的行数随下次构建入库 · stats.json 每日刷新</div>';
-  noteEl.innerHTML=h;
-}
-function settle(){
-  setPill(tier==='live'?'on':tier==='stats'?'sh':'',
-    tier==='live'?'● LIVE · GitHub API':tier==='stats'?'◐ STATS · '+statsDay:tier==='boot'?'·· 连接中':'○ SNAPSHOT · '+SNAP.stamp);
-  renderLog();renderActivity();setNote();
-}
-
-/* 快照先行（首屏即渲染），随后三路并行升级 */
-renderPlate(false);settle();
-if(OFF){/* ?offline=1：停止一切网络请求，纯快照演示 */}
-else (async()=>{
-  cached('cairn-npm',()=>fetchJson('https://registry.npmjs.org/@chenhw7%2fdsh-memory/latest'))
-    .then(j=>{
-      if(!j||!j.version)return;
-      npm={version:j.version,files:j.dist&&j.dist.fileCount,unpacked:j.dist&&j.dist.unpackedSize,
-           provenance:!!(j.dist&&j.dist.attestations&&j.dist.attestations.provenance),license:j.license};
-      renderPlate(true);
-    })
-    .catch(_=>{/* npm 不可达：保留快照铭牌 */});
-  const [stats,api]=await Promise.all([
-    cached('cairn-repo-stats',()=>fetchJson('stats.json')).catch(()=>null),
-    cached('cairn-repo-feed',()=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits?per_page=100')).catch(()=>null)
-  ]);
-  if(stats&&Array.isArray(stats.days)&&stats.days.length){
-    days=stats.days.map(r=>({d:String(r.d||''),c:+r.c||0,a:+r.a||0,del:+r.del||0}))
-      .filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.d))
-      .sort((x,y)=>x.d<y.d?-1:1);
-    statsDay=(String(stats.generated||'')).slice(0,10);
-    tier='stats';
-  }
-  if(Array.isArray(api)&&api.length){
-    const list=api.map(x=>({
-      h:(x.sha||'').slice(0,7),
-      d:x.commit&&x.commit.author&&x.commit.author.date||'',
-      s:(x.commit&&x.commit.message||'').split('\n')[0]
-    })).filter(x=>x.h&&x.s&&x.d&&!isNaN(new Date(x.d)));
-    if(list.length){commits=list;tier='live';}
-    /* 增量日合并：API 提交按本地日分组，与构建数据同日取 max、新日直接补入 */
-    const byDay={};
-    list.forEach(x=>{const k=localKey(new Date(x.d));(byDay[k]=byDay[k]||[]).push(x)});
-    const idx={};days.forEach((d,i)=>idx[d.d]=i);
-    /* 行引用先行收集——对象引用不随后续 push/sort 失效 */
-    const targets=Object.keys(byDay)
-      .filter(k=>idx[k]==null||days[idx[k]].c<byDay[k].length)
-      .map(k=>({k,grp:byDay[k],row:idx[k]==null?null:days[idx[k]]}));
-    const missing=targets.reduce((n,t)=>n+(t.row?t.grp.length-t.row.c:t.grp.length),0);
-    let details=null;
-    if(missing>0&&missing<=8){
-      const shas=[];
-      targets.forEach(t=>t.grp.slice(0,t.grp.length-(t.row?t.row.c:0)).forEach(x=>shas.push(x.h)));
-      try{
-        details=await Promise.all(shas.map(h=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits/'+h)
-          .then(j=>({h:h,a:+(j.stats&&j.stats.additions)||0,del:+(j.stats&&j.stats.deletions)||0}))));
-      }catch(_){details=null;/* 明细不可达：仅合并 commits 数，行数标志 pending */}
-    }
-    if(missing>0&&!details)pendingChurn=true;
-    let added=false;
-    targets.forEach(t=>{
-      const known=t.row?t.row.c:0;
-      const row=t.row||(t.row={d:t.k,c:0,a:0,del:0});
-      if(details){
-        const m={};details.forEach(x=>m[x.h]=x);
-        t.grp.slice(0,t.grp.length-known).forEach(x=>{const d2=m[x.h];if(d2&&d2.a+d2.del>0){row.a+=d2.a;row.del+=d2.del}});
-      }
-      row.c=Math.max(row.c,t.grp.length);
-      if(days.indexOf(row)<0){days.push(row);added=true}
-    });
-    if(added)days.sort((x,y)=>x.d<y.d?-1:1);
-  }
-  /* 三路全灭时落到真正的快照层（否则 pill 会一直停在「连接中」） */
-  if(tier==='boot')tier='snap';
-  settle();
-})();
 })();
 </script>
 </body>

@@ -1,7 +1,7 @@
 # Regenerate stats.json — the per-day commit/churn feed the GitHub Pages
-# deep-dive pages fetch at view time. Runs on every push to main (so the
-# feed is fresh right after landing work) and once daily (so a quiet repo
-# still gets a regenerated timestamp).
+# landing page fetches at view time for its development-activity panel.
+# Runs on every push to main (so the feed is fresh right after landing
+# work) and once daily (so a quiet repo still gets a refreshed timestamp).
 # Pages is deployed from the main branch root, so committing the file here
 # publishes it; [skip ci] keeps this commit from retriggering the workflow.
 on:
