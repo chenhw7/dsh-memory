@@ -251,6 +251,14 @@ function chatCompletionsEndpoint(baseUrl: string): URL {
   return url
 }
 
+/**
+ * One judge HTTP call's hard bound. A judge endpoint that accepts the request
+ * and never answers would otherwise hang the whole scenario — the fuyao-work
+ * hang observed on 2026-09-02 stalled a full run past its scenarios. The
+ * budget is per call, not per verdict; the re-judge gets its own.
+ */
+const JUDGE_CALL_TIMEOUT_MS = 120_000
+
 /** Call the judge model once; returns the reply text. Infrastructure failures throw loud. */
 async function callJudgeModel(judge: JudgeConfig, messages: readonly ChatMessage[]): Promise<string> {
   const response = await fetch(chatCompletionsEndpoint(judge.baseUrl), {
@@ -267,6 +275,7 @@ async function callJudgeModel(judge: JudgeConfig, messages: readonly ChatMessage
       // thinking strength here; the value is the wire form the endpoint accepts.
       ...(judge.reasoningEffort !== undefined ? { reasoning_effort: judge.reasoningEffort } : {}),
     }),
+    signal: AbortSignal.timeout(JUDGE_CALL_TIMEOUT_MS),
   })
   if (!response.ok) {
     throw new Error(`eval judge: chat completions returned ${String(response.status)}: ${(await response.text()).slice(0, 200)}`)
