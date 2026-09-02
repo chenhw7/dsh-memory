@@ -135,11 +135,19 @@ section{padding:70px 0}
 .rp-gh{font-family:var(--mono);font-size:12px;color:var(--teal)}
 .rp-chips{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 18px}
 .rp-chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);background:var(--panel2);border-radius:99px;padding:3px 11px}
-.act{border:1px solid var(--line);border-radius:10px;background:#100e0b;display:block;width:100%;height:150px}
+.act{border:1px solid var(--line);border-radius:10px;background:#100e0b;display:block;width:100%;height:150px;touch-action:pan-y;cursor:crosshair}
 .act-sum{margin-top:10px;font-family:var(--mono);font-size:12px;color:#cfc7b4;line-height:1.75}
 .act-sum b{color:var(--amber-hi);font-weight:600}
 .act-note{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint);min-height:17px}
 .act-note .teal{color:var(--teal)}
+/* hover tooltip over the 14-day line chart: daily churn + up to 5 commits */
+.act-wrap{position:relative}
+.act-tip{position:absolute;z-index:3;min-width:170px;max-width:280px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:8px 10px;font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--ink);pointer-events:none;box-shadow:0 10px 26px rgba(0,0,0,.5)}
+.act-tip .at-d{color:var(--amber-hi);font-weight:600;margin-bottom:2px}
+.act-tip .at-c{color:var(--faint);margin-bottom:3px}
+.act-tip .at-m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.act-tip .at-m span{color:var(--teal);margin-right:6px}
+.act-tip .at-more{color:var(--faint)}
 .live{position:absolute;top:44px;right:18px;display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
 .live i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
 .live.on i{background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s ease-in-out infinite}
@@ -245,8 +253,11 @@ footer .f-links a:hover{color:var(--amber)}
           <div id="repoLog"></div>
         </div>
         <div>
-          <div class="rl-head">// daily pulse · commits + line churn</div>
-          <canvas class="act" id="actCv"></canvas>
+          <div class="rl-head">// last 14 days · hover a day for churn &amp; commits</div>
+          <div class="act-wrap">
+            <canvas class="act" id="actCv"></canvas>
+            <div class="act-tip" id="actTip" hidden></div>
+          </div>
           <div class="act-sum" id="actSum"></div>
           <div class="act-note" id="actNote"></div>
         </div>
@@ -306,7 +317,7 @@ footer .f-links a:hover{color:var(--amber)}
 (function(){
 const $=id=>document.getElementById(id);
 const pill=$('livePill'),liveTxt=$('liveTxt'),rpVer=$('rpVer'),rpChips=$('rpChips'),
-      logEl=$('repoLog'),cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote');
+      logEl=$('repoLog'),cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote'),tip=$('actTip');
 const OFF=new URLSearchParams(location.search).has('offline');
 
 /* offline fallback snapshot: main @ 089369c · built 2026-09-02 (refreshed with releases; forced by ?offline=1) */
@@ -377,9 +388,28 @@ function renderLog(){
   }).join('');
 }
 
-/* activity chart: continuous calendar window (ticks on zero-commit days); amber=added, red=deleted, count labels on top */
-const MAXD=90;
+/* activity chart: 14-day line chart (last 14 local days; amber=added, red=deleted).
+   Hover a day point for that day's churn and commits — up to 5 listed, the rest collapsed. */
+const WINDOW=14;
+let seq=[],byKey={},dayCommits={},hover=-1;
+function windowSeq(){
+  byKey={};days.forEach(d=>{if(d.c>0)byKey[d.d]=d});
+  seq=[];const now=new Date();
+  for(let i=WINDOW-1;i>=0;i--){
+    const dt=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i);
+    const k=localKey(dt);
+    seq.push({d:k,row:byKey[k]||null});
+  }
+}
+/* per-day commit lists for the tooltip, built from whichever commit feed is
+   active (snapshot bake → GitHub API once live) — the active feed can be
+   partial, and "… +N more" below accounts for the unlisted remainder */
+function rebuildDayCommits(){
+  dayCommits={};
+  commits.forEach(c=>{const k=localKey(new Date(c.d));(dayCommits[k]=dayCommits[k]||[]).push({h:c.h,s:c.s})});
+}
 function draw(){
+  windowSeq();
   const dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
   if(!W)return;
   cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
@@ -391,65 +421,88 @@ function draw(){
         TEAL=(css.getPropertyValue('--teal')||'#4ec9b0').trim(),
         FAINT=(css.getPropertyValue('--faint')||'#7a7466').trim(),
         MONO=css.getPropertyValue('--mono')||'monospace';
-  const byKey={};let minK=null;
-  days.forEach(d=>{if(d.c>0){byKey[d.d]=d;if(!minK||d.d<minK)minK=d.d}});
+  /* layout constants shared with layoutTip/evIndex below */
+  const L=12,R=12,T=24,B=18,N=WINDOW;
+  const step=(W-L-R)/(N-1),base=H-B,ph=H-T-B;
+  const vmax=Math.max(1,...seq.map(q=>q.row&&!q.row.pending?Math.max(q.row.a,q.row.del):0));
+  const X=i=>L+i*step,Y=v=>base-v/vmax*ph;
   const todayK=localKey(new Date());
-  let start=parseD(minK||todayK);
-  const cap=parseD(todayK);cap.setUTCDate(cap.getUTCDate()-(MAXD-1));
-  if(start<cap)start=cap;
-  const seq=[];
-  for(let t=new Date(start);;){
-    const k=t.toISOString().slice(0,10);
-    seq.push(byKey[k]||{d:k,c:0,a:0,del:0});
-    if(k>=todayK)break;
-    t.setUTCDate(t.getUTCDate()+1);
-  }
-  const N=seq.length,L=10,R=6,T=24,B=16;
-  const step=(W-L-R)/N,barW=Math.min(26,Math.max(2.5,step*.55));
-  const vmax=Math.max(1,...seq.map(d=>d.a+d.del));
-  const base=H-B,ph=H-T-B;
-  const ti=seq.findIndex(d=>d.d===todayK);
-  if(ti>=0){g.fillStyle='rgba(78,201,176,.05)';g.fillRect(L+ti*step,T-10,step,ph+10);}
+  const ti=seq.findIndex(q=>q.d===todayK);
+  if(ti>=0){g.fillStyle='rgba(78,201,176,.05)';g.fillRect(Math.max(0,X(ti)-step/2),T-10,Math.min(step,W),ph+10);}
   g.strokeStyle='rgba(156,147,127,.3)';g.beginPath();g.moveTo(L,base+.5);g.lineTo(W-R,base+.5);g.stroke();
+  g.strokeStyle='rgba(156,147,127,.12)';g.setLineDash([3,4]);g.beginPath();g.moveTo(L,Y(vmax/2)+.5);g.lineTo(W-R,Y(vmax/2)+.5);g.stroke();g.setLineDash([]);
+  if(hover>=0&&hover<N){g.strokeStyle='rgba(236,229,213,.22)';g.beginPath();g.moveTo(X(hover)+.5,T-10);g.lineTo(X(hover)+.5,base);g.stroke();}
   g.font='9px '+MONO;
-  seq.forEach((d,i)=>{
-    const x=L+i*step;
-    if(parseD(d.d).getUTCDay()===1){
-      g.strokeStyle='rgba(156,147,127,.12)';g.beginPath();g.moveTo(x+.5,T-8);g.lineTo(x+.5,base);g.stroke();
-      g.fillStyle=FAINT;g.textAlign='left';g.fillText(d.d.slice(5),x+3,H-2);
-    }
+  /* polylines: idle days fall to the baseline; churn-pending days break the line */
+  const line=(col,pick)=>{g.strokeStyle=col;g.lineWidth=1.5;g.beginPath();let open=false;
+    seq.forEach((q,i)=>{if(q.row&&q.row.pending){open=false;return}
+      const x=X(i),y=Y(q.row?pick(q.row):0);
+      if(!open){g.moveTo(x,y);open=true}else g.lineTo(x,y)});
+    g.stroke();g.lineWidth=1};
+  line(AMB,r=>r.a);line(RED,r=>r.del);
+  /* day points: solid dots = counted day, hollow ring = churn pending, tick = no commits */
+  seq.forEach((q,i)=>{
+    const x=X(i);
+    if(!q.row){g.fillStyle='rgba(156,147,127,.28)';g.fillRect(x-2,base-1.5,4,1.5);
+      if(i===hover){g.strokeStyle='rgba(236,229,213,.55)';g.beginPath();g.arc(x,base,4.5,0,6.28);g.stroke()}
+      return}
+    if(q.row.pending){g.strokeStyle=AMB;g.beginPath();g.arc(x,base,i===hover?4:2.6,0,6.28);g.stroke();return}
+    g.fillStyle=AMB;g.beginPath();g.arc(x,Y(q.row.a),i===hover?3.4:2.2,0,6.28);g.fill();
+    g.fillStyle=RED;g.beginPath();g.arc(x,Y(q.row.del),i===hover?3.4:2.2,0,6.28);g.fill();
+    if(i===hover){g.strokeStyle='rgba(255,206,115,.9)';g.beginPath();g.arc(x,Y(q.row.a),5.4,0,6.28);g.stroke();}
   });
-  seq.forEach((d,i)=>{
-    const x=L+i*step+(step-barW)/2;
-    const v=d.a+d.del;
-    if(d.c>0){
-      if(v>0){
-        const h=Math.max(3,v/vmax*ph),aH=h*d.a/v;
-        g.fillStyle=AMB;g.fillRect(x,base-h,barW,aH);
-        g.fillStyle=RED;g.fillRect(x,base-h+aH,barW,h-aH);
-        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-h-4);}
-      }else{
-        /* churn not yet landed (API-increment day): dashed hollow stub — counts without volume */
-        g.strokeStyle=AMB;g.setLineDash([2,2]);g.strokeRect(x+.5,base-10.5,barW-1,10);g.setLineDash([]);
-        if(step>=11){g.fillStyle=FAINT;g.textAlign='center';g.fillText(d.c,x+barW/2,base-14);}
-      }
-    }else{
-      g.fillStyle='rgba(156,147,127,.28)';g.fillRect(x+(barW>3?barW/2-2:0),base-1.5,4,1.5);
-    }
+  /* x labels: today in teal; MM-DD every day the step can fit, else thinned */
+  const skip=Math.max(1,Math.ceil(34/step));
+  seq.forEach((q,i)=>{
+    if(q.d===todayK){g.fillStyle=TEAL;g.textAlign='center';g.fillText('today',X(i),H-4)}
+    else if(i%skip===0){g.fillStyle=FAINT;g.textAlign='center';g.fillText(q.d.slice(5),Math.max(16,Math.min(W-16,X(i))),H-4)}
   });
-  if(ti>=0){g.fillStyle=TEAL;g.textAlign='center';g.fillText('today',L+ti*step+step/2,H-2);}
   g.textAlign='left';
   g.fillStyle=AMB;g.fillRect(L+2,5,7,7);g.fillStyle=FAINT;g.fillText('added',L+13,12);
   g.fillStyle=RED;g.fillRect(L+52,5,7,7);g.fillStyle=FAINT;g.fillText('deleted',L+63,12);
 }
+function showTip(i){
+  const q=seq[i];if(!q)return;
+  const r=q.row;
+  let h='<div class="at-d">'+q.d+(q.d===localKey(new Date())?' · today':'')+'</div>';
+  if(!r)h+='<div class="at-c">no commits</div>';
+  else{
+    if(r.pending)h+='<div class="at-c">'+r.c+' commit'+(r.c>1?'s':'')+' · churn pending next build</div>';
+    else h+='<div class="at-c"><span style="color:var(--amber)">+'+fmt(r.a)+'</span> / <span style="color:var(--red)">−'+fmt(r.del)+'</span> lines · '+r.c+' commit'+(r.c>1?'s':'')+'</div>';
+    const list=dayCommits[q.d]||[];
+    list.slice(0,5).forEach(c=>{h+='<div class="at-m"><span>'+esc(c.h)+'</span>'+esc(c.s)+'</div>'});
+    if(!list.length)h+='<div class="at-more">commit list unavailable at this tier</div>';
+    else if(r.c>Math.min(5,list.length))h+='<div class="at-more">… +'+(r.c-Math.min(5,list.length))+' more</div>';
+  }
+  tip.innerHTML=h;tip.hidden=false;
+  /* measure, then place: above the day's highest point, flipping below if clipped */
+  const W=cv.clientWidth,H=cv.clientHeight,L=12,R=12,T=24,B=18;
+  const step=(W-L-R)/(WINDOW-1),x=L+i*step;
+  const vmax=Math.max(1,...seq.map(q2=>q2.row&&!q2.row.pending?Math.max(q2.row.a,q2.row.del):0));
+  const base=H-B,ph=H-T-B;
+  const py=r&&!r.pending?base-Math.max(r.a,r.del)/vmax*ph:base;
+  const tw=tip.offsetWidth,th=tip.offsetHeight;
+  tip.style.left=Math.max(4,Math.min(W-4-tw,x-tw/2))+'px';
+  tip.style.top=(py-th-8>=0?py-th-8:Math.min(H-th,py+10))+'px';
+}
+function hideTip(){tip.hidden=true}
+function evIndex(e){
+  const r=cv.getBoundingClientRect(),L=12,R=12;
+  const i=Math.round((e.clientX-r.left-L)/((r.width-L-R)/(WINDOW-1)));
+  return i>=0&&i<WINDOW?i:-1;
+}
+cv.addEventListener('pointermove',e=>{const i=evIndex(e);if(i!==hover){hover=i;draw();if(i>=0)showTip(i);else hideTip()}});
+cv.addEventListener('pointerdown',e=>{const i=evIndex(e);if(i>=0){hover=i;draw();showTip(i)}}); /* touch taps: pointermove may never fire */
+cv.addEventListener('pointerleave',()=>{hover=-1;draw();hideTip()});
 function renderActivity(){
+  hover=-1;hideTip();
   const nz=days.filter(d=>d.c>0);
   const c=nz.reduce((s,d)=>s+d.c,0),a=nz.reduce((s,d)=>s+d.a,0),dl=nz.reduce((s,d)=>s+d.del,0);
-  sumEl.innerHTML='<b>'+nz.length+'</b> days with commits · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> lines';
+  sumEl.innerHTML='<b>'+nz.length+'</b> days with commits · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> lines <span style="color:var(--faint)">· all time</span>';
   draw();
 }
-if('ResizeObserver' in window)new ResizeObserver(()=>draw()).observe(cv);
-else addEventListener('resize',()=>draw(),{passive:true});
+if('ResizeObserver' in window)new ResizeObserver(()=>{draw();hideTip()}).observe(cv);
+else addEventListener('resize',()=>{draw();hideTip()},{passive:true});
 
 function setNote(){
   const todayK=localKey(new Date());
@@ -471,7 +524,7 @@ function setNote(){
 function settle(){
   setPill(tier==='live'?'on':tier==='stats'?'sh':'',
     tier==='live'?'● LIVE · GitHub API':tier==='stats'?'◐ STATS · '+statsDay:tier==='boot'?'·· connecting':'○ SNAPSHOT · '+SNAP.stamp);
-  renderLog();renderActivity();setNote();
+  rebuildDayCommits();renderLog();renderActivity();setNote();
 }
 
 /* snapshot first (instant first paint), then three lanes race to upgrade */
@@ -486,9 +539,14 @@ else (async()=>{
       renderPlate(true);
     })
     .catch(_=>{/* npm unreachable: keep the snapshot plate */});
+  /* windowed feed: the 14-day chart needs per-day commit lists, so the API
+     query is scoped to the window; the latest-8 log still comes off the top,
+     and a repo quiet for 14+ days just yields an empty list — the stats /
+     snapshot tiers keep the panel alive */
+  const sinceD=new Date();sinceD.setDate(sinceD.getDate()-(WINDOW-1));
   const [stats,api]=await Promise.all([
     cached('cairn-repo-stats',()=>fetchJson('stats.json')).catch(()=>null),
-    cached('cairn-repo-feed',()=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits?per_page=100')).catch(()=>null)
+    cached('cairn-repo-feed',()=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits?per_page=100&since='+localKey(sinceD))).catch(()=>null)
   ]);
   if(stats&&Array.isArray(stats.days)&&stats.days.length){
     days=stats.days.map(r=>({d:String(r.d||''),c:+r.c||0,a:+r.a||0,del:+r.del||0}))
@@ -532,6 +590,7 @@ else (async()=>{
         t.grp.slice(0,t.grp.length-known).forEach(x=>{const d2=m[x.h];if(d2&&d2.a+d2.del>0){row.a+=d2.a;row.del+=d2.del}});
       }
       row.c=Math.max(row.c,t.grp.length);
+      if(!details)row.pending=true; /* API-increment day without churn detail: line breaks, tooltip says pending */
       if(days.indexOf(row)<0){days.push(row);added=true}
     });
     if(added)days.sort((x,y)=>x.d<y.d?-1:1);
