@@ -201,6 +201,8 @@ function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null
     mode: args.mode,
     ...(modelRoute !== null ? { model: modelRoute.model, provider: modelRoute.provider } : {}),
     ...(modelRoute?.piAiSection !== undefined ? { piAiSection: modelRoute.piAiSection } : {}),
+    ...(modelRoute?.deploymentHome !== undefined ? { deploymentHome: modelRoute.deploymentHome } : {}),
+    ...(modelRoute?.credentialEnvRefs !== undefined ? { credentialEnvRefs: modelRoute.credentialEnvRefs } : {}),
     ...(args.baseUrl !== undefined ? { baseUrl: args.baseUrl } : {}),
     ...(args.apiKey !== undefined ? { apiKey: args.apiKey } : {}),
     memoryMode: args.memoryMode,

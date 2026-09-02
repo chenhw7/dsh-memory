@@ -87,6 +87,7 @@ describe('resolveEvalModel', () => {
       provider: 'deepseek-official',
       model: 'deepseek-v4-flash',
       source: 'fallback',
+      deploymentHome: home,
       origin: join(home, 'settings.yaml'),
     })
   })

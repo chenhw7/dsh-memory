@@ -65,6 +65,11 @@ export interface RunOptions {
    * profiles into the throwaway home; required when `provider` is non-DeepSeek.
    */
   readonly piAiSection?: string
+  /** Deployment home (the route's settings source); real mode points the child's
+   * credentials row at its managed credentials document. */
+  readonly deploymentHome?: string
+  /** The mirrored profiles' `apiKeyEnv` reference names, for the boot preflight. */
+  readonly credentialEnvRefs?: readonly string[]
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`. */
   readonly baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -436,6 +441,8 @@ function modelOptions(options: RunOptions): HarnessModelOptions {
     ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.provider !== undefined ? { provider: options.provider } : {}),
     ...(options.piAiSection !== undefined ? { piAiSection: options.piAiSection } : {}),
+    ...(options.deploymentHome !== undefined ? { deploymentHome: options.deploymentHome } : {}),
+    ...(options.credentialEnvRefs !== undefined ? { credentialEnvRefs: options.credentialEnvRefs } : {}),
     ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   }

@@ -20,7 +20,7 @@
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { parse, stringify } from 'yaml'
 
 /** Stock DeepSeek route when no flags and the deployment declares none. */
@@ -35,15 +35,23 @@ export interface EvalModelRoute {
   readonly model: string
   /** Where the route came from; the CLI prints every source. */
   readonly source: 'flag' | 'agent-default-model' | 'fallback'
+  /** Deployment home path, present when one was read for the route. */
+  readonly deploymentHome?: string
   /** settings.yaml path, present when the route came from the deployment. */
   readonly origin?: string
   /**
    * The deployment's `llm-pi-ai:` settings section, carried verbatim into the
-   * throwaway home so the resolved route (and any sibling routes it defines)
-   * registers live — the same activation the web Models page performs. Present
-   * only when `provider` is not the stock DeepSeek route.
+   * throwaway home so the resolved route (and any sibling routes) registers
+   * live — the same activation the web Models page performs. Present when
+   * `provider` is not the stock DeepSeek route.
    */
   readonly piAiSection?: string
+  /**
+   * The `apiKeyEnv` reference names the mirrored profiles declare; the boot
+   * preflight requires each to resolve from the eval environment or the
+   * deployment's managed credentials document.
+   */
+  readonly credentialEnvRefs?: readonly string[]
 }
 
 /** One provider profile inside the deployment's `llm-pi-ai.providers` mapping. */
@@ -130,7 +138,7 @@ export function resolveEvalModel(
       provider,
       model,
       source: sourceOf(flags, defaults),
-      ...(document !== undefined ? { origin: settingsPath } : {}),
+      ...(document !== undefined ? { deploymentHome: dirname(settingsPath), origin: settingsPath } : {}),
     }
   }
 
@@ -151,12 +159,19 @@ export function resolveEvalModel(
   for (const [name, profile] of Object.entries(providers as Record<string, unknown>)) {
     assertCredentialIsReference(profile, settingsPath, name)
   }
+  const credentialEnvRefs = Object.values(providers as Record<string, unknown>)
+    .flatMap(profile => {
+      const ref = (profile as Record<string, unknown>)['apiKeyEnv']
+      return typeof ref === 'string' && ref.length > 0 ? [ref] : []
+    })
   return {
     provider,
     model,
     source: sourceOf(flags, defaults),
+    deploymentHome: dirname(settingsPath),
     origin: settingsPath,
     piAiSection: stringify({ 'llm-pi-ai': piAi }),
+    credentialEnvRefs,
   }
 }
 

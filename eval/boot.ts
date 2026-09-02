@@ -79,6 +79,11 @@ export interface HarnessModelOptions {
    * this section is what activates its routes).
    */
   piAiSection?: string
+  /** Deployment home (the route's settings source); real mode points the child's
+   * credentials row at its managed credentials document. */
+  deploymentHome?: string
+  /** The mirrored profiles' `apiKeyEnv` reference names, for the boot preflight. */
+  credentialEnvRefs?: readonly string[]
   /** `external` only: endpoint base for `DEEPSEEK_BASE_URL`, e.g. `http://127.0.0.1:<port>/v1`. */
   baseUrl?: string
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
@@ -120,32 +125,53 @@ function assertDshBinAvailable(): void {
   )
 }
 
+/** Whether the environment carries a non-empty value under `name`. */
+function envHasValue(value: string | undefined): boolean {
+  return value !== undefined && value.length > 0
+}
+
 /**
- * Resolve the credential preflight for real runs: the inherited
- * `DEEPSEEK_API_KEY`, else the managed `$DSH_HOME/.credentials.yaml`.
- * @returns the env key value, `'managed-credentials-document'` when only the
- * document plausibly holds the key, or `undefined` when neither source has one.
+ * Whether the managed credentials document plausibly holds `name`. Probe,
+ * never parse: the document layout (and every value in it) belongs to the
+ * harness's credentials service, and a name is the only thing this layer may
+ * look at. A document that exists but cannot be read is a broken deployment
+ * and fails loud; an absent one simply holds nothing.
  */
-function resolveRealApiKey(dshHome: string): string | undefined {
-  const envKey = process.env['DEEPSEEK_API_KEY']
-  if (envKey !== undefined && envKey.length > 0) return envKey
-  // Preflight only: the harness resolves the key per request from the managed
-  // document (the layout is the harness's, not ours — probe, never parse); we
-  // refuse to boot when neither source plausibly holds the DEEPSEEK key, so a
-  // real run fails loud at boot instead of mid-turn.
-  const documentPath = join(dshHome, '.credentials.yaml')
+function documentContains(documentPath: string | undefined, ref: string): boolean {
+  if (documentPath === undefined) return false
   let raw: string
   try {
     raw = readFileSync(documentPath, 'utf8')
   } catch (error) {
     // ENOENT is simply no managed credential; any other read failure is a
-    // broken deployment and must surface at boot, not mid-run.
+    // broken deployment and must surface at boot, not mid-turn.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw new Error(`eval boot: credentials document at ${documentPath} cannot be read: ${String(error)}`)
     }
-    return undefined
+    return false
   }
-  return raw.includes('DEEPSEEK_API_KEY') ? 'managed-credentials-document' : undefined
+  return raw.includes(ref)
+}
+
+/**
+ * Loud preflight for the mirrored pi-ai profiles: every `apiKeyEnv` reference
+ * must resolve from the inherited environment or the deployment's managed
+ * credentials document, so a missing credential fails at boot instead of
+ * mid-turn with the harness's per-request `MISSING_CREDENTIAL`.
+ */
+function assertCredentialRefsResolvable(refs: readonly string[], credentialsPath: string | undefined): void {
+  const missing: string[] = []
+  for (const ref of refs) {
+    if (envHasValue(process.env[ref]) || documentContains(credentialsPath, ref)) continue
+    missing.push(ref)
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `eval boot: provider credential reference(s) ${JSON.stringify(missing)} resolve nowhere — export them `
+      + 'in the environment or store them in the deployment\'s managed credentials document '
+      + `${credentialsPath === undefined ? '' : `(${credentialsPath})`}`,
+    )
+  }
 }
 
 /**
@@ -162,6 +188,11 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
   const turnTimeoutMs = options.turnTimeoutMs ?? 120_000
 
   let mock: LlmMock | undefined
+  // Real mode points the child's credentials row at the deployment's managed
+  // credentials document (the web Models page's store) — the harness resolves
+  // every reference per request from there, over the inherited environment.
+  // The eval probes reference NAMES, never parses values.
+  let credentialsPatch: Record<string, unknown> | undefined
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // The child must never see the outer deployment's harness state.
@@ -184,31 +215,37 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
     }
     env['DEEPSEEK_BASE_URL'] = externalBaseUrl
     env['DEEPSEEK_API_KEY'] = options.model?.apiKey ?? 'eval-fake-key'
-  } else if (provider !== 'deepseek-official') {
-    // A pi-ai provider route: the base bundle mounts the adapter dormant and
-    // the mirrored `llm-pi-ai:` settings section activates its routes — the
-    // same activation the web Models page performs. The endpoint and key come
-    // from the provider profile (apiKeyEnv resolves per request through the
-    // credentials seam over the inherited environment), so none of the
-    // deepseek-adapter plumbing below applies. The route is inherently live:
-    // mock and external are deepseek-official shapes.
-    if (mode !== 'real') {
-      throw new Error(`eval boot: provider "${provider}" is a pi-ai route and only runs live — --mode real`)
-    }
-    if (options.model?.piAiSection === undefined || options.model.piAiSection.length === 0) {
-      throw new Error(`eval boot: provider "${provider}" needs the deployment's llm-pi-ai settings section`)
-    }
+  } else if (mode !== 'real') {
+    throw new Error(`eval boot: unknown model mode ${JSON.stringify(mode)}`)
   } else {
-    const apiKey = resolveRealApiKey(dshHome)
-    if (apiKey === undefined) {
+    // Real mode. The deployment home's managed credentials document — when it
+    // exists — becomes the child's credential plane via a credentials-row path
+    // patch; the eval itself never parses credential values.
+    const deploymentHome = options.model?.deploymentHome
+    const credentialsPath = deploymentHome !== undefined && deploymentHome.length > 0
+      ? join(deploymentHome, '.credentials.yaml')
+      : undefined
+    if (provider !== 'deepseek-official') {
+      // A pi-ai provider route: the base bundle mounts the adapter dormant and
+      // the mirrored `llm-pi-ai:` settings section activates its routes — the
+      // same activation the web Models page performs. The endpoint and key come
+      // from the provider profile. The route is inherently live: mock and
+      // external are deepseek-official shapes.
+      if (options.model?.piAiSection === undefined || options.model.piAiSection.length === 0) {
+        throw new Error(`eval boot: provider "${provider}" needs the deployment's llm-pi-ai settings section`)
+      }
+      assertCredentialRefsResolvable(options.model?.credentialEnvRefs ?? [], credentialsPath)
+    } else if (!envHasValue(process.env['DEEPSEEK_API_KEY'])
+      && !documentContains(credentialsPath, 'DEEPSEEK_API_KEY')) {
       throw new Error(
         'eval boot: real mode requires a DEEPSEEK key — set $DEEPSEEK_API_KEY in the environment '
-        + `or a key entry under ${documentPath(dshHome)}`,
+        + `or store one in the deployment's managed credentials document`
+        + `${credentialsPath === undefined ? '' : ` (${credentialsPath})`}`,
       )
     }
-    // The managed-document sentinel stays out of the child env: the harness
-    // resolves that source itself.
-    if (apiKey !== 'managed-credentials-document') env['DEEPSEEK_API_KEY'] = apiKey
+    if (credentialsPath !== undefined && existsSync(credentialsPath)) {
+      credentialsPatch = { id: 'credentials', config: { path: credentialsPath } }
+    }
   }
 
   // Everything from here that can throw runs under the startup-failure guard:
@@ -230,7 +267,11 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
     // Per-run configPatches land as overlay files under the throwaway home
     // (never the repository) and ride `--patch`, the launcher's topmost layer.
     const patches: string[] = []
-    for (const [index, patch] of (options.configPatches ?? []).entries()) {
+    const overlayPatches: Array<Record<string, unknown>> = [
+      ...(options.configPatches ?? []),
+      ...(credentialsPatch !== undefined ? [credentialsPatch] : []),
+    ]
+    for (const [index, patch] of overlayPatches.entries()) {
       const overlayDir = join(dshHome, 'eval-overlays')
       mkdirSync(overlayDir, { recursive: true })
       const file = join(overlayDir, `overlay-${String(index)}.yaml`)

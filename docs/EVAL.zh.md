@@ -65,18 +65,21 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . --filter prog105
 
 `real`/`external` 模式下被测模型由 **provider + model id** 双轴决定，每次运行都把解析结果打印到 stdout 并盖印进报告（`model under test`，含 `provider/id`）：
 
-- **provider 轴**：显式 `--provider <id>` 优先；缺省读部署 home（`$DSH_HOME`，缺省 `~/.dsh`）`settings.yaml` 的 `agent-default-model.provider`；再缺省回退 `deepseek-official`。base bundle 已把 `dsh-llm-pi-ai` 适配器休眠挂载，deployment settings 的 `llm-pi-ai:` 分节即激活其路由——与 web Models 页的激活方式相同；`real` 模式遇到非 DeepSeek provider 时，eval 把该分节**镜像**进一次性 home 的 settings（按请求经凭据 seam 解析 `apiKeyEnv` 引用，配置文档永不含密钥），端点与密钥都来自 provider 档案本身。部署缺该分节或 provider 未定义时报错退出。
+- **provider 轴**：显式 `--provider <id>` 优先；缺省读部署 home（`$DSH_HOME`，缺省 `~/.dsh`）`settings.yaml` 的 `agent-default-model.provider`；再缺省回退 `deepseek-official`。base bundle 已把 `dsh-llm-pi-ai` 适配器休眠挂载，deployment settings 的 `llm-pi-ai:` 分节即激活其路由——与 web Models 页的激活方式相同；`real` 模式遇到非 DeepSeek provider 时，eval 把该分节**镜像**进一次性 home 的 settings，子进程的凭据行经 `credentials.path` 补丁直接指向**部署 home 的托管凭据文档**（`.credentials.yaml`，web Models 页写入的那份）——密钥按请求由 harness 自己解析，eval 全程 probe 不 parse。部署缺该分节或 provider 未定义时报错退出。
+- **凭据预检**：real 模式在 boot 前验证所需引用可解析——继承环境或部署托管文档（只探名字，不读值），缺失即响亮报错并点名两条来源。DeepSeek provider 要求 `DEEPSEEK_API_KEY`；pi-ai provider 要求其档案声明的 `apiKeyEnv` 引用（如 `FUYAO_API_KEY`）。**在 UI 配置过 key 的部署，`--mode real` 即零配置**。
 - **model id**：显式 `--model <id>` 优先；缺省取同一 `agent-default-model.model`；再缺省回退 `deepseek-v4-flash`。settings.yaml 存在但无法解析、`agent-default-model` 畸形（含半截声明）、或镜像档案携带内联密钥时报错退出，绝不静默。
 - **模式语义**：`--mode mock`（缺省）是确定性 deepseek-official 形态，不读部署 home，拒绝 `--model/--provider`；`--mode external` 是 deepseek 适配器的 fake-LLM 伪装（`--base-url/--api-key`），provider 固定 `deepseek-official`、拒绝 `--provider`；`--mode real` 承接上述完整解析——DeepSeek provider 走 `DEEPSEEK_API_KEY`/`.credentials.yaml` 预检，pi-ai provider 走镜像路由。
 
 ```sh
-# fuyao 网关全链路示例（部署 home 已声明 llm-pi-ai.providers.fuyao + agent-default-model=fuyao/fuyao-work）
-# key 在环境变量 FUYAO_API_KEY 中，judge 同网关；--model 可换 fuyao-coding 等
+# fuyao 网关全链路示例：部署 home 已声明 llm-pi-ai.providers.fuyao + agent-default-model，
+# key 已在 UI（Models 页）配置进托管凭据文档 —— 零环境变量、零模型旗标
 EVAL_JUDGE_BASE_URL=http://fuyao-ai-gateway.xiaopeng.link/v1 \
 EVAL_JUDGE_API_KEY=$FUYAO_API_KEY \
 EVAL_JUDGE_MODEL=fuyao-work \
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . \
   --mode real --judge --out /tmp/eval-real.json
+# 注：judge 凭据走独立的环境变量链；被测模型侧无需任何配置。
+# 换被测模型：--model fuyao-work（缺省即 agent-default-model.model）
 ```
 
 ### plant 链路联调（fake LLM + external 模式）

@@ -12,7 +12,7 @@ Status: implemented
 
 1. **部署 home 的 `settings.yaml` 是唯一配置源。** eval 经 `$DSH_HOME`（harness 自己解析的同一变量，缺省 `~/.dsh`）读取——不新增 eval 专属 yaml、不硬编码路径，套件的跨环境可移植性由构造保证。
 2. **`agent-default-model` 是缺省路由（双轴）。** 一旦声明，`provider` 与 `model` 必须同时存在（半截声明会把部署 provider 与 eval 回退模型悄悄混合——响亮报错）。显式 `--provider`/`--model` 旗标逐轴覆盖；全缺省时回退出厂 `deepseek-official`/`deepseek-v4-flash` 组合。
-3. **`real` 模式把部署的 `llm-pi-ai:` 分节镜像进一次性 home**（解析在 `eval/model-route.ts`，物化在 `profile-template.ts`，该分节即一次性 settings 文档）。分节由适配器自身的 schema 在加载时校验；provider 档案必须把凭据留在 `apiKeyEnv` 引用之后——携带内联凭据字段的档案在镜像前响亮报错（一次性 home 与保留的故障 home 都不是凭据去向）。密钥按请求经 harness 凭据 seam 从继承环境解析（eval 进程环境里的 `FUYAO_API_KEY` 直达子进程）。
+3. **`real` 模式把部署的 `llm-pi-ai:` 分节镜像进一次性 home**（解析在 `eval/model-route.ts`，物化在 `profile-template.ts`，该分节即一次性 settings 文档）。子进程的凭据行经 `credentials.path` 补丁指向**部署 home 的托管凭据文档**（`.credentials.yaml`——web Models 页写入的那份），每条 `apiKeyEnv` 引用按请求解析的方式与真实会话完全一致。eval 全程不解析凭据值——只探引用名（`assertCredentialRefsResolvable`），与 deepseek 密钥预检同一 probe-never-parse 原则。携带内联凭据字段的档案在镜像前响亮报错。
 4. **模式语义按路由形态各归其位。** `mock` 是确定性 deepseek-official 形态：不读任何东西、拒绝 `--model`/`--provider`。`external` 伪装 deepseek 适配器 wire：provider 固定 `deepseek-official`、拒绝 `--provider`。`real` 承接完整解析——DeepSeek provider 保留 DEEPSEEK 密钥预检；pi-ai provider 路由天然 live、必须有镜像分节（`eval/boot.ts` 双守）。报告把路由盖印为 `model: { mode, provider, id }`。
 
 ## 备选方案
@@ -27,6 +27,7 @@ Status: implemented
 
 - 零配置带密钥运行即 `npm run eval -- --mode real --build . --judge`：本部署下解析为 `fuyao/fuyao-work`，镜像 `llm-pi-ai:` 分节，端到端跑的正是 web 会话使用的同一条路由——包括骑在会话路由上的记忆整理管线。
 - `--provider` 进入 CLI（含 `eval:ab`）；`EvalReport.model` 增加 `provider`；一次性 home 的 settings 文档在 real 运行下不再恒为静态 `{}` 模板。
-- `agent-default-model` 点名的 provider 若无已存登录/`apiKeyEnv` 凭据，会在第一个 turn 以适配器的 `MISSING_CREDENTIAL` 失败（响亮，点名环境变量与两条补救路径），而非 eval 解析期——eval 不预读凭据面。
+- `agent-default-model` 点名的 provider 若凭据引用在两处来源（继承环境、部署托管凭据文档）都解析不到，会在 **boot** 时失败——eval 对每条镜像的 `apiKeyEnv` 引用做预检（只探名字、不读值），响亮报错并点名两条来源，而非第一回合的 harness 逐请求 `MISSING_CREDENTIAL`。
+- 零配置带密钥运行已实测为真：部署的 `llm-pi-ai:` 分节、`agent-default-model`、UI 存储的凭据齐备时，`npm run eval -- --mode real --build .` 跑 smoke 数据集产出真实模型回答（`fuyao/fuyao-coding`，standing hit 2/2，两回合约 103 秒——对比修复前静默失败的 1.5 秒）。
 - 以 idle 结束却没有 assistant 消息的 turn 现在在 boot 边界响亮失败（`eval/boot.ts`）：agent loop 在每个完成或被中断的 step 上都会追加 assistant 消息，因此「idle 无回答」即模型路由失败——此处静默会让 real 运行以 `ok` 记分却没有任何答案，与健康的无判定运行无法区分。底层 LLM 失败（如 `MISSING_CREDENTIAL`）被 harness driver 收容、存于运行时自身诊断；eval 的错误信息指明补救方向。
 - 早间 Note 的 provider 钉死决策由本篇废止；两篇保持交叉链接。
