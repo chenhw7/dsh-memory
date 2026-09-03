@@ -1,0 +1,209 @@
+{
+  "schema": "eval-noise-pilot-v0",
+  "routes": [
+    {
+      "scenarioId": "noise310-prog-context-dump",
+      "marker": "order-sync",
+      "chatReply": "收到，我先看一下，稍后给你结论。",
+      "extraction": [
+        {
+          "factId": "f310-db-port",
+          "scope": "global",
+          "category": "convention",
+          "summary": "本地开发库 docker postgres 端口 15432 固定不动",
+          "content": "本地开发库是 docker 里起的 postgres，端口固定 15432，不要改动"
+        }
+      ]
+    },
+    {
+      "scenarioId": "noise311-work-voice-input",
+      "marker": "口述给你",
+      "chatReply": "收到，我先看一下，稍后给你结论。",
+      "extraction": [
+        {
+          "factId": "f311-weekly",
+          "scope": "user",
+          "category": "preference",
+          "summary": "周报放飞书知识库运营空间目录 每周五五点前交",
+          "content": "周报统一放在飞书知识库运营空间的目录里，每周五下午五点之前交，交完在组长群里打招呼"
+        }
+      ]
+    },
+    {
+      "scenarioId": "noise312-prog-self-correction",
+      "marker": "支付网关",
+      "chatReply": "收到，我先看一下，稍后给你结论。",
+      "extraction": [
+        {
+          "factId": "f312-retry",
+          "scope": "global",
+          "category": "convention",
+          "summary": "接口超时重试 5 次 退避 200 毫秒 不要改",
+          "content": "接口超时重试 5 次，退避间隔 200 毫秒，不要改动"
+        },
+        {
+          "factId": "f312-debug-level",
+          "scope": "global",
+          "category": "tool-quirk",
+          "summary": "测试环境日志等级是 debug 不要调低",
+          "content": "测试环境的日志等级是 debug，不要调低"
+        }
+      ]
+    },
+    {
+      "scenarioId": "noise313-life-topic-drift",
+      "marker": "把跑步捡起来",
+      "chatReply": "收到，我先看一下，稍后给你结论。",
+      "extraction": [
+        {
+          "factId": "f313-pace",
+          "scope": "user",
+          "category": "preference",
+          "summary": "跑步配速每公里 6 分 30 不冲快",
+          "content": "跑步配速按每公里 6 分 30 练，不要冲刺"
+        }
+      ]
+    },
+    {
+      "scenarioId": "noise314-prog-context-dump-en",
+      "marker": "ci cache is warm",
+      "chatReply": "Got it, I'll take a look and report back.",
+      "extraction": [
+        {
+          "factId": "f314-ci-cache",
+          "scope": "global",
+          "category": "tool-quirk",
+          "summary": "CI cache under ~/.cache/ci keyed by lockfile hash, do not evict",
+          "content": "CI cache is warm under ~/.cache/ci keyed by the lockfile hash; do not evict it, a cold build takes twenty minutes"
+        }
+      ]
+    },
+    {
+      "scenarioId": "noise315-work-topic-drift-mixed",
+      "marker": "月度复盘",
+      "chatReply": "收到，我先看一下，稍后给你结论。",
+      "extraction": [
+        {
+          "factId": "f315-review-doc",
+          "scope": "user",
+          "category": "preference",
+          "summary": "月度复盘文档放 notion Q3 工作区 带月份前缀",
+          "content": "月度复盘文档统一放 notion 的 Q3 工作区，命名带月份前缀"
+        }
+      ]
+    }
+  ],
+  "calibration": [
+    {
+      "id": "calib-normalize-typo",
+      "note": "dim1 anchor: normalizing an obvious typo is not fabrication",
+      "plants": [
+        {
+          "id": "f-calib-ci-tests",
+          "statement": "在 CI 上必需要跑全量测试，不能跳过"
+        }
+      ],
+      "storeBefore": [],
+      "siblings": [],
+      "entry": {
+        "id": "mem-calib-1",
+        "scope": "global",
+        "category": "convention",
+        "content": "CI 上必须跑全量测试，不能跳过"
+      },
+      "expected": {
+        "plantedId": "f-calib-ci-tests",
+        "contentFidelity": 2,
+        "scopeAndCategory": 2,
+        "retrievability": 2,
+        "mergeBehavior": 2,
+        "total": 8
+      }
+    },
+    {
+      "id": "calib-preserve-noisy",
+      "note": "dim1 anchor: keeping the noisy wording verbatim is not a loss",
+      "plants": [
+        {
+          "id": "f-calib-ci-tests",
+          "statement": "在 CI 上必需要跑全量测试，不能跳过"
+        }
+      ],
+      "storeBefore": [],
+      "siblings": [],
+      "entry": {
+        "id": "mem-calib-2",
+        "scope": "global",
+        "category": "convention",
+        "content": "在 CI 上必需要跑全量测试，不能跳过"
+      },
+      "expected": {
+        "plantedId": "f-calib-ci-tests",
+        "contentFidelity": 2,
+        "scopeAndCategory": 2,
+        "retrievability": 2,
+        "mergeBehavior": 2,
+        "total": 8
+      }
+    },
+    {
+      "id": "calib-updated-entry",
+      "note": "medium-diff anchor: an in-place update that keeps both sides' information is the correct merge outcome",
+      "plants": [
+        {
+          "id": "f-calib-invalidate",
+          "statement": "详情页缓存失效走写路径，写入时主动失效，不靠 TTL 到期"
+        }
+      ],
+      "storeBefore": [
+        {
+          "id": "mem-calib-old",
+          "scope": "global",
+          "content": "详情页缓存此前按 30 分钟 TTL 过期"
+        }
+      ],
+      "siblings": [],
+      "entry": {
+        "id": "mem-calib-old",
+        "scope": "global",
+        "category": "convention",
+        "updated": true,
+        "content": "详情页缓存失效走写路径，写入时主动失效，不靠 TTL 到期；原 30 分钟 TTL 机制已弃用"
+      },
+      "expected": {
+        "plantedId": "f-calib-invalidate",
+        "contentFidelity": 2,
+        "scopeAndCategory": 2,
+        "retrievability": 2,
+        "mergeBehavior": 2,
+        "total": 8
+      }
+    },
+    {
+      "id": "calib-contradiction",
+      "note": "a contradictory entry still traces to its planted fact (trace follows the subject); the wrong values land in fidelity tier 0, and retrievability stays 2 — a conflicted value fills the same slot, it is not a lost token",
+      "plants": [
+        {
+          "id": "f-calib-retry",
+          "statement": "接口超时重试 5 次，退避间隔 200 毫秒"
+        }
+      ],
+      "storeBefore": [],
+      "siblings": [],
+      "entry": {
+        "id": "mem-calib-3",
+        "scope": "global",
+        "category": "convention",
+        "content": "接口超时重试 3 次，退避间隔 500 毫秒，超过后转人工处理"
+      },
+      "expected": {
+        "plantedId": "f-calib-retry",
+        "contentFidelity": 0,
+        "scopeAndCategory": 2,
+        "retrievability": 2,
+        "mergeBehavior": 2,
+        "total": 6
+      }
+    }
+  ]
+}

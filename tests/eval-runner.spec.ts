@@ -287,6 +287,23 @@ describe('fact materialization (rubric Inputs rule)', () => {
     expect(materializeFactStatements(plantDataset[0]!).get('f-pnpm')).toBe('记住：构建一律用 pnpm，不要用 npm install。')
   })
 
+  const noisyPlant = parseDataset(
+    '{"id":"n1","kind":"plant","domain":"programming","language":"zh",'
+    + '"turns":[{"user":"背景先说长一点：缓存这套以前踩过坑，CI 缓存热在 ~/.cache/ci 下、按 lockfile hash 分区，别清它，冷构建要二十分钟。其他都是上下文。","planted":["f-ci"]},'
+    + '{"user":"顺带：测试跑 vitest。","planted":["f-test"]}],'
+    + '"plantFacts":[{"id":"f-ci","factText":"CI 缓存热在 ~/.cache/ci 下，按 lockfile hash 分区，不要清。"}],'
+    + '"questions":[{"id":"q1","q":"缓存在哪？","requires":["f-ci"],"gold":"~/.cache/ci","type":"single-hop","variantOf":null}]}',
+    'inline',
+  )
+
+  it('a plantFact factText replaces the whole home dump as the statement; facts without it keep the turn', () => {
+    const homes = materializeFactHomes(noisyPlant[0]!)
+    expect(homes.get('f-ci')?.statement).toBe('CI 缓存热在 ~/.cache/ci 下，按 lockfile hash 分区，不要清。')
+    expect(homes.get('f-ci')?.summary).toBeUndefined()
+    expect(homes.get('f-test')?.statement).toBe('顺带：测试跑 vitest。')
+    expect(materializeFactStatements(noisyPlant[0]!).get('f-ci')).toBe('CI 缓存热在 ~/.cache/ci 下，按 lockfile hash 分区，不要清。')
+  })
+
   it('a seed fact quotes seedEntries content and carries its summary for mechanical matching', () => {
     const homes = materializeFactHomes(seedDataset[0]!)
     expect(homes.get('f-a')).toEqual({ statement: 'Fact A.', summary: 'A summary' })

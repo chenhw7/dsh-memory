@@ -1,10 +1,11 @@
 /**
- * Mechanical recall metrics — eval/rubric/recall-v1.md, "Mechanical item":
- * standing hit, noise ratio and injection cost are computed by the harness
- * in code; the judge never outputs them. Pure functions over the assembled
- * system prompt, no I/O and no plugin imports — the build under test is a
- * variable, so fence shapes are matched structurally (entry lines are bullets
- * or scope-prefixed index lines), never by quoting the current plugin's
+ * Mechanical recall metrics — the recall rubric's "Mechanical item" sections
+ * (recall-v2.md today; the definitions are version-stamped there): standing
+ * hit, noise ratio and injection cost are computed by the harness in code;
+ * the judge never outputs them. Pure functions over the assembled system
+ * prompt, no I/O and no plugin imports — the build under test is a variable,
+ * so fence shapes are matched structurally (entry lines are bullets or
+ * scope-prefixed index lines), never by quoting the current plugin's
  * framing text.
  *
  * @module eval/mechanical

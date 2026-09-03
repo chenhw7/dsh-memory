@@ -25,6 +25,44 @@ export const categorySchema = z.enum([
 ])
 export type EvalCategory = z.infer<typeof categorySchema>
 
+/**
+ * The register axis of the noise slice (noise-v0): `noisy` scenarios carry
+ * authored long/noisy turns (noise is a controlled variable, never injected at
+ * runtime); `clean` is the default when the field is absent. The report adds
+ * a `register` slice only for runs whose scenarios carry the field.
+ */
+export const registerSchema = z.enum(['clean', 'noisy'])
+export type EvalRegister = z.infer<typeof registerSchema>
+
+/**
+ * Per-planted-fact metadata (noise slice). Fact ids are declared on the turns
+ * (`planted`); this table carries the optional metadata for the facts that
+ * need it. Facts without an entry keep the plain materialization: the whole
+ * home turn is their statement.
+ */
+export const plantFactSchema = z.strictObject({
+  /** The planted fact id (must appear in one of the scenario turns' `planted` lists). */
+  id: z.string().min(1),
+  /**
+   * Normalized clean excerpt of the planted fact: the judge's ground truth
+   * AND the mechanical layer's fact text (replacing the whole dump — a fact
+   * buried mid-turn must not score its 150–600 character home utterance).
+   */
+  factText: z.string().min(1).optional(),
+  /**
+   * Anchor tokens (tool names, numbers, identifiers, paths) for the spec lint:
+   * every anchor must appear verbatim in the fact's materialized home turn.
+   * Anchor corruption is a guaranteed mechanical false miss (the extraction
+   * normalizes, the materialized statement does not).
+   */
+  anchors: z.array(z.string().min(1)).optional(),
+  /** Scope ground truth (audit P0#2): the scope the entry must be stored under; the storage rubric v2 dim 2 scores against it when present. */
+  expectedScope: z.enum(['global', 'project', 'user']).optional(),
+  /** Category ground truth; the storage rubric v2 dim 2 scores against it when present. */
+  expectedCategory: categorySchema.optional(),
+})
+export type EvalPlantFact = z.infer<typeof plantFactSchema>
+
 export const turnSchema = z.strictObject({
   user: z.string().min(1),
   assistant: z.string().min(1).optional(),
@@ -53,13 +91,33 @@ export const questionSchema = z.strictObject({
 })
 export type EvalQuestion = z.infer<typeof questionSchema>
 
+/**
+ * The long/difficult noise patterns the noise slice covers (declared per
+ * scenario, like the turn `signals`): the dataset spec floors assert the
+ * slice's union covers all four, so the pattern is a controlled, checked
+ * variable rather than an anecdotal property of the prose.
+ */
+export const noisePatternSchema = z.enum([
+  'context-dump',
+  'voice-input',
+  'self-correction',
+  'topic-drift',
+])
+export type EvalNoisePattern = z.infer<typeof noisePatternSchema>
+
 export const scenarioSchema = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(['plant', 'seed']),
   domain: z.enum(['programming', 'daily-work', 'life']),
   language: z.enum(['zh', 'en', 'mixed']),
+  /** Register axis of the noise slice; absent = the axis is unreported (clean corpus). */
+  register: registerSchema.optional(),
+  /** Declared noise patterns (noise slice authoring contract); the spec lint checks slice coverage. */
+  patterns: z.array(noisePatternSchema).optional(),
   turns: z.array(turnSchema).optional(),
   seedEntries: z.array(seedEntrySchema).optional(),
+  /** Per-planted-fact metadata (noise slice); see {@link plantFactSchema}. */
+  plantFacts: z.array(plantFactSchema).optional(),
   questions: z.array(questionSchema).min(1),
 })
 export type EvalScenario = z.infer<typeof scenarioSchema>
@@ -106,10 +164,13 @@ export function parseDataset(text: string, source: string): EvalScenario[] {
 
 /**
  * Materialize the verbatim statement home for every fact id of a scenario,
- * per the rubric Inputs rule (eval/rubric/*-v1.md): one home per fact id —
+ * per the rubric Inputs rule (eval/rubric/*-v2.md): one home per fact id —
  * a plant fact quotes the user message of the FIRST turn whose `planted`
- * list carries the id; a seed fact quotes its `seedEntries[].content`.
- * Plant turns win over seed entries when an id (unexpectedly) has both.
+ * list carries the id, UNLESS the scenario's `plantFacts` table carries a
+ * `factText` for the id, in which case the clean excerpt is the statement
+ * (noise slice: the whole dump must not be the ground truth); a seed fact
+ * quotes its `seedEntries[].content`. Plant turns win over seed entries when
+ * an id (unexpectedly) has both.
  */
 export function materializeFactStatements(scenario: EvalScenario): Map<string, string> {
   const homes = new Map<string, string>()
@@ -131,9 +192,13 @@ export interface FactHome {
 export function materializeFactHomes(scenario: EvalScenario): Map<string, FactHome> {
   const homes = new Map<string, FactHome>()
   if (scenario.kind === 'plant') {
+    const factMeta = new Map((scenario.plantFacts ?? []).map(fact => [fact.id, fact]))
     for (const turn of scenario.turns ?? []) {
       for (const factId of turn.planted ?? []) {
-        if (!homes.has(factId)) homes.set(factId, { statement: turn.user })
+        if (homes.has(factId)) continue
+        // A plantFact factText replaces the whole dump as the statement;
+        // facts without the field keep the current materialization.
+        homes.set(factId, { statement: factMeta.get(factId)?.factText ?? turn.user })
       }
     }
   }

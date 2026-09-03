@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "."
+  },
+  "include": ["src", "eval", "tests/eval-report.spec.ts", "tests/eval-runner.spec.ts", "tests/eval-noise-routes.spec.ts", "tests/eval-pilot-gate.spec.ts", "tests/eval-noise-dataset.spec.ts", "tests/eval-dataset.spec.ts", "tests/eval-judge.spec.ts"],
+  "exclude": ["src/client", "node_modules", "lib"]
+}

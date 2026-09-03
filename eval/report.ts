@@ -85,6 +85,12 @@ export interface ScenarioResult {
   readonly kind: ScenarioKind
   readonly domain: string
   readonly language: string
+  /**
+   * The corpus `register` axis (`'clean' | 'noisy'`); `null` when the scenario
+   * carries no `register` field — the report adds the register slice axis only
+   * for runs whose scenarios state one.
+   */
+  readonly register: 'clean' | 'noisy' | null
   readonly memoryMode: EffectiveMemoryMode
   readonly systemPromptCaptured: boolean
   readonly fenceTags: readonly string[]
@@ -320,6 +326,13 @@ export function buildReport(
   ] as const) {
     for (const [value, group] of by(pick)) slices.push(sliceMetrics(`${key}=${value}`, group))
   }
+  // The register axis is a slice only when the corpus states it: a clean-only
+  // run (core-v0) reports no register row, so historical shapes stay stable.
+  if (results.some(result => result.register !== null)) {
+    for (const [value, group] of by(result => result.register ?? 'clean')) {
+      slices.push(sliceMetrics(`register=${value}`, group))
+    }
+  }
   const allQuestions = results.flatMap(result => result.questions)
   for (const type of ['single-hop', 'multi-hop', 'paraphrase', 'negative'] as const) {
     const typed = allQuestions.filter(question => question.type === type)
@@ -380,8 +393,8 @@ export function renderReportMarkdown(report: EvalReport): string {
   lines.push('')
   lines.push('## Per scenario')
   lines.push('')
-  lines.push('| scenario | kind | domain | lang | questions | standing hit | noise | cost chars | storage precision | error |')
-  lines.push('|---|---|---|---|---|---|---|---|---|---|')
+  lines.push('| scenario | kind | domain | lang | register | questions | standing hit | noise | cost chars | storage precision | error |')
+  lines.push('|---|---|---|---|---|---|---|---|---|---|---|')
   for (const scenario of report.scenarios) {
     const hits = scenario.questions.filter(question => question.standingHit === true).length
     const measurable = scenario.questions.filter(question => question.standingHit !== null).length
@@ -394,6 +407,7 @@ export function renderReportMarkdown(report: EvalReport): string {
       : [...scenario.storage.writtenIds, ...scenario.storage.updatedIds]
     lines.push(
       `| ${scenario.scenarioId} | ${scenario.kind} | ${scenario.domain} | ${scenario.language} `
+      + `| ${scenario.register ?? '—'} `
       + `| ${String(scenario.questions.length)} `
       + `| ${measurable === 0 ? '—' : `${String(hits)}/${String(measurable)}`} `
       + `| ${num(noise)} | ${num(scenario.injection === null ? null : scenario.injection.chars, 0)} `

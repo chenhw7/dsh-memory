@@ -130,6 +130,35 @@ export function memoryModePatch(mode: EffectiveMemoryMode): Record<string, unkno
 }
 
 /**
+ * The noise lane's extraction pin (noisy-registered scenarios only). The
+ * evidence run exercises the automatic extraction chain through the PERIODIC
+ * REVIEW path — a keyword-triggered candidate plus a threshold of 1 makes the
+ * review fire on the next pre-step, mid-session, where the write is
+ * guaranteed to settle before the child exits. The dispose flush CANNOT be
+ * that lane: on the SDK stdio path the server hard-exits ~26 ms after emitting
+ * `session/disposed` (measured 2026-09-03 — the flush's LLM round-trip
+ * completes inside that window but the store write never lands, and the
+ * harness owes dispose listeners no milliseconds), so it is a race the eval
+ * cannot win. All other pins restate the profile template, because an overlay
+ * row replaces the pinned row's config.
+ */
+export function noisyReviewPatch(): Record<string, unknown> {
+  return {
+    id: 'memory-review',
+    config: {
+      reviewEnabled: true,
+      reviewCandidateThreshold: 1,
+      flushOnCompaction: true,
+      flushOnDispose: true,
+      extractionModelProvider: '',
+      extractionModelModel: '',
+      confirmBeforeWrite: false,
+      curatorEnabled: false,
+    },
+  }
+}
+
+/**
  * {@link waitForQuiesce} with an event-loop keepalive: the quiesce poll runs
  * on unref'd timers, so once every harness handle is disposed (no child, no
  * mock server) the eval process's loop would drain mid-poll and kill the run
@@ -183,6 +212,9 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
     domain: scenario.domain,
     language: scenario.language,
     memoryMode,
+    // `null` when the corpus carries no `register` field — the report adds
+    // the register slice axis only for runs that state one.
+    register: scenario.register ?? null,
   }
 
   const handles: HarnessHandle[] = []
@@ -203,7 +235,13 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
         buildDir: options.buildDir,
         dshHome,
         model: modelOptions(options),
-        configPatches: [memoryModePatch(memoryMode)],
+        configPatches: [
+          memoryModePatch(memoryMode),
+          // The noise lane pins the review threshold to 1 so its
+          // keyword-triggered extraction fires mid-session (see
+          // noisyReviewPatch for the dispose-flush race it works around).
+          ...(scenario.register === 'noisy' ? [noisyReviewPatch()] : []),
+        ],
         ...(options.turnBudget !== null ? { turnBudget: options.turnBudget } : {}),
       })
       handles.push(handle)
@@ -296,10 +334,13 @@ async function runSeedScenario(
 }
 
 /**
- * Plant (M2): session 1 plays the dialogue; dispose triggers the flush;
- * quiesce bounds it; the settled medium is the storage measurement; session 2
- * re-opens on the SAME dshHome with a fresh handle (fresh memory snapshot)
- * and answers the questions.
+ * Plant (M2): session 1 plays the dialogue; on clean plant scenarios the
+ * dispose flush is the extraction trigger (quiesce bounds the late write);
+ * on noisy-registered scenarios the periodic review writes the entries
+ * mid-session 1 instead — the dispose flush loses to the SDK server's hard
+ * exit (noisyReviewPatch). The settled medium is the storage measurement;
+ * session 2 re-opens on the SAME dshHome with a fresh handle (fresh memory
+ * snapshot) and answers the questions.
  */
 async function runPlantScenario(
   scenario: EvalScenario,
@@ -325,11 +366,21 @@ async function runPlantScenario(
     questions.push(await judgedQuestionResult(question, homes, turn, context.options, systemPrompt, scenario.id))
   }
 
-  // Planted facts trace to their FIRST planting turn's user message, verbatim.
+  // Planted facts trace to their FIRST planting turn (or to its factText
+  // excerpt when the corpus carries one), with the scenario's scope/category
+  // ground truth where pinned (audit P0#2).
   const plants: PlantedFact[] = []
+  const factMeta = new Map((scenario.plantFacts ?? []).map(fact => [fact.id, fact]))
   for (const turn of scenario.turns ?? []) {
     for (const factId of turn.planted ?? []) {
-      if (!plants.some(plant => plant.id === factId)) plants.push({ id: factId, statement: turn.user })
+      if (plants.some(plant => plant.id === factId)) continue
+      const meta = factMeta.get(factId)
+      plants.push({
+        id: factId,
+        statement: meta?.factText ?? turn.user,
+        ...(meta?.expectedScope !== undefined ? { expectedScope: meta.expectedScope } : {}),
+        ...(meta?.expectedCategory !== undefined ? { expectedCategory: meta.expectedCategory } : {}),
+      })
     }
   }
   // The medium diff (rubric v2 basis): written = ids absent from storeBefore;

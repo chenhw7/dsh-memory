@@ -38,6 +38,7 @@ function scenario(overrides: Partial<ScenarioResult> & { scenarioId: string }): 
     kind: 'seed',
     domain: 'programming',
     language: 'zh',
+    register: null,
     memoryMode: 'index',
     systemPromptCaptured: true,
     fenceTags: ['memory-index'],
@@ -249,6 +250,18 @@ describe('buildReport', () => {
     expect(report.slices.find(slice => slice.label === 'type=paraphrase')?.questions).toBe(1)
   })
 
+  it('the register slice appears only when a scenario states a register', () => {
+    const cleanOnly = buildReport([scenario({ scenarioId: 's1' })], stamp)
+    expect(cleanOnly.slices.map(slice => slice.label)).not.toContain(expect.stringMatching(/^register=/))
+    const withRegister = buildReport([
+      scenario({ scenarioId: 's1', register: 'clean', questions: [question({ questionId: 'q1' })] }),
+      scenario({ scenarioId: 's2', register: 'noisy', questions: [question({ questionId: 'q2', standingHit: false })] }),
+    ], stamp)
+    const labels = withRegister.slices.map(slice => slice.label)
+    expect(labels).toContain('register=clean')
+    expect(labels).toContain('register=noisy')
+    expect(withRegister.slices.find(slice => slice.label === 'register=noisy')?.standingHitRate).toBe(0)
+  })
 })
 
 describe('storage precision over the v2 medium-diff basis', () => {
@@ -405,7 +418,7 @@ describe('markdown renderings', () => {
     expect(markdown).toContain('- rubric: storage v1, recall v1')
     expect(markdown).toContain('- judge: judge-x @ http://judge/v1')
     expect(markdown).toContain('- turn budget: 180s wall / 32 tool calls (0 = off)')
-    expect(markdown).toContain('| prog101-build-toolchain | plant | programming | zh | 2 | 1/2 |')
+    expect(markdown).toContain('| prog101-build-toolchain | plant | programming | zh | — | 2 | 1/2 |')
     expect(markdown).toContain('independent (excl. paraphrase)')
     expect(markdown).toContain('boot failed loudly (kept home /tmp/dsh-eval-run-keep)')
     expect(markdown).toContain('storage precision')

@@ -15,7 +15,7 @@ Living documents describing how the system works today, plus standing maintenanc
 | [CLIENT_UI_LESSONS](./CLIENT_UI_LESSONS.zh.md) | Hard-won lessons from building a dsh plugin client UI — useful to any plugin that contributes a settings card or browser UI. (zh-CN only) |
 | [HOST_CONTRACT](./HOST_CONTRACT.zh.md) | Host (harness) API contract with source-code evidence per claim; §9 is the check-list to run when the harness is bumped. (zh-CN only) |
 | [RELEASING](./RELEASING.zh.md) | npm release runbook: the three-command flow, OIDC trusted-publishing prerequisites, failure triage, and the trust boundary (tag-push = publish right). (zh-CN only) |
-| [EVAL](./EVAL.zh.md) | Harness-run eval suite runbook: the L0/L1/L2 design, the `npm run eval` / `eval:ab` / `eval:smoke` command surface, metric semantics, rubric versioning and judge env-gating, and the temp-`$DSH_HOME` isolation rules. (zh-CN only) |
+| [EVAL](./EVAL.zh.md) | Harness-run eval suite runbook: the L0/L1/L2 design, the `npm run eval` / `eval:ab` / `eval:smoke` / `eval:pilot` command surface, metric semantics (rubric v2, the independent-question headline, the register axis), the noise slice and its pilot gates, rubric versioning and judge env-gating, and the temp-`$DSH_HOME` isolation rules. (zh-CN only) |
 
 ## Historical decision records (`archive/`)
 

@@ -1,6 +1,6 @@
 # Cairn 测评集 runbook（真实 harness 评测）
 
-本手册描述 `eval/` 测评集的运行方式：把被测插件构建作为 profile bundle 挂在真实 DeepSeek harness 上，对同一份场景语料量化「存储 → 常驻注入 → 作答」链路，输出分片指标与 A/B 配对 diff。决策依据见 [Agent Note](../.agents/notes/implemented/testing/2026-09-01-harness-eval-suite.zh.md)，系统整体见 [TECH_DESIGN](./TECH_DESIGN.zh.md)。
+本手册描述 `eval/` 测评集的运行方式：把被测插件构建作为 profile bundle 挂在真实 DeepSeek harness 上，对同一份场景语料量化「存储 → 常驻注入 → 作答」链路，输出分片指标与 A/B 配对 diff。决策依据见 [Agent Note](../.agents/notes/implemented/testing/2026-09-01-harness-eval-suite.zh.md)（套件）与 [审计与噪声切片 Agent Note](../.agents/notes/implemented/testing/2026-09-03-eval-audit-and-noisy-corpus.zh.md)（rubric v2 + noise-v0），系统整体见 [TECH_DESIGN](./TECH_DESIGN.zh.md)。
 
 度量分三层：**L0** 检索 golden set（`src/benchmark/`，经 `tests/recall-golden.spec.ts` 在 CI 守底）度量 BM25 排序质量；**L1** harness 行为评测（本目录，mock 模型，确定性）度量真实启动、写入与常驻注入；**L2** 真模型 judge（rubric 判定）度量注入质量与答案正确性。L1 永远可跑；L2 与 real 模式被环境变量门控（见[rubric 版本化与 judge 门控](#rubric-版本化与-judge-门控)）。
 
@@ -21,7 +21,7 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
 
 ## 命令面
 
-三个入口共用一套参数：`eval`（单构建评分）、`eval:ab`（双构建配对 diff，用 `--baseline`/`--candidate` 替代 `--build`）、`eval:smoke`（M0 冒烟，无参数）。
+三个入口共用一套参数：`eval`（单构建评分）、`eval:ab`（双构建配对 diff，用 `--baseline`/`--candidate` 替代 `--build`）、`eval:smoke`（M0 冒烟，无参数）。第四个入口 `eval:pilot`（噪声切片试点门禁）走自己的小参数面，见[噪声切片与试点门禁](#噪声切片与试点门禁)。
 
 | 参数 | 取值 | 说明 |
 |---|---|---|
@@ -44,8 +44,11 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
 ### 典型命令（均已实测）
 
 ```sh
-# mock 全量：32 场景 / 128 题，确定性层
+# mock 全量：32 场景 / 132 题，确定性层
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
+
+# 噪声切片：6 个长难场景，独立语料（register 轴见「噪声切片与试点门禁」）
+npm run eval -- --dataset eval/datasets/noise-v0.jsonl --build .
 
 # 缩小范围（子串匹配场景 id）
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . --filter prog105-e2e-port
@@ -131,9 +134,42 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . \
 
 `external` 模式接受任何 OpenAI 兼容端点（代理、其他网关均可），fake LLM 只是仓库自带的按内容路由选项。写路由表时注意：`match` 收到的是**转义后的 raw wire body**（JSON 序列化文本，引号与换行已转义），内容匹配要按转义后的形态写；回复帧按请求的 `accept` 头自动区分（harness 客户端拿 SSE，judge 的裸 fetch 拿 JSON）。
 
+noise 切片把这套联调打包成了成品：`npm run eval:pilot` 自带按内容路由的 route 表（`eval/harness/noise-routes.ts` + `eval/datasets/noise-v0.pilot.json`），让真实提取链在无凭据、确定性的条件下运转——见[噪声切片与试点门禁](#噪声切片与试点门禁)。
+
+## 噪声切片与试点门禁（noise-v0）
+
+core-v0 的 turn 都是一句一意的短消息（中位 25 字符），测不了三件事：埋点事实被埋在长噪声中段时**提取能否找到**、九成内容不值得记时能否**忍住**、口语与错别字能否**归一化**为干净条目。`eval/datasets/noise-v0.jsonl` 是长难（噪声）语料切片：6 个 long-form plant 场景（zh 4 / en 1 / mixed 1），turn 长度 150–600 字符、埋点埋在长 turn 中段、未埋点内容占消息量六成以上，逐场景以 `patterns` 声明覆盖的长难模式（切片并集必须覆盖全部四种：context-dump、语音输入风、句中自我纠正、话题漂移）。**噪声是人工撰写的受控变量**：锚定 token（工具名、数字、标识符、路径）永不出错，negative 题与 gold 保持干净——禁令由语料 spec 的 anchors lint 机械执行（`tests/eval-noise-dataset.spec.ts`：每个 anchor 逐字出现在其物化 home turn、marker 落在带记忆关键词的轮次、噪声地板校验），不靠人工纪律。
+
+### 切片专属语料字段
+
+- 场景级 `register: 'clean' | 'noisy'`——报告仅在语料携带该字段时增加 `register=` 分片轴与逐场景 register 列（core-v0 无此字段，报告形状不变）。
+- 场景级 `patterns`——该场景覆盖的长难模式声明（spec 校验切片并集）。
+- 埋点级 `plantFacts[]` 表——按埋点 id 携带可选元数据：
+  - `factText`：规范化干净摘录，**同时**是 judge 地面真值与机械层 fact 文本（埋点埋在中段意味着整段 150–600 字 dump 会成为地面真值，同时破坏保真判读与假阳性控制）；无该字段的埋点维持现状物化（整段 home turn）。
+  - `anchors`：锚定 token 数组，供 anchors lint。
+  - `expectedScope` / `expectedCategory`：scope/category 标准答案；storage rubric v2 dim 2 在场时按钉定值判，缺席回到 rubric 路由规则（core-v0 不钉，judge 现场推断）。
+
+### noisy 场景的提取链：review lane，不走 dispose flush
+
+clean plant 场景靠 dispose 触发提取落盘；noisy 场景改走**周期 review 中段写入**：runner 对 `register: 'noisy'` 场景钉 `reviewCandidateThreshold: 1`（`eval/runner.ts` 的 `noisyReviewPatch`），每条埋点轮次带显式记忆关键词（accumulator 的候选触发，spec lint 守住），review 在下一个 pre-step 触发——中段写入时进程还活着。原因（实测 2026-09-03）：SDK stdio 路径上 harness 发出 `session/disposed` 后 ~26 ms 即硬退出，dispose flush 的 LLM 往返加写库无法保证在此之前落地——这是评测赢不了的发车竞态，中段 review 让写入必然落定后再进追问会话。
+
+### 试点门禁（预登记判定规则）
+
+`npm run eval:pilot -- --build <dir>` 按序跑五道门（规则在首判之前定死，防门槛退化为走过场；`eval/pilot.ts` 编排，`eval/pilot-gate.ts` 纯函数由 vitest 覆盖）。参数：`--build`（被测构建，缺省仓库根）、`--dataset`（缺省 noise-v0.jsonl）、`--fixture`（缺省 noise-v0.pilot.json，含路由脚本与校准集）、`--concurrency`（缺省 2）。退出码非 0 = 有门未过，逐条打印失败。
+
+| 门 | 内容 | 判据 |
+|---|---|---|
+| G1 链路健康 | mock 全链跑 noise 切片 | 无场景错误、开场 system prompt 捕获在位（预算违约由 runner 本身 fail loud，mock plant 不写库故无 fence 断言） |
+| G2 同构建 A/B | 两遍 mock 自比 | 确定性层逐场景 EQUAL |
+| G3 锚点可匹配性 | fake-LLM 按内容路由驱动**真实提取链**（external 模式） | `entryCount > 0` 前提在场、memory fence 在场、非 negative 题锚点命中**实际写入的条目**（锚定禁令只保证「写入后可匹配」，不保证「被写入」——0 写 0 命中的同档是空转通过） |
+| G4 两遍稳定 | 同一材料 judged 判两遍 | 任一条目/题目翻档 ≤1 档 |
+| G5 校准 | fixture 里作者预写期望档位的 3–5 条 noisy 条目 | 全命中 |
+
+G4 只测重测信度：温度 0 下 judge 可能「稳定地错」，G5 的校准集才测效度。n≈6 的裸一致率置信区间过宽，不设数值阈值，与 clean 切片的区间重叠即延长试点。G1–G3 无凭据可跑；G4/G5 需要判定器（同 judge 门控链，见下节），缺失时 pilot 响亮报错退出。时间盒：两轮 rubric 迭代仍不过 G4+G5 → noise 切片冻结为 rejected，rubric v2 与报告层修复单独 ship。noisy 场景的单场景时长与单 turn 工具调用数不得显著高于 clean（默认 180s / 32 calls 预算下留余量；不够先调预算并盖印）。
+
 ## 指标语义
 
-报告按 kind / domain / language / question type 分片并给 total；均值只覆盖可测值，不可测不进分母、判定失败不静默归零。
+报告按 kind / domain / language / question type 分片并给 total；语料携带 `register` 字段时增加 `register=` 分片轴（noise-v0 专属）并在逐场景表多一列。均值只覆盖可测值，不可测不进分母、判定失败不静默归零。
 
 | 指标 | 层 | 语义 |
 |---|---|---|
@@ -143,14 +179,16 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . \
 | injectionQuality | 判定 0–3 | 注入质量：0 缺席、1 在场但误导/过时/冲突未标注、2 正确但混入显著噪声、3 干净完整可直接使用 |
 | answerCorrectness | 判定 0–2 | 答案对照 gold：0 错误或幻觉、1 部分正确、2 正确；仅真模型轮次有答案可判 |
 | storage 四维 | 判定 0–2 | 逐条入库条目对照其埋点事实：内容保真 / 范围与分类 / 可检索性 / 合并行为（合计 0–8）；scope 错误按 rubric 封顶 |
-| storagePrecision | 机械×判定 | 本会话写入条目中溯源到埋点事实的占比（提取幻觉率） |
+| storagePrecision | 机械×判定 | 本会话**写入或更新**的条目（rubric v2 medium-diff 口径：新写入 id ∪ 既有 id 上 content/scope/category/summary 任一有 diff 的更新）中溯源到埋点事实的占比（提取幻觉率）；就地合并进既有条目是「更新」，计入分母、不算幻觉——v1 口径只数新写入，precision 不可与 v1 互比 |
 | invalid | 计数 | 判定回复两次解析失败的条目：分数置 null、不进任何均值或 precision，报告单列计数 |
+
+**独立题 headline**：paraphrase 题与原题共享 `gold`/`requires` 且多为弱复述，把 132 题全量均值当独立样本呈现会夸大有效题量。报告 `totals` 旁单列 `independent`（剔除 paraphrase 后的均值，markdown 的 Totals 表两行并排给出），`type=paraphrase` 分片照旧在 Slices 表。
 
 **答案提升量相对无记忆对照**：真模型轮次跑两次——一次正常（`--memory-mode index|full`），一次 `--no-memory` 对照——报告的 `answer` 列分别是两次的 answerCorrectness 均值，提升量由两份报告相减读出。`eval:ab` 的 judged deltas（storage total / 注入质量 / 答案）给出的是两个**构建**之间的配对差值，确定性层（standing hit、noise、注入成本、fence 形态、入库条目数）则逐场景精确比对——mock 下同构建自比必须 EQUAL。
 
 ## rubric 版本化与 judge 门控
 
-评分锚定在 `eval/rubric/storage-v1.md` 与 `eval/rubric/recall-v1.md`：judge 的 system prompt 就是 rubric 文本逐字；每份报告盖印所用版本（首行 `Rubric version: <N>`）；改动锚点必须升版本，不同 rubric 版本的分数永不互比。judge 协议：temperature 0、严格 JSON 输出、解析失败重判一次，再失败记 invalid 并单列。
+评分锚定在 `eval/rubric/storage-v2.md` 与 `eval/rubric/recall-v2.md`：judge 的 system prompt 就是 rubric 文本逐字；每份报告盖印所用版本（首行 `Rubric version: <N>`）；改动锚点必须升版本，**不同 rubric 版本的分数永不互比**。v1 两份仍留在树内，是历史报告所盖版本的冻结标尺（`tests/eval-rubric.spec.ts` 守其逐字不变），judge 只读 v2。v2 相对 v1 的四处锚点变化（2026-09-03 审计）：(a) storage dim 1 明确「对错别字/语病的归一化不算编造，保留原样也不算缺失」；(b) recall 1 档收编「准确但无过时标注的同主题邻居条目」（带可见弃用标注的不降级）；(c) storage 测量改 medium-diff 口径——被更新的既有条目进入 judge 输入、标记 `updated: true`、计入 precision 分母，precision 语义随之不可与 v1 互比；(d) dim 2 支持语料钉定的 `expectedScope` / `expectedCategory` 标准答案。历史报告不得按新标尺重读；报告层的 `independent` 独立题列同为 v2 窗口新增。judge 协议：temperature 0、严格 JSON 输出、解析失败重判一次，再失败记 invalid 并单列。
 
 judge 配置按优先级回退：
 
@@ -177,32 +215,33 @@ judge 配置按优先级回退：
 | 文件 | 职责 |
 |---|---|
 | `eval/cli.ts` | 参数解析、过滤、并发调度、报告输出与退出码 |
-| `eval/runner.ts` | 场景执行：seed 链（预写 store → 追问）与 plant 链（对话埋点 → dispose → quiesce → 同 home 新开 handle 追问） |
+| `eval/pilot.ts` | 噪声试点编排：G1–G5 门禁依序跑，judge 缺席 fail loud |
+| `eval/pilot-gate.ts` | 预登记判定规则：fixture 解析 + 五道门的纯函数（vitest 覆盖） |
+| `eval/runner.ts` | 场景执行：seed 链（预写 store → 追问）与 plant 链（对话埋点 → dispose → quiesce → 同 home 新开 handle 追问；noisy 场景改走 review 中段写入，`noisyReviewPatch`）；medium-diff 更新追踪 |
 | `eval/boot.ts` | 临时 home + profile 物化 + `dsh --profile sdk` 子进程 + SDK stdio 驱动；从 `request/header` 事件捕获开场 system prompt |
 | `eval/mechanical.ts` | 机械指标：fence 解析、注入行匹配（逐字 + distinctive token）、噪声、成本 |
-| `eval/judge.ts` | rubric 驱动的存储/召回判定、env 门控、invalid 协议 |
-| `eval/report.ts` | 纯聚合：分片指标、盖印报告、A/B 配对 diff（JSON + Markdown 渲染） |
-| `eval/schema.ts` | 语料 schema（zod）：场景/轮次/埋点/题目契约与加载校验 |
+| `eval/judge.ts` | rubric 驱动的存储/召回判定（v2）、env 门控、invalid 协议、updated 条目标记 |
+| `eval/report.ts` | 纯聚合：分片指标（含 register 轴）、独立题 headline、盖印报告、A/B 配对 diff（JSON + Markdown 渲染） |
+| `eval/schema.ts` | 语料 schema（zod）：场景/轮次/埋点/题目契约与加载校验；noise 切片字段（register / patterns / plantFacts）与 factText 物化规则 |
 | `eval/smoke.ts` | M0 冒烟：一条 seed 场景走通整条链并断言注入与落盘 |
-| `eval/datasets/*.jsonl` | 语料：`smoke.jsonl`（1 场景 2 题）与 `core-v0.jsonl`（32 场景 128 题） |
-| `eval/rubric/*.md` | 版本化评分 rubric（storage / recall） |
-| `eval/harness/*` | 启动支撑：profile 模板、SDK stdio 客户端、llm-mock 启动器、fake LLM、quiesce 轮询、store 预写/读取 |
+| `eval/datasets/*.jsonl` | 语料：`smoke.jsonl`（1 场景 2 题）、`core-v0.jsonl`（32 场景 132 题）、`noise-v0.jsonl`（6 长难场景）+ `noise-v0.pilot.json`（试点 fixture：路由脚本 + 校准集） |
+| `eval/rubric/*.md` | 版本化评分 rubric：活跃对 `storage-v2` / `recall-v2`，冻结对 `storage-v1` / `recall-v1` |
+| `eval/harness/*` | 启动支撑：profile 模板、SDK stdio 客户端、llm-mock 启动器、fake LLM（含 noise 切片按内容路由 `noise-routes.ts`）、quiesce 轮询、store 预写/读取 |
 
 plant 链的多次会话语义：一个 handle 是一个会话，其记忆快照在会话创建时冻结（KV-cache 契约）；同 `$DSH_HOME` 再开一个新 handle 即新会话——常驻注入度量的是新会话开场 prompt。等待落盘稳定用 quiesce 轮询（审计表 + 条目数稳定，默认 30 秒上限）。
 
-`eval/` 与其评测 spec 不在 CI 的 tsc 程序内（host tsconfig 只含 `src/`），类型检查是手工门禁，命令如下（严格档全开，实测 0 error）：
+`eval/` 与其评测 spec 不在 CI 的 tsc 程序内（host tsconfig 只含 `src/`），类型检查是手工门禁：`npx tsc -p tsconfig.check.json`（严格档全开、noEmit，覆盖 `src/` + `eval/` + eval 相关 spec，实测 0 error）：
 
 ```sh
-npx tsc --ignoreConfig --noEmit --strict --exactOptionalPropertyTypes --noUncheckedIndexedAccess \
-  --noImplicitOverride --target es2023 --module preserve --moduleResolution bundler \
-  --allowImportingTsExtensions --rewriteRelativeImportExtensions --skipLibCheck --types node \
-  eval/*.ts eval/harness/*.ts tests/eval-*.spec.ts
+npx tsc -p tsconfig.check.json
 ```
 
 ## 已知 v0 边界
 
-- **real 模式与真 judge 都需密钥**：两者均 env 门控、永不进 CI；mock + 确定性层是无凭据也能完整跑通的部分。
+- **real 模式与真 judge 都需密钥**：两者均 env 门控、永不进 CI；mock + 确定性层是无凭据也能完整跑通的部分（noise 切片另加 fake-LLM 提取链 lane，同样无凭据）。
 - **multi-hop 切片仅 3 题**（plant 2 / seed 1），样本不足以支撑任何结论；negative 5 题只守护「不幻觉断言」一个侧面。
-- **mechanical 匹配阈值是确定性近似**：≥2 个 distinctive token 或 ≥1 个 distinctive ASCII 锚点加逐字快速路径，是 v0 的实现选点，留作 rubric v2 校准的输入，不是语义裁决。
-- **plant 链路在 mock 下分数偏低**：mock 不按内容路由，提取拿不到贴合对话的应答；要测提取质量须用 fake LLM + external（或真模型）。
-- **judged 层不可跨校准比较**：judge 模型身份与 rubric 版本随报告盖印，两者任一变化都会改变分数标尺。
+- **mechanical 匹配阈值是确定性近似**：≥2 个 distinctive token 或 ≥1 个 distinctive ASCII 锚点加逐字快速路径，是 v0 的实现选点，不是语义裁决；noise 切片用 `factText` 收敛机械层的对比集，standing hit 只在「确有写入」时有意义（试点 G3 的 entryCount 前提）。
+- **noise 切片样本量小**（6 场景 14 题）：试点判定只给重测信度（G4）与校准效度（G5），不设数值阈值；扩量与 core 侧 scope 标准答案铺开在阶段 1。
+- **plant 链路在 mock 下分数偏低**：mock 不按内容路由，提取拿不到贴合对话的应答；要测提取质量须用 fake LLM + external（noise 试点自带 route 表）或真模型。
+- **judged 层不可跨校准比较**：judge 模型身份与 rubric 版本随报告盖印，两者任一变化都会改变分数标尺——v1↔v2 永不互比（precision 分母与 dim 2 判据都变了）。
+- **`storage` 四维在 mock 全量下恒为 null**：mock 提取不产出可判条目；存储四维的 judged 读数来自 external（fake-LLM 提取链，如试点 G3/G4）或 real 模式。
