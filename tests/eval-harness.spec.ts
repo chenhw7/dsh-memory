@@ -19,6 +19,7 @@ import {
 } from '../eval/harness/profile-template.ts'
 import { mediumSnapshot, memoryMediumPath, snapshotStable } from '../eval/harness/quiesce.ts'
 import { collectSessionEvent, emptyTurnCollector, isInboxReceipt } from '../eval/harness/sdk-client.ts'
+import { materializeChildHome } from '../eval/boot.ts'
 
 /** One throwaway directory removed after each case. */
 const tempDirs: string[] = []
@@ -100,6 +101,26 @@ describe('eval profile materialization', () => {
     materializeProfile(home, 'eval-drift', { mode: 'real', buildDir: buildB })
     const link = join(profileDir, 'node_modules', '@chenhw7', 'dsh-memory')
     expect(realpathSync(link)).toBe(realpathSync(buildB))
+  })
+})
+
+describe('eval child home isolation', () => {
+  it('materializes an empty fake home with a pinned git identity inside the dshHome', () => {
+    const dshHome = tempDir('dsh-eval-spec-childhome-')
+    const home = materializeChildHome(dshHome)
+    expect(home).toBe(join(dshHome, 'home'))
+    expect(existsSync(home)).toBe(true)
+    const gitconfig = readFileSync(join(home, '.gitconfig'), 'utf8')
+    expect(gitconfig).toContain('name = dsh-eval')
+    expect(gitconfig).not.toContain(process.env['USER'] ?? '\u0000-none')
+  })
+
+  it('is idempotent for a second handle on the same dshHome', () => {
+    const dshHome = tempDir('dsh-eval-spec-childhome-')
+    const first = materializeChildHome(dshHome)
+    const second = materializeChildHome(dshHome)
+    expect(second).toBe(first)
+    expect(readFileSync(join(first, '.gitconfig'), 'utf8')).toContain('defaultBranch = main')
   })
 })
 

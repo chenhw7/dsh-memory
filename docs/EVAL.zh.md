@@ -142,6 +142,7 @@ judge 配置按优先级回退：
 ## 隔离纪律
 
 - 每个场景物化一个临时 `$DSH_HOME`（`mkdtemp`），harness 子进程以该目录为 home 与 cwd 运行，遥测关闭；成功跑完即删，失败保留并在报告与 stderr 打印 kept home 路径。
+- 子进程的 `HOME` 指向临时 home 内的空目录 `<DSH_HOME>/home/`（含钉死的 `.gitconfig` 身份，`eval/boot.ts` 的 `materializeChildHome`）：不继承外层机器的全局 skills 目录（`~/.agents/skills`，其清单会随每次模型调用重发 ≈4.2K tokens 且随机器漂移），也不继承真实用户文件——SUT 的 prompt 只由被测构建决定。此条件之前的报告（SUT prompt 带全局 skills）与之后的分数不可逐分对比。
 - 评测运行时不向仓库写任何文件：profile、配置 overlay、store、报告（除非显式 `--out`）全部落在临时目录或 stdout。
 - `lib/` 是被测构建本身，不是评测运行时状态：`eval:smoke` 只在 `lib/` 缺失时自动补一次 `npm run build`，已存在的 `lib/` 不会重建——A/B 的 baseline 正是靠这一点保持固定。
 

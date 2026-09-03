@@ -181,6 +181,29 @@ function assertCredentialRefsResolvable(refs: readonly string[], credentialsPath
  * @throws when the model route cannot be satisfied (real mode without a
  * reachable key) or the profile/bootstrap chain fails — all loud by design.
  */
+/** Deterministic git identity for the sandboxed child home. */
+const CHILD_GIT_CONFIG = '[user]\n\tname = dsh-eval\n\temail = dsh-eval@localhost\n[init]\n\tdefaultBranch = main\n'
+
+/**
+ * Materialize the child process's fake user home: an empty directory inside
+ * the throwaway dshHome, plus a pinned git identity. The harness discovers
+ * user skills at `$DSH_AGENTS_HOME ?? homedir()/.agents` (packages/skill/
+ * skill-filesystem) and git identity at `~/.gitconfig`; an inherited outer
+ * HOME leaked the running machine's global skills catalog into every model
+ * request (~4.2K tokens re-sent per call) and let scenario fiction drive the
+ * SUT into the real filesystem — the 2026-09-02 core-v0 real run lost 3 of 32
+ * scenarios to a Lark OAuth wait, real-home exploration, and an unbounded
+ * agent marathon. The fake home shares dshHome's lifecycle (deleted with it on
+ * success, retained for forensics on failure) and is idempotent: a plant chain
+ * opens two handles on one dshHome.
+ */
+export function materializeChildHome(dshHome: string): string {
+  const home = join(dshHome, 'home')
+  mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, '.gitconfig'), CHILD_GIT_CONFIG)
+  return home
+}
+
 export async function startHarness(options: StartHarnessOptions): Promise<HarnessHandle> {
   const mode = options.model?.mode ?? 'mock'
   const provider = options.model?.provider ?? 'deepseek-official'
@@ -195,10 +218,14 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
   // every reference per request from there, over the inherited environment.
   // The eval probes reference NAMES, never parses values.
   let credentialsPatch: Record<string, unknown> | undefined
+  const childHome = materializeChildHome(dshHome)
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // The child must never see the outer deployment's harness state.
     DSH_HOME: dshHome,
+    // The fake user home (materializeChildHome): the SUT's prompt must depend
+    // on the build under test, not on the machine running the eval.
+    HOME: childHome,
     // The dsh-base telemetry row drains to OTLP on exit; eval runs opt out.
     DSH_TELEMETRY_DISABLED: '1',
   }
