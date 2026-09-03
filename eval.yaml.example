@@ -1,0 +1,22 @@
+# eval 仪器配置示例 —— 复制为项目根的 eval.yaml（已 gitignore，保持 0600）后填入真实值。
+# 用不到的分节整节删掉或保持注释即可；分节存在但字段不完整会响亮报错，绝不静默跳过。
+# 候选路径按序取第一个存在的：$DSH_EVAL_CONFIG > 项目根 eval.yaml > $DSH_HOME/eval.yaml（缺省 ~/.dsh/eval.yaml）。
+# 字段与校验规则详见 docs/EVAL.zh.md。
+
+judge:
+  # 判定模型的 OpenAI 兼容端点，含版本命名空间。注意键名是 baseURL（大写 LL）。
+  baseURL: https://api.example.invalid/v1
+  # 凭据二选一，同时出现会报错：直接粘贴 key，或用 apiKeyEnv 指向环境变量名。
+  apiKey: paste-your-judge-key-here
+  # apiKeyEnv: EVAL_JUDGE_API_KEY
+  # 判定模型 id，刻意与被测模型分开（同源自评偏置）；模型身份随每份报告盖印。
+  model: deepseek-chat
+  # 可选：透传为请求体的 reasoning_effort 参数；缺省 = 模型默认。
+  # reasoningEffort: high
+
+turnBudget:
+  # 单 turn 墙钟上限（秒）与工具调用次数上限：两字段必填、非负整数，0 = 关闭该维。
+  # 代码缺省 180 / 32；CLI 旗标 --turn-wall-seconds / --turn-tool-calls 优先于本分节。
+  # 生效值盖印进每份报告。
+  wallSeconds: 180
+  toolCalls: 32
