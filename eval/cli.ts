@@ -13,6 +13,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { loadEvalYamlTurnBudget, resolveTurnBudget } from './eval-config.ts'
 import { judgeFromEnv, type JudgeConfig } from './judge.ts'
 import { describeEvalModelRoute, resolveEvalModel, type EvalModelRoute } from './model-route.ts'
 import {
@@ -28,7 +29,8 @@ import { parseDataset, type EvalScenario } from './schema.ts'
 
 const USAGE = `usage:
   npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>]
-                  [--judge] [--memory-mode index|full] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N] [--out <file>]
+                  [--judge] [--memory-mode index|full] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N]
+                  [--turn-wall-seconds N] [--turn-tool-calls N] [--out <file>]
   npm run eval:ab -- --baseline <dir> --candidate <dir> [same flags; --build not allowed]
 
 flags:
@@ -46,6 +48,10 @@ flags:
   --no-memory           memory injection off — the control group
   --filter <ids>        comma-separated id substrings selecting scenarios
   --concurrency N       scenarios in flight (default 4)
+  --turn-wall-seconds N per-turn wall-clock budget, 0 = off (default 180; eval.yaml
+                        turnBudget wins when the flag is absent)
+  --turn-tool-calls N   per-turn tool-call budget, 0 = off (default 32; eval.yaml
+                        turnBudget wins when the flag is absent)
   --out <file>          report JSON path (default: print only)`
 
 interface CliArgs {
@@ -63,13 +69,15 @@ interface CliArgs {
   readonly noMemory: boolean
   readonly filter?: string
   readonly concurrency: number
+  readonly turnWallSeconds?: number
+  readonly turnToolCalls?: number
   readonly out?: string
 }
 
 const BOOLEAN_FLAGS = new Set(['judge', 'no-memory'])
 const VALUE_FLAGS = new Set([
   'dataset', 'build', 'baseline', 'candidate', 'mode', 'provider', 'model', 'base-url', 'api-key',
-  'memory-mode', 'filter', 'concurrency', 'out',
+  'memory-mode', 'filter', 'concurrency', 'turn-wall-seconds', 'turn-tool-calls', 'out',
 ])
 
 /** Parse and validate argv (already stripped of the `ab` subcommand token). */
@@ -123,6 +131,17 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new Error(`eval cli: --concurrency must be a positive integer, got ${JSON.stringify(concurrencyRaw)}\n${USAGE}`)
   }
+  const nonNegative = (flag: string): number | undefined => {
+    const raw = optional(flag)
+    if (raw === undefined) return undefined
+    const value = Number.parseInt(raw, 10)
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`eval cli: --${flag} must be a non-negative integer (0 = off), got ${JSON.stringify(raw)}\n${USAGE}`)
+    }
+    return value
+  }
+  const turnWallSeconds = nonNegative('turn-wall-seconds')
+  const turnToolCalls = nonNegative('turn-tool-calls')
 
   // The boot contract routes keys per mode: mock starts the in-process mock,
   // real resolves the key itself (or activates the deployment's pi-ai route),
@@ -178,6 +197,8 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
       noMemory: values.get('no-memory') === true,
       ...(filter !== undefined ? { filter } : {}),
       concurrency,
+      ...(turnWallSeconds !== undefined ? { turnWallSeconds } : {}),
+      ...(turnToolCalls !== undefined ? { turnToolCalls } : {}),
       ...(out !== undefined ? { out } : {}),
     },
   }
@@ -195,7 +216,13 @@ function applyFilter(scenarios: readonly EvalScenario[], filter: string | undefi
   return matched
 }
 
-function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): RunOptions {
+function runOptionsOf(
+  args: CliArgs,
+  buildDir: string,
+  judge: JudgeConfig | null,
+  modelRoute: EvalModelRoute | null,
+  turnBudget: { wallSeconds: number; toolCalls: number },
+): RunOptions {
   return {
     buildDir,
     mode: args.mode,
@@ -210,6 +237,7 @@ function runOptionsOf(args: CliArgs, buildDir: string, judge: JudgeConfig | null
     noMemory: args.noMemory,
     judge,
     concurrency: args.concurrency,
+    turnBudget,
     onResult: printProgress,
   }
 }
@@ -258,9 +286,15 @@ function writeJson(path: string, payload: unknown): void {
   writeFileSync(path, `${JSON.stringify(payload, undefined, 2)}\n`)
 }
 
-async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): Promise<void> {
+async function runSingle(
+  scenarios: readonly EvalScenario[],
+  args: CliArgs,
+  judge: JudgeConfig | null,
+  modelRoute: EvalModelRoute | null,
+  turnBudget: { wallSeconds: number; toolCalls: number },
+): Promise<void> {
   const buildDir = resolve(args.build ?? '')
-  const outcome = await runScenarios(scenarios, runOptionsOf(args, buildDir, judge, modelRoute))
+  const outcome = await runScenarios(scenarios, runOptionsOf(args, buildDir, judge, modelRoute, turnBudget))
   const report = buildReport(outcome.results, {
     buildDir,
     dataset: args.dataset,
@@ -268,6 +302,7 @@ async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judg
     model: modelStampOf(args, modelRoute),
     rubricVersions: outcome.rubricVersions,
     judge: outcome.judge,
+    turnBudget,
   })
   process.stdout.write(renderReportMarkdown(report))
   if (args.out === undefined) {
@@ -279,13 +314,19 @@ async function runSingle(scenarios: readonly EvalScenario[], args: CliArgs, judg
   failOnErrors(report.scenarios, args.judge)
 }
 
-async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: JudgeConfig | null, modelRoute: EvalModelRoute | null): Promise<void> {
+async function runAb(
+  scenarios: readonly EvalScenario[],
+  args: CliArgs,
+  judge: JudgeConfig | null,
+  modelRoute: EvalModelRoute | null,
+  turnBudget: { wallSeconds: number; toolCalls: number },
+): Promise<void> {
   const baselineDir = resolve(args.baseline ?? '')
   const candidateDir = resolve(args.candidate ?? '')
   process.stdout.write(`eval ab: baseline build ${baselineDir}\n`)
-  const baselineOutcome = await runScenarios(scenarios, runOptionsOf(args, baselineDir, judge, modelRoute))
+  const baselineOutcome = await runScenarios(scenarios, runOptionsOf(args, baselineDir, judge, modelRoute, turnBudget))
   process.stdout.write(`eval ab: candidate build ${candidateDir}\n`)
-  const candidateOutcome = await runScenarios(scenarios, runOptionsOf(args, candidateDir, judge, modelRoute))
+  const candidateOutcome = await runScenarios(scenarios, runOptionsOf(args, candidateDir, judge, modelRoute, turnBudget))
 
   const modelStamp = modelStampOf(args, modelRoute)
   const baselineReport = buildReport(baselineOutcome.results, {
@@ -295,6 +336,7 @@ async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: J
     model: modelStamp,
     rubricVersions: baselineOutcome.rubricVersions,
     judge: baselineOutcome.judge,
+    turnBudget,
   })
   const candidateReport = buildReport(candidateOutcome.results, {
     buildDir: candidateDir,
@@ -303,6 +345,7 @@ async function runAb(scenarios: readonly EvalScenario[], args: CliArgs, judge: J
     model: modelStamp,
     rubricVersions: candidateOutcome.rubricVersions,
     judge: candidateOutcome.judge,
+    turnBudget,
   })
   const diff: AbDiff = diffReports(baselineReport, candidateReport)
 
@@ -372,16 +415,27 @@ async function main(): Promise<void> {
       + `(${describeEvalModelRoute(modelRoute)}${effortNotice})${piAiNotice}\n`,
     )
   }
+  // Per-turn work budget: an explicit flag wins per dimension, then the eval
+  // config's turnBudget section, then the built-in defaults. Resolved once and
+  // stamped into every report so scored populations carry their calibration.
+  const turnBudget = resolveTurnBudget(
+    {
+      ...(args.turnWallSeconds !== undefined ? { wallSeconds: args.turnWallSeconds } : {}),
+      ...(args.turnToolCalls !== undefined ? { toolCalls: args.turnToolCalls } : {}),
+    },
+    loadEvalYamlTurnBudget(),
+  )
   process.stdout.write(`eval: ${String(matched.length)}/${String(scenarios.length)} scenarios from ${args.dataset}`
-    + `, mode ${args.mode}, memory ${args.noMemory ? 'off' : args.memoryMode}${args.judge ? ', judge requested' : ''}\n`)
+    + `, mode ${args.mode}, memory ${args.noMemory ? 'off' : args.memoryMode}${args.judge ? ', judge requested' : ''}`
+    + `, turn budget ${String(turnBudget.wallSeconds)}s/${String(turnBudget.toolCalls)} calls (0 = off)\n`)
 
   const judge = args.judge ? judgeFromEnv() : null
   if (args.judge && judge === null) {
     process.stderr.write('eval cli: --judge requested but no judge environment found '
       + '(EVAL_JUDGE_BASE_URL/EVAL_JUDGE_API_KEY/EVAL_JUDGE_MODEL or DEEPSEEK_* fallbacks); judged metrics will be skipped\n')
   }
-  if (ab) await runAb(matched, args, judge, modelRoute)
-  else await runSingle(matched, args, judge, modelRoute)
+  if (ab) await runAb(matched, args, judge, modelRoute, turnBudget)
+  else await runSingle(matched, args, judge, modelRoute, turnBudget)
 }
 
 try {

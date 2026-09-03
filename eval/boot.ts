@@ -111,6 +111,44 @@ export interface StartHarnessOptions {
   initializeTimeoutMs?: number
   /** Per-turn idle timeout in ms (default 120_000). */
   turnTimeoutMs?: number
+  /**
+   * Per-turn work budget enforced by the prompt collector; a breach throws and
+   * the scenario fails loud (the SDK server exposes no interrupt — disposal by
+   * the caller's teardown is the abort). Absent = unbounded; the eval CLI
+   * always resolves one (flag > eval.yaml > defaults).
+   */
+  turnBudget?: TurnBudget
+  /**
+   * Behavior sequence override for the in-process mock (mock mode only), e.g.
+   * `['tool_call_success']` to drive unbounded tool rounds — the turn budget's
+   * end-to-end trigger and any future scripted mock run.
+   */
+  mockSequence?: readonly string[]
+}
+
+/** Per-turn work budget; `0` disables that dimension. */
+export interface TurnBudget {
+  /** Wall-clock ceiling for one turn, in seconds; `0` disables. */
+  readonly wallSeconds: number
+  /** Tool-call ceiling for one turn; `0` disables. */
+  readonly toolCalls: number
+}
+
+/**
+ * The budget verdict for one in-flight turn, as a pure function (the spawn
+ * path stays out of vitest — this seam carries the thresholds). The idle
+ * timeout only fires on notification silence, so a turn that streams
+ * continuously (the measured 939–1151 s max-tokens hangs) or loops tool calls
+ * (the 347-call marathon) is bounded only here.
+ */
+export function turnBudgetBreach(elapsedMs: number, toolCalls: number, budget: TurnBudget): string | null {
+  if (budget.wallSeconds > 0 && elapsedMs > budget.wallSeconds * 1000) {
+    return `wall ${String(Math.round(elapsedMs / 1000))}s > ${String(budget.wallSeconds)}s`
+  }
+  if (budget.toolCalls > 0 && toolCalls > budget.toolCalls) {
+    return `toolCalls ${String(toolCalls)} > ${String(budget.toolCalls)}`
+  }
+  return null
 }
 
 /** Default dsh executable inside the harness workspace (built bin preferred). */
@@ -230,7 +268,7 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
     DSH_TELEMETRY_DISABLED: '1',
   }
   if (mode === 'mock') {
-    mock = await startLlmMock()
+    mock = await startLlmMock({ ...(options.mockSequence !== undefined ? { sequence: options.mockSequence } : {}) })
     env['DEEPSEEK_BASE_URL'] = mock.baseUrl
     env['DEEPSEEK_API_KEY'] = mock.apiKey
   } else if (mode === 'external') {
@@ -356,6 +394,7 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
    */
   const prompt: (text: string) => Promise<TurnResult> = async (text) => {
     const collector: TurnCollector = emptyTurnCollector()
+    const turnStartedAt = Date.now()
     const promptResult = await client.request(
       'session/prompt',
       { sessionId, contentBlocks: [{ type: 'text', text }] },
@@ -377,6 +416,15 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
       }
       const event = eventOf(notification)
       if (event !== undefined) collectSessionEvent(collector, event)
+      if (options.turnBudget !== undefined) {
+        const breach = turnBudgetBreach(Date.now() - turnStartedAt, collector.toolCalls.length, options.turnBudget)
+        if (breach !== null) {
+          // Fail loud, not silent: the throw rides the scenario's error path
+          // (kept home, partial results preserved) and the caller's teardown
+          // reaps the still-running turn — the SDK server has no interrupt.
+          throw new Error(`eval boot: turn budget exceeded (${breach}) — turn aborted, scenario fails`)
+        }
+      }
       if (notification.method === 'session.status'
         && notification.params['sessionId'] === sessionId
         && notification.params['status'] === 'idle') break

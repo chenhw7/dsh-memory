@@ -29,7 +29,7 @@ The eval suite's throwaway `$DSH_HOME` isolated harness state, but the `dsh` chi
 - The three recorded failure modes lose their trigger: scenario fiction can no longer be "solved" against the maintainer's real home, and no lark/skill surface exists to pull the SUT into interactive flows.
 - Reports stamped before this change measured a skills-bearing SUT prompt and are **not comparable run-over-run** with post-change runs; [the runbook](../../../../docs/EVAL.zh.md) records the condition in its isolation section.
 - The SUT intentionally diverges from the maintainer's interactive deployment (no skills catalog). Measuring how the deployed agent behaves with its real skills is a deployment-behavior audit, not this instrument's job.
-- Left open: per-scenario work budgets (a marathon can still run inside the fake home) and a deterministic per-minute token cap (a pacing proxy); both are separate decisions.
+- Left open: a deterministic per-minute token cap (a pacing proxy) — the budget bounds a turn's damage, not the per-minute rate; see [the per-turn work budget](2026-09-03-eval-turn-budget.md), which now bounds one runaway turn (its marathon trigger was this note's contamination).
 
 ## Testing
 

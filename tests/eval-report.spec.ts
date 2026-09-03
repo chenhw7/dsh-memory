@@ -199,11 +199,13 @@ describe('buildReport', () => {
       model: { mode: 'external', provider: 'fuyao', id: 'fuyao-work', reasoningEffort: 'max' },
       rubricVersions: { storage: '1', recall: '1' },
       judge: { model: 'judge-x', baseUrl: 'http://judge/v1' },
+      turnBudget: { wallSeconds: 180, toolCalls: 32 },
       generatedAt: '2026-09-01T00:00:00.000Z',
     })
     expect(report.schema).toBe('eval-report-v0')
     expect(report.generatedAt).toBe('2026-09-01T00:00:00.000Z')
     expect(report.model).toEqual({ mode: 'external', provider: 'fuyao', id: 'fuyao-work', reasoningEffort: 'max' })
+    expect(report.turnBudget).toEqual({ wallSeconds: 180, toolCalls: 32 })
     expect(report.totals.questions).toBe(3)
     expect(report.slices.map(slice => slice.label)).toEqual([
       'kind=seed', 'kind=plant', 'domain=programming', 'domain=daily-work', 'domain=life',
@@ -221,6 +223,7 @@ describe('diffReports (A/B paired diff)', () => {
     model: { mode: 'mock' as const, provider: null, id: null, reasoningEffort: null },
     rubricVersions: { storage: '1', recall: '1' },
     judge: null,
+    turnBudget: null,
   }
   const build = (results: ScenarioResult[], buildDir: string) => buildReport(results, { ...stamp, buildDir })
 
@@ -310,6 +313,7 @@ describe('markdown renderings', () => {
     model: { mode: 'external', provider: 'fuyao', id: 'fuyao-coding', reasoningEffort: 'high' },
     rubricVersions: { storage: '1', recall: '1' },
     judge: { model: 'judge-x', baseUrl: 'http://judge/v1' },
+    turnBudget: { wallSeconds: 180, toolCalls: 32 },
     generatedAt: '2026-09-01T00:00:00.000Z',
   })
 
@@ -320,6 +324,7 @@ describe('markdown renderings', () => {
     expect(markdown).toContain('- model under test: fuyao/fuyao-coding (external route, effort high)')
     expect(markdown).toContain('- rubric: storage v1, recall v1')
     expect(markdown).toContain('- judge: judge-x @ http://judge/v1')
+    expect(markdown).toContain('- turn budget: 180s wall / 32 tool calls (0 = off)')
     expect(markdown).toContain('| prog101-build-toolchain | plant | programming | zh | 2 | 1/2 |')
     expect(markdown).toContain('boot failed loudly (kept home /tmp/dsh-eval-run-keep)')
     expect(markdown).toContain('storage precision')
@@ -333,15 +338,17 @@ describe('markdown renderings', () => {
       model: { mode: 'real', provider: 'deepseek-official', id: null, reasoningEffort: null },
       rubricVersions: { storage: '1', recall: '1' },
       judge: null,
+      turnBudget: null,
       generatedAt: '2026-09-01T00:00:00.000Z',
     })
     expect(renderReportMarkdown(unstamped)).toContain('- judge: skipped (deterministic layer only)')
+    expect(renderReportMarkdown(unstamped)).toContain('- turn budget: unbounded')
   })
 
   it('renders the A/B diff with per-scenario verdicts', () => {
     const diff = diffReports(
-      buildReport([result], { buildDir: '/b1', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null, reasoningEffort: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
-      buildReport([result], { buildDir: '/b2', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null, reasoningEffort: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, generatedAt: 't' }),
+      buildReport([result], { buildDir: '/b1', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null, reasoningEffort: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, turnBudget: null, generatedAt: 't' }),
+      buildReport([result], { buildDir: '/b2', dataset: 'd', memoryMode: 'index', model: { mode: 'mock', provider: null, id: null, reasoningEffort: null }, rubricVersions: { storage: '1', recall: '1' }, judge: null, turnBudget: null, generatedAt: 't' }),
     )
     const markdown = renderAbDiffMarkdown(diff)
     expect(markdown).toContain('# Eval A/B — /b1 (baseline) vs /b2 (candidate)')

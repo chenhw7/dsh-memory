@@ -5,11 +5,12 @@
  * CI use it to pin one file and to opt out).
  *
  * The file configures the eval's instruments, not the system under test —
- * today that is the rubric judge, a deliberate choice the operator makes per
- * L2 run (same-source self-grading is exactly what the file exists to avoid
- * defaulting into). The deployment's own settings.yaml stays the source for
- * the model under test; this file never overrides it. The project-root copy
- * holds a pasted credential, so it must stay gitignored.
+ * today that is the rubric judge (a deliberate choice the operator makes per
+ * L2 run — same-source self-grading is exactly what the file exists to avoid
+ * defaulting into) and the per-turn work budget. The deployment's own
+ * settings.yaml stays the source for the model under test; this file never
+ * overrides it. The project-root copy holds a pasted credential, so it must
+ * stay gitignored.
  *
  * @module eval/eval-config
  */
@@ -132,4 +133,95 @@ function parseJudgeSection(documentPath: string, raw: string, env: NodeJS.Proces
 
 function isNonEmpty(value: string | undefined): value is string {
   return value !== undefined && value.length > 0
+}
+
+/** The per-turn work budget as declared in `eval.yaml`'s `turnBudget:` section. */
+export interface EvalTurnBudgetFileConfig {
+  /** Wall-clock ceiling for one turn, in seconds; `0` disables the wall cap. */
+  wallSeconds: number
+  /** Tool-call ceiling for one turn; `0` disables the call cap. */
+  toolCalls: number
+}
+
+/** Built-in turn-budget defaults; a turn budget bounds one runaway agent turn. */
+export const DEFAULT_TURN_WALL_SECONDS = 180
+export const DEFAULT_TURN_TOOL_CALLS = 32
+
+/**
+ * Load the `turnBudget:` section of the eval config. Absent files or an absent
+ * section → `null` (the caller falls back to its defaults). A present section
+ * must carry both fields as non-negative integers (`0` = that cap is off) — a
+ * half-pasted budget is a misconfiguration and fails loud, like every other
+ * instrument field here. The first existing candidate document wins (the same
+ * rule the judge section follows).
+ * @throws when a candidate document is unparseable or its `turnBudget:` section is malformed.
+ */
+export function loadEvalYamlTurnBudget(env: NodeJS.ProcessEnv = process.env): EvalTurnBudgetFileConfig | null {
+  for (const documentPath of evalConfigCandidates(env)) {
+    let raw: string
+    try {
+      raw = readFileSync(documentPath, 'utf8')
+    } catch (error) {
+      // ENOENT is simply no eval-owned configuration at this candidate; any
+      // other read failure is a broken deployment and must surface.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`eval eval-config: ${documentPath} cannot be read: ${String(error)}`)
+      }
+      continue
+    }
+    return parseTurnBudgetSection(documentPath, raw)
+  }
+  return null
+}
+
+function parseTurnBudgetSection(documentPath: string, raw: string): EvalTurnBudgetFileConfig | null {
+  let parsed: unknown
+  try {
+    parsed = parse(raw)
+  } catch (error) {
+    throw new Error(`eval eval-config: ${documentPath} is not valid YAML: ${String(error)}`)
+  }
+  if (parsed === undefined || parsed === null) return null
+  if (typeof parsed !== 'object') {
+    throw new Error(`eval eval-config: ${documentPath} must be a mapping, got ${JSON.stringify(parsed)}`)
+  }
+  const section = (parsed as Record<string, unknown>)['turnBudget']
+  if (section === undefined) return null
+  if (section === null || typeof section !== 'object') {
+    throw new Error(`eval eval-config: turnBudget at ${documentPath} must be a mapping, got ${JSON.stringify(section)}`)
+  }
+  const record = section as Record<string, unknown>
+  const known = new Set(['wallSeconds', 'toolCalls'])
+  const unknownKeys = Object.keys(record).filter(key => !known.has(key))
+  if (unknownKeys.length > 0) {
+    throw new Error(`eval eval-config: turnBudget at ${documentPath} carries unknown field(s) ${JSON.stringify(unknownKeys)}`)
+  }
+  const wall = record['wallSeconds']
+  const calls = record['toolCalls']
+  if (wall === undefined || calls === undefined) {
+    throw new Error(`eval eval-config: turnBudget at ${documentPath} needs both wallSeconds and toolCalls`)
+  }
+  if (typeof wall !== 'number' || !Number.isSafeInteger(wall) || wall < 0) {
+    throw new Error(`eval eval-config: turnBudget.wallSeconds at ${documentPath} must be a non-negative integer, got ${JSON.stringify(wall)}`)
+  }
+  if (typeof calls !== 'number' || !Number.isSafeInteger(calls) || calls < 0) {
+    throw new Error(`eval eval-config: turnBudget.toolCalls at ${documentPath} must be a non-negative integer, got ${JSON.stringify(calls)}`)
+  }
+  return { wallSeconds: wall, toolCalls: calls }
+}
+
+/**
+ * Resolve the effective per-turn budget: an explicit CLI flag wins per
+ * dimension, then the eval.yaml `turnBudget:` section, then the built-in
+ * defaults. `0` on either layer explicitly disables that cap and wins the same
+ * way a positive value does.
+ */
+export function resolveTurnBudget(
+  flag: { wallSeconds?: number; toolCalls?: number },
+  file: EvalTurnBudgetFileConfig | null,
+): { wallSeconds: number; toolCalls: number } {
+  return {
+    wallSeconds: flag.wallSeconds ?? file?.wallSeconds ?? DEFAULT_TURN_WALL_SECONDS,
+    toolCalls: flag.toolCalls ?? file?.toolCalls ?? DEFAULT_TURN_TOOL_CALLS,
+  }
 }

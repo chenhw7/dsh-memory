@@ -37,6 +37,8 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
 | `--no-memory` | 开关 | 无记忆对照组，覆盖 `--memory-mode` |
 | `--filter <ids>` | 逗号分隔的场景 id 子串 | 缩小范围；一个都不匹配时报错 |
 | `--concurrency <n>` | 正整数 | 并发场景数，默认 4（每场景一个独立临时 home） |
+| `--turn-wall-seconds <n>` | 非负整数，0 = 关 | 单 turn 墙钟预算，默认 180；eval.yaml `turnBudget:` 分节在旗标缺席时生效 |
+| `--turn-tool-calls <n>` | 非负整数，0 = 关 | 单 turn 工具调用预算，默认 32；eval.yaml `turnBudget:` 分节在旗标缺席时生效 |
 | `--out <file>` | 报告 JSON 路径 | 缺省只打印 |
 
 ### 典型命令（均已实测）
@@ -59,6 +61,30 @@ npm run eval:ab -- --dataset eval/datasets/core-v0.jsonl --baseline <旧构建�
 
 # 报告落盘 + 并发 + 多 id 过滤
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . --filter prog105,prog102 --concurrency 2 --out /tmp/report.json
+```
+
+### 单 turn 工作预算（防失控 agent turn）
+
+一个 turn（一次 `session/prompt` 到 idle）超过墙钟或工具调用任一上限即被中止，该场景 fail loud（错误信息、保留 home、已完成的题目照旧入报告）——**不是静默记零**。背景：现有 120s 超时是"空闲"超时，持续流式（实测一次 LLM 调用静默流到 384K `max-tokens`）和工具循环（一次失控 347 次调用）都不受它约束，预算是这两个形态的唯一护栏（[Agent Note](../.agents/notes/implemented/testing/2026-09-03-eval-turn-budget.md)）。
+
+解析链逐维独立：**CLI 旗标 > 项目根 eval.yaml 的 `turnBudget:` 分节 > 代码默认（180s / 32 次）**，`0` 显式关闭该维。生效值盖印进每份报告（`turnBudget` 字段与 markdown 头部行）并打印在启动行——分数永远带着它的校准条件读。端到端触发验证（mock 的 `tool_call_success` 无限序列 + 收紧的预算）：
+
+```sh
+cat > /tmp/verify-budget.mts <<'EOF'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { startHarness } from '$PWD/eval/boot.ts'
+const home = mkdtempSync(join(tmpdir(), 'dsh-eval-budget-'))
+const handle = await startHarness({
+  buildDir: '$PWD', dshHome: home, model: { mode: 'mock' },
+  mockSequence: ['tool_call_success'], turnBudget: { wallSeconds: 0, toolCalls: 5 },
+})
+try { await handle.prompt('x'); console.log('UNEXPECTED: no breach') }
+catch (error) { console.log('BUDGET BREACH:', error instanceof Error ? error.message : String(error)) }
+finally { await handle.dispose(); rmSync(home, { recursive: true, force: true }) }
+EOF
+npx tsx /tmp/verify-budget.mts   # 预期打印 BUDGET BREACH ... toolCalls 6 > 5
 ```
 
 ### 被测模型路由（real / external）

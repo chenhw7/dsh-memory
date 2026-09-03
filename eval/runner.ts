@@ -18,7 +18,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHarness, type HarnessHandle, type HarnessModelOptions, type TurnResult } from './boot.ts'
+import { startHarness, type HarnessHandle, type HarnessModelOptions, type TurnBudget, type TurnResult } from './boot.ts'
 import { waitForQuiesce } from './harness/quiesce.ts'
 import { readStoredEntries, seedMemoryMedium, type SeedEntryInput, type StoredEntry } from './harness/seed-media.ts'
 import {
@@ -86,6 +86,11 @@ export interface RunOptions {
   readonly concurrency: number
   /** Quiesce bound per await point in ms (default 30_000). */
   readonly quiesceTimeoutMs?: number
+  /**
+   * Per-turn work budget (resolved by the CLI: flag > eval.yaml > defaults);
+   * `null` = unbounded. A breach fails the owning scenario loud.
+   */
+  readonly turnBudget: TurnBudget | null
   /** Progress hook: called once per scenario as it completes (order = completion order). */
   readonly onResult?: (result: ScenarioResult) => void
 }
@@ -197,6 +202,7 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
         dshHome,
         model: modelOptions(options),
         configPatches: [memoryModePatch(memoryMode)],
+        ...(options.turnBudget !== null ? { turnBudget: options.turnBudget } : {}),
       })
       handles.push(handle)
       return handle

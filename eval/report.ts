@@ -145,6 +145,11 @@ export interface EvalReport {
   }
   readonly rubricVersions: { readonly storage: string; readonly recall: string }
   readonly judge: { readonly model: string; readonly baseUrl: string } | null
+  /**
+   * The per-turn work budget the run enforced (`null` = unbounded): a breached
+   * budget fails scenarios, so the scored population carries this calibration.
+   */
+  readonly turnBudget: { readonly wallSeconds: number; readonly toolCalls: number } | null
   readonly totals: SliceMetrics
   readonly slices: readonly SliceMetrics[]
   readonly scenarios: readonly ScenarioResult[]
@@ -274,6 +279,7 @@ export function buildReport(
     model: { mode: 'mock' | 'real' | 'external'; provider: string | null; id: string | null; reasoningEffort: string | null }
     rubricVersions: { storage: string; recall: string }
     judge: { model: string; baseUrl: string } | null
+    turnBudget: { wallSeconds: number; toolCalls: number } | null
     generatedAt?: string
   },
 ): EvalReport {
@@ -311,6 +317,7 @@ export function buildReport(
     model: stamp.model,
     rubricVersions: stamp.rubricVersions,
     judge: stamp.judge,
+    turnBudget: stamp.turnBudget,
     totals: sliceMetrics('total', results),
     slices,
     scenarios: [...results],
@@ -336,6 +343,9 @@ export function renderReportMarkdown(report: EvalReport): string {
   lines.push(`- memory mode: ${report.memoryMode}`)
   lines.push(`- rubric: storage v${report.rubricVersions.storage}, recall v${report.rubricVersions.recall}`)
   lines.push(`- judge: ${report.judge === null ? 'skipped (deterministic layer only)' : `${report.judge.model} @ ${report.judge.baseUrl}`}`)
+  lines.push(`- turn budget: ${report.turnBudget === null
+    ? 'unbounded'
+    : `${String(report.turnBudget.wallSeconds)}s wall / ${String(report.turnBudget.toolCalls)} tool calls (0 = off)`}`)
   lines.push('')
   lines.push('## Totals')
   lines.push('')
