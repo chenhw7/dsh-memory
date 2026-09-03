@@ -24,14 +24,17 @@ import {
   judgeStorage,
   loadRubricVersions,
   type JudgeConfig,
-  type StoredEntry,
+  type JudgedStoredEntry,
+  type PlantedFact,
 } from '../eval/judge.ts'
 import { DEFAULT_FAKE_LLM_API_KEY, startFakeLlmServer, type FakeLlmServer, type StartFakeLlmServerOptions } from '../eval/harness/fake-llm.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RUBRIC_DIR = join(ROOT, 'eval', 'rubric')
-const storageRubric = readFileSync(join(RUBRIC_DIR, 'storage-v1.md'), 'utf8')
-const recallRubric = readFileSync(join(RUBRIC_DIR, 'recall-v1.md'), 'utf8')
+// The active pair: the judge loads the v2 rubrics verbatim as its system
+// prompt; the v1 files stay frozen for historical reports (eval-rubric.spec.ts).
+const storageRubric = readFileSync(join(RUBRIC_DIR, 'storage-v2.md'), 'utf8')
+const recallRubric = readFileSync(join(RUBRIC_DIR, 'recall-v2.md'), 'utf8')
 
 /** Servers started by the current case; stopped in afterEach even on failure. */
 const running: FakeLlmServer[] = []
@@ -66,7 +69,7 @@ afterEach(async () => {
 
 const plants = [{ id: 'f101-pnpm-only', statement: '这个仓库装依赖、跑脚本一律用 pnpm，不要用 npm install，lock 文件会打架。' }]
 
-function storedEntry(overrides: Partial<StoredEntry> & { id: string }): StoredEntry {
+function storedEntry(overrides: Partial<JudgedStoredEntry> & { id: string }): JudgedStoredEntry {
   return {
     scope: 'project',
     content: '依赖安装与脚本执行统一走 pnpm，禁止 npm install',
@@ -152,6 +155,43 @@ describe('judgeStorage', () => {
     })
     const bare = JSON.parse(payloadOf(server, 1).messages[1]?.content ?? '') as { entry: Record<string, unknown> }
     expect(bare.entry).toEqual({ id: 'mem-102', scope: 'user', content: '没有类别的条目' })
+  })
+
+  it('flags updated entries and projects pinned fact ground truth (rubric v2 Inputs)', async () => {
+    const pinnedPlants: PlantedFact[] = [{
+      id: 'f116-write-path',
+      statement: '这套系统的缓存失效走写路径，写入时主动失效，不靠 TTL 到期',
+      expectedScope: 'global',
+      expectedCategory: 'convention',
+    }]
+    const server = await start({ defaultReply: validStorageReply })
+    await judgeStorage(
+      {
+        plants: pinnedPlants,
+        storeBefore: [storedEntry({ id: 'mem-old', scope: 'global', content: '详情页缓存此前按 30 分钟 TTL 过期' })],
+        siblings: [storedEntry({ id: 'mem-old', scope: 'global', content: '详情页缓存走写路径主动失效', updated: true })],
+        entriesAfter: [storedEntry({ id: 'mem-old', scope: 'global', content: '详情页缓存走写路径主动失效', updated: true })],
+      },
+      judgeFor(server),
+    )
+    const input = JSON.parse(payloadOf(server, 0).messages[1]?.content ?? '') as {
+      plantedFacts: Array<Record<string, unknown>>
+      entry: Record<string, unknown>
+    }
+    // The updated flag rides into the entry JSON; the pinned ground truth rides
+    // into the plantedFacts row (absent optionals stay absent on other rows).
+    expect(input.entry).toEqual({
+      id: 'mem-old',
+      scope: 'global',
+      content: '详情页缓存走写路径主动失效',
+      updated: true,
+    })
+    expect(input.plantedFacts).toEqual([{
+      id: 'f116-write-path',
+      statement: '这套系统的缓存失效走写路径，写入时主动失效，不靠 TTL 到期',
+      expectedScope: 'global',
+      expectedCategory: 'convention',
+    }])
   })
 
   it('re-judges once on malformed JSON, then records the entry invalid', async () => {
@@ -441,7 +481,7 @@ describe('judgeFromEnv', () => {
 
 describe('loadRubricVersions', () => {
   it('parses the version stamp of the real rubric files', () => {
-    expect(loadRubricVersions(RUBRIC_DIR)).toEqual({ storage: '1', recall: '1' })
+    expect(loadRubricVersions(RUBRIC_DIR)).toEqual({ storage: '2', recall: '2' })
   })
 
   it('fails loud on a missing rubric directory', () => {
@@ -451,8 +491,8 @@ describe('loadRubricVersions', () => {
   it('fails loud when the first line is not the version stamp', () => {
     const dir = mkdtempSync(join(tmpdir(), 'eval-judge-rubric-'))
     tempDirs.push(dir)
-    writeFileSync(join(dir, 'storage-v1.md'), 'no version line here\n')
-    writeFileSync(join(dir, 'recall-v1.md'), 'Rubric version: 3\n')
-    expect(() => loadRubricVersions(dir)).toThrow(/storage-v1\.md/)
+    writeFileSync(join(dir, 'storage-v2.md'), 'no version line here\n')
+    writeFileSync(join(dir, 'recall-v2.md'), 'Rubric version: 3\n')
+    expect(() => loadRubricVersions(dir)).toThrow(/storage-v2\.md/)
   })
 })

@@ -120,6 +120,7 @@ describe('sliceMetrics', () => {
           entryCount: 3,
           auditSeq: 9,
           writtenIds: ['e1', 'e2'],
+          updatedIds: [],
           verdicts: [
             verdict({ entryId: 'e1', plantedId: 'f1', contentFidelity: 2, total: 8 }),
             verdict({ entryId: 'e2', plantedId: null, contentFidelity: 0, total: 2 }),
@@ -139,7 +140,7 @@ describe('sliceMetrics', () => {
       scenario({
         scenarioId: 'p1',
         kind: 'plant',
-        storage: { entryCount: 1, auditSeq: 1, writtenIds: ['e1'], verdicts: null, judgeError: 'no judge env' },
+        storage: { entryCount: 1, auditSeq: 1, writtenIds: ['e1'], updatedIds: [], verdicts: null, judgeError: 'no judge env' },
       }),
     ])
     expect(slice.storage?.contentFidelity).toBeNull()
@@ -156,6 +157,7 @@ describe('sliceMetrics', () => {
           entryCount: 2,
           auditSeq: 2,
           writtenIds: ['e1', 'e2'],
+          updatedIds: [],
           verdicts: [
             verdict({ entryId: 'e1', plantedId: 'f1', total: 8, contentFidelity: 2 }),
             verdict({ entryId: 'e2', plantedId: null, total: 0, contentFidelity: 0, invalid: true, invalidReason: 'no JSON' }),
@@ -191,6 +193,17 @@ describe('buildReport', () => {
     }),
   ]
 
+  const stamp = {
+    buildDir: '/builds/candidate',
+    dataset: 'eval/datasets/core-v0.jsonl',
+    memoryMode: 'index' as const,
+    model: { mode: 'external' as const, provider: 'fuyao', id: 'fuyao-work', reasoningEffort: 'max' },
+    rubricVersions: { storage: '2', recall: '2' },
+    judge: { model: 'judge-x', baseUrl: 'http://judge/v1' },
+    turnBudget: { wallSeconds: 180, toolCalls: 32 },
+    generatedAt: '2026-09-01T00:00:00.000Z',
+  }
+
   it('stamps the run and produces totals plus kind/domain/language/type slices', () => {
     const report = buildReport(results, {
       buildDir: '/builds/candidate',
@@ -214,6 +227,72 @@ describe('buildReport', () => {
     expect(report.slices.find(slice => slice.label === 'type=negative')?.standingHitRate).toBeNull()
     expect(report.totals.standingHitRate).toBeCloseTo(0.5)
   })
+
+  it('the independent headline excludes paraphrase questions; the paraphrase slice stays', () => {
+    const results = [
+      scenario({
+        scenarioId: 's1',
+        questions: [
+          question({ questionId: 'q1', standingHit: true, injectionQuality: 2 }),
+          question({ questionId: 'q1p', type: 'paraphrase', standingHit: false, injectionQuality: 0 }),
+          question({ questionId: 'qn', type: 'negative', requires: [], standingHit: null, factHits: null, noiseRatio: null, expectedStandingHit: false }),
+        ],
+      }),
+    ]
+    const report = buildReport(results, stamp)
+    expect(report.totals.questions).toBe(3)
+    expect(report.totals.injectionQuality).toBe(1)
+    expect(report.independent.questions).toBe(2)
+    expect(report.independent.standingHitRate).toBe(1)
+    expect(report.independent.injectionQuality).toBe(2)
+    expect(report.totals.standingHitRate).toBe(0.5)
+    expect(report.slices.find(slice => slice.label === 'type=paraphrase')?.questions).toBe(1)
+  })
+
+})
+
+describe('storage precision over the v2 medium-diff basis', () => {
+  it('updated entries count in the denominator alongside written ids', () => {
+    const verdicts = [
+      verdict({ entryId: 'e1', plantedId: 'f1' }),
+      verdict({ entryId: 'e2', plantedId: null }),
+    ]
+    expect(storagePrecision(['e1', 'e2'], verdicts)).toBeCloseTo(0.5)
+    const slice = sliceMetrics('total', [
+      scenario({
+        scenarioId: 'p1',
+        kind: 'plant',
+        storage: {
+          entryCount: 2,
+          auditSeq: 3,
+          writtenIds: ['e1'],
+          updatedIds: ['e2'],
+          verdicts,
+          judgeError: null,
+        },
+      }),
+    ])
+    expect(slice.storage?.scoredEntries).toBe(2)
+    expect(slice.storage?.precision).toBeCloseTo(0.5)
+  })
+
+  it('an updated entry with no verdict drops the scenario precision to unscored (coverage check)', () => {
+    const slice = sliceMetrics('total', [
+      scenario({
+        scenarioId: 'p1',
+        kind: 'plant',
+        storage: {
+          entryCount: 2,
+          auditSeq: 3,
+          writtenIds: ['e1'],
+          updatedIds: ['e2'],
+          verdicts: [verdict({ entryId: 'e1', plantedId: 'f1' })],
+          judgeError: null,
+        },
+      }),
+    ])
+    expect(slice.storage?.precision).toBeNull()
+  })
 })
 
 describe('diffReports (A/B paired diff)', () => {
@@ -232,7 +311,7 @@ describe('diffReports (A/B paired diff)', () => {
       scenario({
         scenarioId: 's1',
         questions: [question({ questionId: 'q1', standingHit: true, noiseRatio: 0.25, injectionQuality: 3 })],
-        storage: { entryCount: 2, auditSeq: 4, writtenIds: ['e1'], verdicts: [verdict({ entryId: 'e1', plantedId: 'f1', total: 8 })], judgeError: null },
+        storage: { entryCount: 2, auditSeq: 4, writtenIds: ['e1'], updatedIds: [], verdicts: [verdict({ entryId: 'e1', plantedId: 'f1', total: 8 })], judgeError: null },
       }),
     ]
     const diff = diffReports(build(results, '/b1'), build(results, '/b2'))
@@ -300,6 +379,7 @@ describe('markdown renderings', () => {
       entryCount: 2,
       auditSeq: 5,
       writtenIds: ['e1'],
+      updatedIds: [],
       verdicts: [verdict({ entryId: 'e1', plantedId: 'f1', total: 7 })],
       judgeError: null,
     },
@@ -326,6 +406,7 @@ describe('markdown renderings', () => {
     expect(markdown).toContain('- judge: judge-x @ http://judge/v1')
     expect(markdown).toContain('- turn budget: 180s wall / 32 tool calls (0 = off)')
     expect(markdown).toContain('| prog101-build-toolchain | plant | programming | zh | 2 | 1/2 |')
+    expect(markdown).toContain('independent (excl. paraphrase)')
     expect(markdown).toContain('boot failed loudly (kept home /tmp/dsh-eval-run-keep)')
     expect(markdown).toContain('storage precision')
   })

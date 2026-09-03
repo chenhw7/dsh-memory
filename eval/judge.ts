@@ -1,10 +1,13 @@
 /**
  * Rubric-driven LLM judge for the eval suite: the storage and recall judges
  * whose system prompt is the verbatim text of the versioned rubric files
- * (eval/rubric/storage-v1.md, eval/rubric/recall-v1.md — the single normative
+ * (eval/rubric/storage-v2.md, eval/rubric/recall-v2.md — the single normative
  * source for the scales, the Inputs shape, and the strict-JSON output
  * protocol; see .agents/notes/implemented/testing/
  * 2026-09-01-harness-eval-suite.md, "Scoring rubric" / "Judge protocol").
+ * The v1 rubrics stay in the tree as the frozen scale historical reports
+ * were stamped with — scores from different rubric versions are never
+ * compared.
  *
  * Judge protocol as pinned there: temperature 0, one user JSON object per
  * call assembled per the rubric's Inputs section, one re-judge on parse
@@ -38,8 +41,8 @@ export const DEEPSEEK_OFFICIAL_BASE_URL = 'https://api.deepseek.com'
 /** Judge model id assumed for the DEEPSEEK credential fallback. */
 export const DEEPSEEK_JUDGE_FALLBACK_MODEL = 'deepseek-chat'
 
-const STORAGE_RUBRIC_FILE = 'storage-v1.md'
-const RECALL_RUBRIC_FILE = 'recall-v1.md'
+const STORAGE_RUBRIC_FILE = 'storage-v2.md'
+const RECALL_RUBRIC_FILE = 'recall-v2.md'
 const VERSION_LINE_RE = /^Rubric version: (\d+)\s*$/
 
 /** Endpoint credentials and model id of one judge instrument. */
@@ -69,13 +72,30 @@ export interface StoredEntry {
   projectName?: string | undefined
 }
 
-/** One planted fact, statement materialized verbatim by the runner per the rubric's rule. */
-export interface PlantedFact {
-  id: string
-  statement: string
+/**
+ * A stored entry the session wrote or updated — the unit the storage judge
+ * scores. `updated` marks the medium-diff case (rubric v2): the id was in
+ * `storeBefore` and at least one of content/scope/category/summary changed,
+ * so the entry enters the judge flagged rather than disappearing into the
+ * "nothing written" blind spot. Written entries leave it absent.
+ */
+export interface JudgedStoredEntry extends StoredEntry {
+  /** True when the entry pre-existed and was updated in-session (absent for new writes). */
+  readonly updated?: boolean
 }
 
-/** Verdict on one stored entry against the planted facts (storage rubric v1 protocol). */
+/** One planted fact, statement materialized by the runner per the rubric's rule. */
+export interface PlantedFact {
+  id: string
+  /** The runner-materialized statement (a `plantFacts[].factText` excerpt when present, else the whole home turn). */
+  statement: string
+  /** Scenario-pinned scope ground truth (rubric v2 dim 2); absent = the judge infers from the routing rules. */
+  expectedScope?: 'global' | 'project' | 'user' | undefined
+  /** Scenario-pinned category ground truth (rubric v2 dim 2); absent = the judge infers. */
+  expectedCategory?: string | undefined
+}
+
+/** Verdict on one stored entry against the planted facts (storage rubric v2 protocol). */
 export interface StorageVerdict {
   entryId: string
   plantedId: string | null
@@ -95,7 +115,7 @@ export interface StorageVerdict {
   invalidReason?: string
 }
 
-/** Verdict on one follow-up question (recall rubric v1 protocol, judged items only). */
+/** Verdict on one follow-up question (recall rubric v2 protocol, judged items only). */
 export interface RecallVerdict {
   injectionQuality: number | null
   answerCorrectness: number | null
@@ -111,10 +131,10 @@ export interface JudgeStorageInput {
   plants: PlantedFact[]
   /** Entries that existed before the session. */
   storeBefore: StoredEntry[]
-  /** Entries written during the same session (the entry under review is filtered out per call). */
-  siblings: StoredEntry[]
-  /** Entries written by the session — one judge call each. */
-  entriesAfter: StoredEntry[]
+  /** Entries written or updated during the same session (the entry under review is filtered out per call). */
+  siblings: JudgedStoredEntry[]
+  /** Entries written or updated by the session — one judge call each. */
+  entriesAfter: JudgedStoredEntry[]
   /** For the report only; the rubric never scores it. */
   scenarioId?: string | undefined
 }
@@ -186,7 +206,7 @@ function rubricVersion(dir: string, file: string): string {
 
 /**
  * Stamp the rubric versions a run used, parsed from the first line of the
- * rubric files in `rubricDir` (storage-v1.md / recall-v1.md). Scores from
+ * rubric files in `rubricDir` (storage-v2.md / recall-v2.md). Scores from
  * different rubric versions are never compared — every report stamps these.
  * @throws when a rubric file is missing or its first line is not the version stamp.
  */
@@ -334,7 +354,7 @@ function invalidReason(reason: string): string {
 }
 
 /** Project a stored entry to the rubric's `entry` JSON (absent optionals stay absent). */
-function entryJson(entry: StoredEntry): Record<string, unknown> {
+function entryJson(entry: JudgedStoredEntry): Record<string, unknown> {
   return {
     id: entry.id,
     scope: entry.scope,
@@ -342,6 +362,19 @@ function entryJson(entry: StoredEntry): Record<string, unknown> {
     ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
     content: entry.content,
     ...(entry.projectName !== undefined ? { projectName: entry.projectName } : {}),
+    // The medium-diff flag: present only for in-session updates (rubric v2
+    // Inputs), so a new write's entry JSON is byte-identical to the v1 shape.
+    ...(entry.updated === true ? { updated: true } : {}),
+  }
+}
+
+/** Project a planted fact to the rubric's `plantedFacts` row (absent optionals stay absent). */
+function plantedFactJson(fact: PlantedFact): Record<string, unknown> {
+  return {
+    id: fact.id,
+    statement: fact.statement,
+    ...(fact.expectedScope !== undefined ? { expectedScope: fact.expectedScope } : {}),
+    ...(fact.expectedCategory !== undefined ? { expectedCategory: fact.expectedCategory } : {}),
   }
 }
 
@@ -362,11 +395,11 @@ function invalidStorageVerdict(entryId: string, reason: string): StorageVerdict 
 }
 
 /**
- * Score every entry the session wrote against the planted facts, one judge
- * call per entry (sequential — the captured-request log stays readable and
- * a judge endpoint sees a polite request rate). Each user message is one
- * JSON object per the storage rubric's Inputs section; `siblings` excludes
- * the entry under review, as the rubric defines them.
+ * Score every entry the session wrote or updated against the planted facts,
+ * one judge call per entry (sequential — the captured-request log stays
+ * readable and a judge endpoint sees a polite request rate). Each user
+ * message is one JSON object per the storage rubric's Inputs section;
+ * `siblings` excludes the entry under review, as the rubric defines them.
  */
 export async function judgeStorage(input: JudgeStorageInput, judge: JudgeConfig): Promise<StorageVerdict[]> {
   const system = readRubricText(STORAGE_RUBRIC_FILE)
@@ -374,7 +407,7 @@ export async function judgeStorage(input: JudgeStorageInput, judge: JudgeConfig)
   for (const entry of input.entriesAfter) {
     const user = JSON.stringify({
       scenarioId: input.scenarioId ?? null,
-      plantedFacts: input.plants,
+      plantedFacts: input.plants.map(plantedFactJson),
       entry: entryJson(entry),
       storeBefore: input.storeBefore,
       siblings: input.siblings.filter(sibling => sibling.id !== entry.id),

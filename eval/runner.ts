@@ -37,6 +37,8 @@ import {
   judgeStorage,
   loadRubricVersions as loadJudgeRubricVersions,
   type JudgeConfig,
+  type JudgedStoredEntry,
+  type PlantedFact,
 } from './judge.ts'
 import type {
   EffectiveMemoryMode,
@@ -324,32 +326,41 @@ async function runPlantScenario(
   }
 
   // Planted facts trace to their FIRST planting turn's user message, verbatim.
-  const plants: Array<{ id: string; statement: string }> = []
+  const plants: PlantedFact[] = []
   for (const turn of scenario.turns ?? []) {
     for (const factId of turn.planted ?? []) {
       if (!plants.some(plant => plant.id === factId)) plants.push({ id: factId, statement: turn.user })
     }
   }
-  const beforeIds = new Set(storeBefore.map(entry => entry.id))
+  // The medium diff (rubric v2 basis): written = ids absent from storeBefore;
+  // updated = pre-existing ids with any content/scope/category/summary change.
+  // An update keeps its id, so under the v1 written-only basis it was neither
+  // judged nor counted in precision — the audit's P0#1.
+  const beforeById = new Map(storeBefore.map(entry => [entry.id, entry]))
+  const written = after.entries.filter(entry => !beforeById.has(entry.id))
+  const updated = after.entries.filter(entry => mediumDiff(beforeById.get(entry.id), entry))
   let storage: StorageResult = {
     entryCount: after.entryCount,
     auditSeq: after.maxAuditSeq,
-    writtenIds: after.entries.filter(entry => !beforeIds.has(entry.id)).map(entry => entry.id),
+    writtenIds: written.map(entry => entry.id),
+    updatedIds: updated.map(entry => entry.id),
     verdicts: null,
     judgeError: null,
   }
   if (context.options.judge !== null) {
     try {
+      const touched: JudgedStoredEntry[] = [
+        ...written,
+        ...updated.map(entry => ({ ...entry, updated: true })),
+      ]
       const verdicts = await judgeStorage(
         {
           plants,
           storeBefore,
-          siblings: storage.writtenIds
-            .map(id => after.entries.find(entry => entry.id === id))
-            .filter((entry): entry is StoredEntry => entry !== undefined),
-          // judge.ts contract: entries WRITTEN by the session, one judge call
-          // each — pre-existing storeBefore entries are not re-judged.
-          entriesAfter: after.entries.filter(entry => !beforeIds.has(entry.id)),
+          siblings: touched,
+          // judge.ts contract: entries the session wrote OR updated, one judge
+          // call each — untouched storeBefore entries are not re-judged.
+          entriesAfter: touched,
           scenarioId: scenario.id,
         },
         context.options.judge,
@@ -361,6 +372,19 @@ async function runPlantScenario(
     }
   }
   return { systemPrompt, storage }
+}
+
+/**
+ * The rubric v2 medium-diff basis: a pre-existing entry counts as updated when
+ * any of content/scope/category/summary differs. `projectName` and the
+ * timestamps are bookkeeping the judge never sees and do not mark an update.
+ */
+function mediumDiff(before: StoredEntry | undefined, after: StoredEntry): boolean {
+  if (before === undefined) return false
+  return before.content !== after.content
+    || before.scope !== after.scope
+    || (before.category ?? '') !== (after.category ?? '')
+    || (before.summary ?? '') !== (after.summary ?? '')
 }
 
 /**

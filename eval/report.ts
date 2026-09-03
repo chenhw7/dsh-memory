@@ -43,7 +43,7 @@ export interface QuestionResult {
   readonly judgeInvalidReason: string | null
 }
 
-/** One storage verdict, verbatim from the judge (eval/rubric/storage-v1.md protocol). */
+/** One storage verdict, verbatim from the judge (eval/rubric/storage-v2.md protocol). */
 export interface StorageVerdictView {
   readonly entryId: string
   readonly plantedId: string | null
@@ -66,6 +66,13 @@ export interface StorageResult {
   readonly auditSeq: number
   /** Ids written during the session (not present in storeBefore). */
   readonly writtenIds: readonly string[]
+  /**
+   * Ids of pre-existing entries whose content/scope/category/summary changed
+   * in-session (rubric v2 medium-diff basis). These enter the judge flagged
+   * `updated: true` and count in the precision denominator alongside the
+   * written ids.
+   */
+  readonly updatedIds: readonly string[]
   /** Judge verdicts; `null` = judge skipped (storage metrics unscored). */
   readonly verdicts: readonly StorageVerdictView[] | null
   /** Judge failure message when verdicts could not be produced. */
@@ -151,6 +158,13 @@ export interface EvalReport {
    */
   readonly turnBudget: { readonly wallSeconds: number; readonly toolCalls: number } | null
   readonly totals: SliceMetrics
+  /**
+   * Headline mean over INDEPENDENT questions only: the `type=paraphrase`
+   * items share `gold`/`requires` with their parent and are weak rewordings,
+   * so a mean over all 128 corpus items overstates the independent sample.
+   * The paraphrase slice itself stays in `slices` (the audit's P1 fix).
+   */
+  readonly independent: SliceMetrics
   readonly slices: readonly SliceMetrics[]
   readonly scenarios: readonly ScenarioResult[]
 }
@@ -159,18 +173,21 @@ const mean = (values: readonly number[]): number | null =>
   values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length
 
 /**
- * Storage precision for one scenario, per the storage rubric's harness
- * metric: share of entries WRITTEN during the session whose verdict traces
- * to a planted fact. Invalid verdicts (judge protocol failures) drop out of
+ * Storage precision for one scenario, per the storage rubric v2's harness
+ * metric: share of entries the session WROTE OR UPDATED (the medium-diff
+ * basis — `scoredIds` = writtenIds + updatedIds) whose verdict traces to a
+ * planted fact. An update that merges a planted fact into a pre-existing
+ * entry is traceable: updating is the textbook-correct merge outcome, not a
+ * hallucination. Invalid verdicts (judge protocol failures) drop out of
  * numerator and denominator — they are counted separately on the slice.
  * `null` when unscored (no valid verdicts, incomplete coverage, or nothing
- * written).
+ * written or updated).
  */
-export function storagePrecision(writtenIds: readonly string[], verdicts: readonly StorageVerdictView[] | null): number | null {
-  if (verdicts === null || writtenIds.length === 0) return null
-  const written = new Set(writtenIds)
-  const covered = verdicts.filter(verdict => written.has(verdict.entryId))
-  if (covered.length < writtenIds.length) return null
+export function storagePrecision(scoredIds: readonly string[], verdicts: readonly StorageVerdictView[] | null): number | null {
+  if (verdicts === null || scoredIds.length === 0) return null
+  const scored = new Set(scoredIds)
+  const covered = verdicts.filter(verdict => scored.has(verdict.entryId))
+  if (covered.length < scoredIds.length) return null
   const valid = covered.filter(verdict => verdict.invalid !== true)
   if (valid.length === 0) return null
   const traceable = valid.filter(verdict => verdict.plantedId !== null).length
@@ -181,20 +198,22 @@ export function storagePrecision(writtenIds: readonly string[], verdicts: readon
 function storageSliceOf(result: ScenarioResult): StorageSlice | null {
   if (result.storage === null) return null
   const verdicts = result.storage.verdicts
-  const written = new Set(result.storage.writtenIds)
-  const scored = verdicts?.filter(verdict => written.has(verdict.entryId) && verdict.invalid !== true) ?? []
-  const scoreable = verdicts !== null && scored.length > 0
+  // The v2 medium-diff basis: written + updated entries are the scored
+  // population (an update keeps its id, so the written-only set is a subset).
+  const scored = new Set([...result.storage.writtenIds, ...result.storage.updatedIds])
+  const valid = verdicts?.filter(verdict => scored.has(verdict.entryId) && verdict.invalid !== true) ?? []
+  const scoreable = verdicts !== null && valid.length > 0
   const meanOf = (pick: (verdict: StorageVerdictView) => number): number | null =>
-    scoreable ? mean(scored.map(pick)) : null
+    scoreable ? mean(valid.map(pick)) : null
   return {
-    scoredEntries: scored.length,
+    scoredEntries: valid.length,
     invalidEntries: (verdicts ?? []).filter(verdict => verdict.invalid === true).length,
     contentFidelity: meanOf(verdict => verdict.contentFidelity),
     scopeAndCategory: meanOf(verdict => verdict.scopeAndCategory),
     retrievability: meanOf(verdict => verdict.retrievability),
     mergeBehavior: meanOf(verdict => verdict.mergeBehavior),
     total: meanOf(verdict => verdict.total),
-    precision: storagePrecision(result.storage.writtenIds, verdicts),
+    precision: storagePrecision([...scored], verdicts),
   }
 }
 
@@ -308,6 +327,9 @@ export function buildReport(
     const owning = results.filter(result => result.questions.some(question => question.type === type))
     slices.push(metricsOf(`type=${type}`, owning, typed))
   }
+  // The independent-question headline: paraphrase leaves the headline mean,
+  // its own slice stays above (the audit's P1 independent-items fix).
+  const independentQuestions = allQuestions.filter(question => question.type !== 'paraphrase')
   return {
     schema: 'eval-report-v0',
     generatedAt: stamp.generatedAt ?? new Date().toISOString(),
@@ -319,6 +341,7 @@ export function buildReport(
     judge: stamp.judge,
     turnBudget: stamp.turnBudget,
     totals: sliceMetrics('total', results),
+    independent: metricsOf('independent (excl. paraphrase)', results, independentQuestions),
     slices,
     scenarios: [...results],
   }
@@ -349,7 +372,7 @@ export function renderReportMarkdown(report: EvalReport): string {
   lines.push('')
   lines.push('## Totals')
   lines.push('')
-  lines.push(...sliceTable([report.totals]))
+  lines.push(...sliceTable([report.totals, report.independent]))
   lines.push('')
   lines.push('## Slices')
   lines.push('')
@@ -366,12 +389,15 @@ export function renderReportMarkdown(report: EvalReport): string {
       .map(question => question.noiseRatio)
       .filter((noise): noise is number => noise !== null)
     const noise = noises.length === 0 ? null : noises.reduce((sum, value) => sum + value, 0) / noises.length
+    const scoredIds = scenario.storage === null
+      ? []
+      : [...scenario.storage.writtenIds, ...scenario.storage.updatedIds]
     lines.push(
       `| ${scenario.scenarioId} | ${scenario.kind} | ${scenario.domain} | ${scenario.language} `
       + `| ${String(scenario.questions.length)} `
       + `| ${measurable === 0 ? '—' : `${String(hits)}/${String(measurable)}`} `
       + `| ${num(noise)} | ${num(scenario.injection === null ? null : scenario.injection.chars, 0)} `
-      + `| ${percent(scenario.storage === null ? null : storagePrecision(scenario.storage.writtenIds, scenario.storage.verdicts))} `
+      + `| ${percent(scenario.storage === null ? null : storagePrecision(scoredIds, scenario.storage.verdicts))} `
       + `| ${scenario.error === null
         ? scenario.keptHome === null ? '' : `kept home ${scenario.keptHome}`
         : `${scenario.error}${scenario.keptHome === null ? '' : ` (kept home ${scenario.keptHome})`}`} |`,

@@ -36,3 +36,5 @@ dsh-session-*.zip
 # Local security-scanner state (machine-local baselines, never commit)
 .mimosa/
 /eval.yaml
+
+.zvec-grep/
