@@ -238,15 +238,48 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
     })
 
     it('caps audit records at 200, keeping the newest', async () => {
-      for (let i = 0; i < 205; i++) {
-        await store.add({ scope: 'global', content: `fact ${i}` })
+      // The cap is asserted against the real composition, but the overflow is
+      // seeded on the medium instead of produced by 205 live adds: each add
+      // publishes the whole JSON file with an fsync, and ~415 of those blew
+      // the 5s CI budget on a contended runner. One real add on a pre-seeded
+      // audit table exercises the same trim path.
+      await root.dispose()
+      const audit: Record<string, unknown> = {}
+      for (let i = 0; i < 204; i++) {
+        audit[`seed-${i}`] = {
+          id: `seed-${i}`,
+          op: 'add',
+          entryId: `seed-entry-${i}`,
+          scope: 'global',
+          source: 'tool',
+          ts: 1_755_500_000_000 + i,
+          seq: i + 1,
+          contentPreview: `fact ${i}`,
+        }
       }
-      const audit = store.listAudit()
-      expect(audit.length).toBe(200)
-      // Newest first: the last-added "fact 204" should be at the head.
-      expect(audit[0]!.contentPreview).toBe('fact 204')
+      writeFileSync(join(dir, 'memory.json'), JSON.stringify({
+        unit: { name: 'memory', version: 0 },
+        global: null,
+        tables: { entries: {}, audit },
+      }))
+
+      const ctx2 = new Context()
+      const root2 = await ctx2.plugin(Storage)
+      await ctx2.plugin(storageJson, { root: dir })
+      await ctx2.plugin(storageDomain, { backend: 'json' })
+      await ctx2.plugin(memoryStore)
+      const store2 = ctx2.get('memory') as DomainMemoryStore
+
+      await store2.add({ scope: 'global', content: 'fact 204' })
+
+      const auditOut = store2.listAudit()
+      expect(auditOut).toHaveLength(200)
+      // Newest first: the just-added "fact 204" is at the head.
+      expect(auditOut[0]!.contentPreview).toBe('fact 204')
       // The oldest surviving should be "fact 5" (facts 0-4 trimmed).
-      expect(audit[199]!.contentPreview).toBe('fact 5')
+      expect(auditOut[199]!.contentPreview).toBe('fact 5')
+
+      await root2.dispose()
     })
 
     it('audit table starts empty on a fresh domain', async () => {
