@@ -69,9 +69,19 @@ Status: implemented
 
 最终提交上的验证命令与实测结果：`npm run build`（tsc host + client 门 + bundle）与 `npm run test` —— **945 passed | 6 skipped（951）**，46 个 spec 文件，skip 为 env 门控的真模型 judge 套件。分阶段套件：`consolidate.spec`（29）、`sweep.spec`（25）、`hit-signal.spec`（12）、`write-path-rework-acceptance.spec`（5）、`store-contract.spec`（73，三后端）、`migration.spec`（3，真实组合）。全部新逻辑测试走 fake-LLM（手写流或内容路由假服务）；无测试触碰真模型。
 
+## Eval 通道结果（2026-09-05）
+
+- **Mock A/B（重构前构建 123542b vs 重构后，4 个验收场景）：确定性层 4/4 全 EQUAL**——重构对确定性链无行为回归（`/tmp/wpr-ab-mock.json`）。
+- **真实 judged A/B（fuyao 网关，真模型 + judge；`/tmp/wpr-ab-real4.json`，work201+life303 一对——唯一一次网关撑过 storage judge 调用的尝试）：**
+  - work201-weekly-report：基线 5 条、`f201-channel` 被判了两次（同一事实写 2 条）→ 候选 1 条——每轮层把 channel 重复**合并**了；standing hits 5/5 与基线持平；负例问题完好；逐题 judged 注入质量与作答正确性 EQUAL。
+  - life303-running：`f303-pace` 两侧都重复——零共享锚点的换述对，正是 sweep 层的目标（opt-in 且这些运行中关闭）。
+  - 合计：重复对 基线 3 → 候选 1；judged 均分 5.22 → 5.60。每轮层在真实语料上的效果已测得；sweep 层的效果尚未测（opt-in）。
+- **由这几次运行产出的基建修复**：`callJudgeModel` 对传输失败（5xx/超时）重试至多 4 次、线性退避（提交 350348c）——此前连续三次尝试的 storage judged 指标全部被网关间歇 503 打掉。
+- **eval 通道剩余缺口**：prog101/prog112 在真模型下超 turn budget 中止（基线侧同样中止——该场景的重工具对话对两个构建都超 40 次调用，是既有的语料/预算张力，非重构回归）；host-medium vs sqlite A/B；写放大重定基线。完整 32 场景 judged 基线（v2 rubric）仍是常设行为门。
+
 ## Consequences
 
 - **对照计划「随实施标定并写回」各项**：每一条都在本 note 落定——整合阈值（0.2 / df≤2，模块常量）、sweep 默认值（`sweepEnabled` false、`sweepEveryNSessions` 20、`sweepTopN` 20、1 小时冷却）、命中阈值（0.25 及其实测带宽）、重复对计数器对 9/2 基线的读数（11 条多余裁决；报告行文「10 组」计的是受追踪事实集）。
-- **顺延至 eval 通道**：完整 harness 语料重放（`npm run eval -- --filter prog101,prog112,work201,life303`）、SQLite 下写放大重定基线、host-medium vs sqlite A/B 逐场景 EQUAL、v2 judged A/B（env 门控真模型）——母提案保留的行为验收门。阶段 4（净索引视图）在这些基线之后保持仅立项。
+- **顺延至 eval 通道**：SQLite 下写放大重定基线、host-medium vs sqlite A/B 逐场景 EQUAL、完整 32 场景 v2 judged 基线——母提案保留的行为验收门。阶段 4（净索引视图）在这些基线之后保持仅立项。Mock A/B 与首批真实 judged 证据（上）已在库。
 - **上线 kill switch**：`consolidation: 'legacy-judge'`（每轮层）、`sweepEnabled: false`（sweep 层）、`hitSignalEnabled: false`（命中信号）、`storage: 'host-medium'`（SQLite 后端）——各自独立回退一层；legacy judge 保留一个 release，其删除随变更更新母 note。
 - **交叉链接**：决策记录在 [sqlite-backend-and-batch-consolidation](2026-09-04-sqlite-backend-and-batch-consolidation.zh.md)；HOST_CONTRACT §11 持有本地介质契约；TECH_DESIGN §6.1/§6.3/§7.1/§7.3/§8 持有现状散文。
