@@ -337,7 +337,7 @@ memory:
 | 行 | 导出 | 作用 |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
-| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列三张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
+| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列 + meta 四张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（人审模式下写入改为入队） |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator + 人审队列），持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影（渲染约定/踩坑进 `project-notes` 段落；0.6 起不写仓库文件），注册 `ctx.projectNotes`；会话创建时清理 ≤0.5.x 的文件导出残留 |

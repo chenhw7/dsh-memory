@@ -340,7 +340,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | Row | Export | Role |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue tables), registers `ctx.memory` (BM25 search + two-tier decay) |
+| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue + meta tables), registers `ctx.memory` (BM25 search + two-tier decay) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (confirm-mode writes queue as proposals) |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection (render conventions/pitfalls into the `project-notes` section; no repo files), registers `ctx.projectNotes`; cleans up ≤0.5.x file-export artifacts on session start |
