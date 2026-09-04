@@ -21,6 +21,8 @@ import {
   stripContentTag,
   stripModelDatePrefix,
   stripSummaryTag,
+  stripAnchorsTag,
+  stripProjectTag,
   flattenFragment,
   runReviewExtraction,
   runFlushExtraction,
@@ -76,9 +78,9 @@ describe('parseExtractedMemories', () => {
     const text = 'user: prefers concise answers\nglobal: use pnpm\nproject: avoid any'
     const parsed = parseExtractedMemories(text)
     expect(parsed).toEqual([
-      { scope: 'user', content: 'prefers concise answers' },
-      { scope: 'global', content: 'use pnpm' },
-      { scope: 'project', content: 'avoid any' },
+      { scope: 'user', content: 'prefers concise answers', anchors: [] },
+      { scope: 'global', content: 'use pnpm', anchors: [] },
+      { scope: 'project', content: 'avoid any', anchors: [] },
     ])
   })
 
@@ -258,6 +260,136 @@ describe('P0-4: stripSummaryTag and summary in extraction', () => {
   })
 })
 
+// Step 1.2: [anchors: …] and [project: …] trailing tags join the extraction
+// protocol; the parser strips them after the summary tag, before scanContent.
+describe('stripAnchorsTag / stripProjectTag and extraction anchors/project tags', () => {
+  it('extracts trailing [anchors:…] tokens trimmed, deduped, empties dropped', () => {
+    const { anchors, content } = stripAnchorsTag('details [anchors: pnpm, vitest , pnpm,, vitest]')
+    expect(anchors).toEqual(['pnpm', 'vitest'])
+    expect(content).toBe('details')
+  })
+
+  it('returns an empty list when no anchors tag is present', () => {
+    const { anchors, content } = stripAnchorsTag('plain content')
+    expect(anchors).toEqual([])
+    expect(content).toBe('plain content')
+  })
+
+  it('an all-empty anchors tag yields an empty list and drops the tag', () => {
+    const { anchors, content } = stripAnchorsTag('details [anchors:  ,  ]')
+    expect(anchors).toEqual([])
+    expect(content).toBe('details')
+  })
+
+  it('extracts the trailing [project: name] tag with flexible spacing', () => {
+    expect(stripProjectTag('details [project: dsh-memory]')).toEqual({ projectName: 'dsh-memory', content: 'details' })
+    expect(stripProjectTag('details [project:dsh]')).toEqual({ projectName: 'dsh', content: 'details' })
+  })
+
+  it('returns undefined project when absent or empty', () => {
+    expect(stripProjectTag('plain content')).toEqual({ projectName: undefined, content: 'plain content' })
+    expect(stripProjectTag('details [project:   ]')).toEqual({ projectName: undefined, content: 'details' })
+  })
+
+  // Only the LAST tag of each kind is consumed: a repeated tag inside the
+  // content stays visible text, keeping the parser fail-closed.
+  it('a mid-content tag is not consumed; only the trailing one is', () => {
+    const parsed = parseExtractedMemories('global: body [anchors: ghost] tail [anchors: real]')
+    expect(parsed[0]!.anchors).toEqual(['real'])
+    expect(parsed[0]!.content).toBe('body [anchors: ghost] tail')
+  })
+
+  it('parses a full stacked tag line: category + summary + anchors + project', () => {
+    const parsed = parseExtractedMemories('project: [convention] [summary:package manager] use pnpm, never npm [anchors: pnpm, npm] [project: dsh-memory]')
+    expect(parsed).toEqual([{
+      scope: 'project',
+      content: 'use pnpm, never npm',
+      anchors: ['pnpm', 'npm'],
+      category: 'convention',
+      summary: 'package manager',
+      projectName: 'dsh-memory',
+    }])
+  })
+
+  it('legacy tagless lines stay fully compatible: anchors=[], projectName undefined', () => {
+    const parsed = parseExtractedMemories('user: prefers concise answers\nglobal: use pnpm')
+    expect(parsed).toHaveLength(2)
+    for (const p of parsed) {
+      expect(p.anchors).toEqual([])
+      expect(p.projectName).toBeUndefined()
+    }
+  })
+
+  it('anchors-only line parses without a project tag', () => {
+    const parsed = parseExtractedMemories('global: node 22.13 ships sqlite without a flag [anchors: node, 22.13, sqlite]')
+    expect(parsed[0]!.anchors).toEqual(['node', '22.13', 'sqlite'])
+    expect(parsed[0]!.projectName).toBeUndefined()
+    expect(parsed[0]!.content).toBe('node 22.13 ships sqlite without a flag')
+  })
+
+  it('project tag without anchors tag still parses', () => {
+    const parsed = parseExtractedMemories('project: the schema lives in store/index.ts [project: dsh-memory]')
+    expect(parsed[0]!.projectName).toBe('dsh-memory')
+    expect(parsed[0]!.anchors).toEqual([])
+  })
+
+  it('stripped tag text never reaches content, so the scanner sees only clean text', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      // scope is global: the parsed projectName is deliberately dropped —
+      // projectName belongs to project-scoped entries only (§3.6).
+      { scope: 'global', content: 'use pnpm', anchors: ['pnpm', 'npm'], projectName: 'demo' },
+    ])
+    expect(added).toHaveLength(1)
+    expect(added[0]!.content).toBe('use pnpm')
+    // Anchors ride the separate ParsedMemory field, so the stored content is
+    // tag-free while the tokens still reach the add surface.
+    expect(added[0]!.anchors).toEqual(['pnpm', 'npm'])
+    expect(added[0]!.projectName).toBeUndefined()
+  })
+
+  it('storeMemories passes anchors through to the add input', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      { scope: 'global', content: 'node ships sqlite', anchors: ['node', 'sqlite'] },
+      { scope: 'global', content: 'legacy line' },
+    ])
+    expect(added[0]!.anchors).toEqual(['node', 'sqlite'])
+    // An empty anchors list means "none extracted": omitted at add, not [].
+    expect(added[1]!.anchors).toBeUndefined()
+  })
+
+  it('storeMemories prefers the parsed [project: …] name over the cwd inference', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [
+      { scope: 'project', content: 'tagged entry', projectName: 'tagged-repo' },
+      { scope: 'project', content: 'inferred entry' },
+      { scope: 'user', content: 'user entry', projectName: 'ignored-on-non-project' },
+    ], undefined, 'review', 's1', 'cwd-repo')
+    expect(added[0]!.projectName).toBe('tagged-repo')
+    expect(added[1]!.projectName).toBe('cwd-repo')
+    expect(added[2]!.projectName).toBeUndefined()
+  })
+
+  it('extraction prompts carry the anchors/project tag rules', () => {
+    for (const prompt of [REVIEW_SYSTEM_PROMPT, FLUSH_SYSTEM_PROMPT]) {
+      expect(prompt).toContain('[anchors:')
+      expect(prompt).toContain('[project:')
+      // Hard-token guidance names the token classes the selector later matches.
+      expect(prompt).toContain('identifiers')
+      expect(prompt).toContain('repository names')
+    }
+    // The NO-OP gates are untouched by the new rules.
+    for (const prompt of [REVIEW_SYSTEM_PROMPT, FLUSH_SYSTEM_PROMPT]) {
+      expect(prompt).toContain('NEVER persist')
+      expect(prompt).toContain('Transient states, one-time events, and unverified hypotheses are never persisted')
+    }
+  })
+})
+
 describe('buildPitfallMessages', () => {
   it('lists streak fragments with the snapshot', () => {
     const messages = buildPitfallMessages('Current memory snapshot:\n- [project] x', [
@@ -306,8 +438,8 @@ describe('extractMemories', () => {
     const ctx = fakeCtx(() => makeTextStream('user: prefers dark mode\nglobal: be concise'))
     const parsed = await extractMemories(ctx, session, REVIEW_SYSTEM_PROMPT, buildFlushMessages(['x']))
     expect(parsed).toEqual([
-      { scope: 'user', content: 'prefers dark mode' },
-      { scope: 'global', content: 'be concise' },
+      { scope: 'user', content: 'prefers dark mode', anchors: [] },
+      { scope: 'global', content: 'be concise', anchors: [] },
     ])
   })
 

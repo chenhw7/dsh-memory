@@ -75,6 +75,10 @@ describe('extract parser golden cases (§3.1 golden set)', () => {
       for (let i = 0; i < expected.length; i++) {
         expect(parsed[i]!.scope).toBe(expected[i]!.scope)
         expect(parsed[i]!.content).toBe(expected[i]!.content)
+        // Anchors default to [] and projectName to undefined in the fixture,
+        // matching the parser's legacy-format output for tagless lines.
+        expect(parsed[i]!.anchors).toEqual(expected[i]!.anchors ?? [])
+        expect(parsed[i]!.projectName).toBe(expected[i]!.projectName)
       }
     })
   }

@@ -1,12 +1,22 @@
 /**
  * Golden corpus for `parseExtractedMemories`: input lines and the expected
  * parsed output. Used for regression checks on the extraction parser (TODO §3.1).
+ *
+ * Optional golden fields default to the parser's legacy-format output:
+ * `anchors: []` and `projectName: undefined`, so pre-anchors cases stay terse.
  */
 
 export interface ExtractGoldenCase {
   readonly label: string
   readonly input: string
-  readonly expected: readonly { readonly scope: string; readonly content: string }[]
+  readonly expected: readonly {
+    readonly scope: string
+    readonly content: string
+    /** Expected parsed anchors; defaults to `[]` (no `[anchors: …]` tag). */
+    readonly anchors?: readonly string[]
+    /** Expected parsed project name; defaults to `undefined`. */
+    readonly projectName?: string
+  }[]
 }
 
 /** Cases the parser MUST handle correctly (positive + edge cases). */
@@ -81,5 +91,46 @@ export const EXTRACT_GOLDEN: readonly ExtractGoldenCase[] = [
     label: 'only whitespace and blanks',
     input: '\n\n  \n\n',
     expected: [],
+  },
+  {
+    label: 'anchors tag parsed, content clean',
+    input: 'global: node 22.13 ships sqlite without a flag [anchors: node, 22.13, sqlite]',
+    expected: [
+      { scope: 'global', content: 'node 22.13 ships sqlite without a flag', anchors: ['node', '22.13', 'sqlite'] },
+    ],
+  },
+  {
+    label: 'anchors list is trimmed, deduped, and drops empties',
+    input: 'global: use pnpm [anchors: pnpm, vitest , pnpm,, vitest]',
+    expected: [
+      { scope: 'global', content: 'use pnpm', anchors: ['pnpm', 'vitest'] },
+    ],
+  },
+  {
+    label: 'project tag parsed from a project-scoped line',
+    input: 'project: the schema lives in store/index.ts [project: dsh-memory]',
+    expected: [
+      { scope: 'project', content: 'the schema lives in store/index.ts', projectName: 'dsh-memory' },
+    ],
+  },
+  {
+    label: 'full stacked tags: category + summary + anchors + project',
+    input: 'project: [convention] [summary:package manager] use pnpm, never npm [anchors: pnpm, npm] [project: dsh-memory]',
+    expected: [
+      {
+        scope: 'project',
+        content: 'use pnpm, never npm',
+        anchors: ['pnpm', 'npm'],
+        projectName: 'dsh-memory',
+      },
+    ],
+  },
+  {
+    label: 'legacy tagless lines keep empty anchors and undefined project',
+    input: 'user: prefers concise answers\nglobal: use pnpm',
+    expected: [
+      { scope: 'user', content: 'prefers concise answers', anchors: [] },
+      { scope: 'global', content: 'use pnpm', anchors: [] },
+    ],
   },
 ]
