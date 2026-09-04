@@ -279,8 +279,34 @@ function chatCompletionsEndpoint(baseUrl: string): URL {
  */
 const JUDGE_CALL_TIMEOUT_MS = 120_000
 
-/** Call the judge model once; returns the reply text. Infrastructure failures throw loud. */
+/**
+ * Transport-level retries per judged call: the fuyao gateway intermittently
+ * answers 503 (upstream connect error) under load — the same request succeeds
+ * seconds later, so the failure is transient infrastructure, not a protocol
+ * or rubric problem. Bounded linear backoff between attempts; the last
+ * attempt's error throws loud (the caller records it per item).
+ */
+const JUDGE_TRANSPORT_ATTEMPTS = 4
+
+const JUDGE_RETRY_BASE_MS = 3_000
+
+/** Call the judge model with transport retries; protocol and 4xx failures throw through. */
 async function callJudgeModel(judge: JudgeConfig, messages: readonly ChatMessage[]): Promise<string> {
+  for (let attempt = 1; attempt <= JUDGE_TRANSPORT_ATTEMPTS; attempt++) {
+    try {
+      return await callJudgeModelOnce(judge, messages)
+    } catch (error) {
+      const statusMatch = error instanceof Error ? /returned (\d{3}):/.exec(error.message) : null
+      const status = statusMatch ? Number(statusMatch[1]) : 0
+      const transport = status >= 500 || (error instanceof Error && error.name === 'TimeoutError')
+      if (!transport || attempt === JUDGE_TRANSPORT_ATTEMPTS) throw error
+      await new Promise(resolve => { setTimeout(resolve, JUDGE_RETRY_BASE_MS * attempt) })
+    }
+  }
+  throw new Error('unreachable') // the loop always returns or throws
+}
+
+async function callJudgeModelOnce(judge: JudgeConfig, messages: readonly ChatMessage[]): Promise<string> {
   const response = await fetch(chatCompletionsEndpoint(judge.baseUrl), {
     method: 'POST',
     headers: {
