@@ -578,6 +578,42 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
   })
 })
 
+// markHits (write-path rework Step 2.1): the usage-feedback counter. Bumps
+// hitCount + lastHitAt through the same atomic RMW discipline as the recall
+// stamp; audited; unknown ids skipped; updatedAt untouched — a hit is a
+// reading signal, not a mutation.
+describe('markHits (DomainMemoryStore)', () => {
+  it('bumps hitCount and stamps lastHitAt; updatedAt stays untouched', async () => {
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'fact used by the answer' })
+    const before = store.get(entry.id)!
+    await store.markHits([entry.id])
+    const after = store.get(entry.id)!
+    expect(after.hitCount).toBe(1)
+    expect(after.lastHitAt).toBeDefined()
+    expect(after.updatedAt).toBe(before.updatedAt)
+    expect(after.accessCount).toBe(before.accessCount)
+    // The hit is audited as an update (system-initiated lifecycle write).
+    expect(store.listAudit().some(record => record.entryId === entry.id && record.op === 'update')).toBe(true)
+  })
+
+  it('one batch adds exactly one hit per entry (duplicate ids idempotent); unknown ids skipped', async () => {
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
+    const { entry } = await store.add({ scope: 'global', content: 'echoed fact' })
+    await store.markHits([entry.id, entry.id, 'missing-id' as MemoryId])
+    expect(store.get(entry.id)!.hitCount).toBe(1)
+    await store.markHits([])
+    expect(store.get(entry.id)!.hitCount).toBe(1)
+    expect(store.get('missing-id' as MemoryId)).toBeUndefined()
+  })
+
+  it('markHits is a safe no-op for providers without usage tracking', async () => {
+    const store = new TestMemoryStore()
+    await expect(store.markHits(['any-id' as MemoryId])).resolves.toBeUndefined()
+    await expect(store.markHits([])).resolves.toBeUndefined()
+  })
+})
+
 // entries-cap (§ write-path governance): the entries table trims back to its
 // cap on every successful new-entry write. Eviction order: pinned exempt →
 // ascending accessCount → ascending lastRecalledAt ?? createdAt. Like the

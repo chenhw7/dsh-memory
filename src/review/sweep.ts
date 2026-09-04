@@ -130,11 +130,14 @@ export function selectSweepPairs(ranked: readonly MemoryEntry[]): SweepPair[] {
 }
 
 /**
- * Rank the store's active entries for the sweep: `accessCount` DESC (the
- * usage signal — most-served entries first), then `COALESCE(lastRecalledAt,
- * updatedAt)` DESC (recency of last use), then id for a stable order.
+ * Rank the store's active entries for the sweep: `hitCount` DESC (the
+ * usage-feedback signal — entries the model's answers echoed first), then
+ * `accessCount` DESC (the mechanical surfacing count), then
+ * `COALESCE(lastRecalledAt, updatedAt)` DESC, then id for a stable order.
  * Entries soft-decayed or already superseded never enter (the janitor's
  * decay window decided them quiet; a superseded entry lost its round).
+ * `hitCount` only reorders selection — it never drives deletion (`decayDays`
+ * remains the only forgetting knob).
  * @param entries - all stored entries.
  * @param topN - the selection cap.
  * @returns at most `topN` active entries, in sweep order.
@@ -143,7 +146,8 @@ export function rankForSweep(entries: readonly MemoryEntry[], topN: number): Mem
   const active = entries.filter(entry => entry.status !== 'superseded' && entry.staleSince === undefined)
   return [...active]
     .sort((a, b) =>
-      (b.accessCount ?? 0) - (a.accessCount ?? 0)
+      (b.hitCount ?? 0) - (a.hitCount ?? 0)
+      || (b.accessCount ?? 0) - (a.accessCount ?? 0)
       || (b.lastRecalledAt ?? b.updatedAt) - (a.lastRecalledAt ?? a.updatedAt)
       || (a.id as string).localeCompare(b.id as string))
     .slice(0, Math.max(0, topN))

@@ -259,6 +259,18 @@ export abstract class MemoryStore {
    * @param _supersededBy - The id of the newer, contradicting entry.
    */
   supersedeEntry(_id: MemoryId, _supersededBy: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
+
+  /**
+   * Record usage hits on the given entries (write-path rework Step 2):
+   * the assistant's answer echoed these entries' tokens/anchors after they
+   * were injected. Bumps `hitCount` and stamps `lastHitAt`; fire-and-forget
+   * and never throws into the caller. The default is a no-op so providers
+   * without usage tracking stay contract-conformant. `hitCount` feeds only
+   * the periodic sweep's selection — it never drives deletion (`decayDays`
+   * remains the only forgetting knob).
+   * @param _ids - The ids of the entries the answer echoed.
+   */
+  async markHits(_ids: readonly MemoryId[]): Promise<void> { /* default no-op: providers without usage tracking stay contract-conformant */ }
 }
 
 /**

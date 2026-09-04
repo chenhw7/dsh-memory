@@ -55,19 +55,19 @@ Step 1.4 周期性全库层
 
 Step 2.1 字段与回写
 
-- `src/types.ts` + zod 镜像增 `hitCount?: number`、`lastHitAt?: number`(可选,零迁移);store 增 `markHits(ids)`,记账方式同 `stampRecalled`(`src/store/index.ts:600-628`,含 audit)。
-- 双向兼容测试同 Step 1.1 纪律。
+- `src/types.ts` + zod 镜像增 `hitCount?: number`、`lastHitAt?: number`(可选,零迁移);store 增 `markHits(ids)`,记账方式同 `stampRecalled`(原子 RMW、含 audit、`updatedAt` 不动)。已落地;每批每条目至多记一次命中(`ids` 内重复 id 折叠)——集合无重数。
+- 双向兼容测试同 Step 1.1 纪律。已落地于 `tests/store-contract.spec.ts`(3 用例)+ `tests/hit-signal.spec.ts`。
 
 Step 2.2 交集计算(memory-context)
 
-- auto-recall pre-step(`src/context/index.ts:387-412`)的本轮注入 id 集与 standing 快照(`freezeFor` :337-364)记入 session 侧账本(sessionMemory WeakMap 旁挂)。
-- 新增 `ctx.on('session/event')` 监听 `assistant/message`(先例:`src/review/index.ts:296`;文本提取复用 `src/review/accumulator.ts:149-150` 的 messageText 口径):计算作答文本 token ∩ 账本条目的 token/anchors(bm25 原语,IDF 加权),过标定阈值者 `markHits`;阈值进 Config(默认随实施标定并写回本 note)。
-- `accessCount`/`lastRecalledAt` 语义与全部既有消费点(`stampRecalled`、`trimEntries` :819-839、janitor :898-973)零改动。
+- auto-recall pre-step 的本轮注入 id 集与 standing 快照(`freezeFor`)记入 session 侧账本(`sessionMemory` 旁的 WeakMap)。已落地;度量是**作答对本条目 token 袋的 IDF 加权覆盖率**(`computeHits`,对条目袋取覆盖而非对称重叠),token 来源为 content+summary+anchors。标定(按计划写回):真实复述 0.5–0.7、顺带一提 0.05–0.12、无关 ≈0 → 默认 `hitSignalThreshold` **0.25**;Config `hitSignalEnabled`(默认 false)+ `hitSignalThreshold`(默认 0.25)进 `memory` 命名空间 + auto-recall 设置卡。ledger 被一次作答消费——命中属于回声它的那一次作答。
+- `ctx.on('session/event')` 监听 `assistant/message` 复用 messageText 口径;失败记 `mark-hits`/`hit-compute`。已落地。
+- `accessCount`/`lastRecalledAt` 语义与全部既有消费点零改动。已验证。
 
 Step 2.3 消费
 
-- 周期性整合选拔改读 hit-aware 排序(合成规则随实施标定,写回本 note 与母提案);**不新增 `maxUnusedDays`**,`decayDays` 仍是唯一删除器。
-- 测试:对立 fixture 钉死(注入但作答无重叠 → hitCount 不动;作答回声 → +1);markHits 幂等与审计;`eval/mechanical.ts` 增 hitCount 读出;同构建 A/B 确定性层 EQUAL。
+- 周期性 sweep 的选拔按 `hitCount` 降序优先,次 `accessCount` 降序、再次 last-use;**不新增 `maxUnusedDays`**——`decayDays` 仍是唯一删除器。已落地(`rankForSweep`)。
+- 测试:两个对立 fixture(复述作答命中;被无视的注入与顺带一提不命中)在 `tests/hit-signal.spec.ts`(12 用例,含 ledger 一次性消费与信号关闭的接线用例);markHits 幂等与审计在 `tests/store-contract.spec.ts`;eval 机械层的 hitCount 读出与同构建 A/B EQUAL 属 eval 通道,不做 vitest 钉死(judged A/B 门按母提案保留 env 门控)。
 
 ### 阶段 3:SQLite 后端
 

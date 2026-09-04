@@ -104,6 +104,19 @@ export interface MemoryEntry {
    * active entries.
    */
   readonly supersededBy?: MemoryId | undefined
+  /**
+   * Usage feedback (write-path rework Step 2): how many assistant turns
+   * echoed this entry's tokens/anchors after it was injected — the
+   * "the model actually used this fact" signal. Absent (treated as 0) on
+   * entries never hit. Deliberately independent of {@link accessCount}:
+   * an injected-but-ignored entry still counts a recall (the surface ran)
+   * but never a hit (the answer did not echo it). The periodic sweep's
+   * selection is the only consumer; it never drives deletion (decayDays
+   * remains the only forgetting knob).
+   */
+  readonly hitCount?: number | undefined
+  /** Unix epoch ms of the most recent hit recorded by `markHits`; absent when never hit. */
+  readonly lastHitAt?: number | undefined
 }
 
 /** Input for creating a new memory entry. */

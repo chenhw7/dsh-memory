@@ -97,6 +97,8 @@ const AUTORECALL_SPEC: NamespaceCardSpec = {
     { key: 'autoRecallEnabled', kind: 'checkbox' },
     { key: 'autoRecallLimit', kind: 'number', minValue: 1 },
     { key: 'autoRecallMinChars', kind: 'number', minValue: 1 },
+    { key: 'hitSignalEnabled', kind: 'checkbox', labelKey: 'hitSignalEnabled', hintKey: 'hitSignalEnabledHint' },
+    { key: 'hitSignalThreshold', kind: 'number', minValue: 0, labelKey: 'hitSignalThreshold', hintKey: 'hitSignalThresholdHint' },
   ],
 }
 

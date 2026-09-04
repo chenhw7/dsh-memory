@@ -22,8 +22,10 @@ import z from '@deepseek-ai/schemastery'
 // so `ctx.settings` / `sctx.settings` type in this module.
 import type {} from '@deepseek-ai/dsh-settings'
 import { redactBlocked } from '../scanner.ts'
-import type { MemoryEntry, MemoryScope } from '../types.ts'
+import type { MemoryEntry, MemoryId, MemoryScope } from '../types.ts'
 import type { MemoryStore } from '../index.ts'
+import { buildCorpusStats, tokenizeForSearch, uniqueTokens, idfOf } from '../store/bm25.ts'
+import { messageText } from '../review/accumulator.ts'
 import { annotateConflicts, type ConflictStatus } from './conflict.ts'
 import type { ProjectNotesService, ProjectNotesSnapshot } from '../notes/index.ts'
 import { isRenderedEntry } from '../notes/scope.ts'
@@ -135,6 +137,21 @@ export interface MemoryConfig {
   autoRecallLimit: number
   /** Skip recall when the step's user text is shorter than this many characters. Defaults to `12`. */
   autoRecallMinChars: number
+  /**
+   * Enable the usage-hit signal (write-path rework Step 2): when the
+   * assistant's answer echoes an injected entry's tokens/anchors (IDF-weighted
+   * overlap above {@link hitSignalThreshold}), the entry gains one `hitCount`.
+   * The periodic sweep's selection is the only consumer. Defaults to `false`.
+   */
+  hitSignalEnabled: boolean
+  /**
+   * Weighted token-overlap between an injected entry and the assistant's
+   * answer above which the answer counts as a hit: the IDF-weighted share of
+   * the entry's tokens the answer restates. Defaults to `0.25` — mid-band of
+   * the measured calibration (genuine restatement 0.5–0.7, incidental
+   * mention 0.05–0.12, unrelated ~0).
+   */
+  hitSignalThreshold: number
 }
 
 /** Runtime schema for the `memory` settings namespace and plugin config. */
@@ -151,6 +168,8 @@ export const Config: z<MemoryConfig> = z.object({
   autoRecallEnabled: z.boolean().default(false),
   autoRecallLimit: z.number().step(1).min(1).default(5),
   autoRecallMinChars: z.number().step(1).min(1).default(12),
+  hitSignalEnabled: z.boolean().default(false),
+  hitSignalThreshold: z.number().min(0).max(1).default(0.25),
 })
 
 /**
@@ -318,6 +337,13 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   // Per-session frozen memory snapshots (content + index), read once at session/created.
   const sessionMemory = new WeakMap<Session, FrozenSnapshot>()
 
+  // Usage-hit ledger (write-path rework Step 2): per session, the entries the
+  // current round injected — the standing snapshot's entries (recorded at
+  // freeze time) plus the latest auto-recall fence's hits. The
+  // `assistant/message` listener weighs the answer against these and books the
+  // echoes as store hits. A WeakMap: the ledger dies with its session.
+  const hitLedger = new WeakMap<Session, LedgerEntry[]>()
+
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       setSource: (source) => {
@@ -348,6 +374,7 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       : EMPTY_NOTES
     if (memory === undefined) {
       sessionMemory.set(session, { content: '', index: '', notes })
+      hitLedger.set(session, [])
       return
     }
     const charLimit = settings.memoryCharLimit
@@ -363,6 +390,23 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       index: readMemoryIndex(memory, charLimit, exclude),
       notes,
     })
+    // The standing round's ledger: the entries the frozen snapshot injected.
+    hitLedger.set(session, settings.hitSignalEnabled ? standingLedger(memory, exclude) : [])
+  }
+
+  /**
+   * The standing round's ledger: every active, non-stale entry the snapshot
+   * reads, as a ledger item. Tokens come from content + summary + anchors —
+   * everything an answer could echo back.
+   */
+  const standingLedger = (memory: MemoryStore, exclude: ((entry: MemoryEntry) => boolean) | undefined): LedgerEntry[] => {
+    const items: LedgerEntry[] = []
+    for (const entry of memory.list()) {
+      if (entry.staleSince !== undefined || entry.status === 'superseded') continue
+      if (exclude?.(entry) === true) continue
+      items.push({ id: entry.id, tokens: ledgerTokens(entry) })
+    }
+    return items
   }
 
   ctx.on('session/created', freezeFor, { global: true })
@@ -402,6 +446,10 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       const hits = result.entries.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
       if (hits.length === 0) return next()
       memory.markRecalled(hits.map(entry => entry.id))
+      // The auto-recall fence replaces the standing round's injected set for
+      // the hit ledger: these are the entries the model sees THIS round.
+      const session = sessionOf(payload)
+      if (settings.hitSignalEnabled && session !== undefined) hitLedger.set(session, hits.map(toLedgerEntry))
       const block = buildAutoRecallBlock(hits, AUTO_RECALL_CHAR_LIMIT)
       if (block.length === 0) return next()
       const recallMessage = createUserMessage({
@@ -413,6 +461,36 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       // Recall must never break the step: fall through unchanged, but stay observable.
       ctx.get('memory')?.reportFailure('auto-recall', error)
       return next()
+    }
+  })
+
+  // Usage-hit recording (write-path rework Step 2.2, opt-in via
+  // `hitSignalEnabled`): when the assistant answers, weigh the answer text
+  // against the round's injected-entry ledger; echoes above the threshold
+  // book one `hitCount` per entry. Fire-and-forget and never blocks the
+  // event. The standing round's ledger is cleared after one answer — a hit
+  // belongs to the answer that echoed it, not to every later turn.
+  ctx.on('session/event', (session: Session, event) => {
+    if (event.type !== 'assistant/message') return
+    const settings = current()
+    if (!settings.hitSignalEnabled) return
+    const ledger = hitLedger.get(session)
+    if (ledger === undefined || ledger.length === 0) return
+    const text = messageText(event)
+    if (text === undefined || text.length === 0) return
+    const memory = ctx.get('memory')
+    if (memory === undefined) return
+    hitLedger.delete(session)
+    try {
+      const hits = computeHits(ledger, text, settings.hitSignalThreshold)
+      if (hits.length === 0) return
+      void memory.markHits(hits).catch((error: unknown) => {
+        // A failed hit write is a lost usage signal, never a broken session.
+        memory.reportFailure('mark-hits', error)
+      })
+    } catch (error) {
+      // The overlap computation must never break the event stream.
+      memory.reportFailure('hit-compute', error)
     }
   })
 
@@ -450,4 +528,76 @@ function userMessageText(message: unknown): string {
     .filter(block => block?.type === 'text' && typeof block.text === 'string')
     .map(block => (block as { text: string }).text)
     .join('\n')
+}
+
+/**
+ * One injected entry awaiting a possible hit: its id plus the token bag the
+ * hit computation weighs (content + summary + anchors). Recorded into the
+ * session-side ledger at injection time.
+ */
+export interface LedgerEntry {
+  readonly id: MemoryId
+  /** The entry's weighted token bag: content + summary + anchors. */
+  readonly tokens: ReadonlySet<string>
+}
+
+/**
+ * The token bag a hit verdict weighs: content + summary tokens (the answer
+ * can echo the wording) plus the anchors (the answer can echo the hard
+ * tokens). Same tokenizer the retrieval plane uses.
+ */
+function ledgerTokens(entry: MemoryEntry): Set<string> {
+  return new Set([
+    ...tokenizeForSearch(`${entry.content}\n${entry.summary ?? ''}`),
+    ...entry.anchors ?? [],
+  ])
+}
+
+/** Project one recalled entry into its ledger shape. */
+function toLedgerEntry(entry: MemoryEntry): LedgerEntry {
+  return { id: entry.id, tokens: ledgerTokens(entry) }
+}
+
+/** The session whose pre-step payload this is (the waterfall's owner). */
+function sessionOf(payload: { agent?: { session?: Session } }): Session | undefined {
+  return payload.agent?.session
+}
+
+/**
+ * Decide which of the round's injected entries the assistant's answer echoes
+ * (write-path rework Step 2.2): an entry is hit when the IDF-weighted share
+ * of its tokens (content + summary + anchors) that the answer restates
+ * reaches the threshold. Coverage over the ENTRY's token bag — not a
+ * symmetric overlap — is the calibrated notion: a long answer that merely
+ * mentions the entry's topic stays far below it, while an answer restating
+ * the fact's substance crosses it. The IDF weights (measured over the
+ * round's ledger + the answer) let an entry-specific token (an identifier, a
+ * repo path) dominate a word every entry shares. Measured bands over the
+ * calibration fixtures: a genuine restatement 0.5–0.7, an incidental
+ * mention 0.05–0.12, unrelated ~0 — the default threshold (0.25) sits
+ * mid-band. Pure; the store's `markHits` owns persistence.
+ * @param ledger - the entries injected this round.
+ * @param answerText - the assistant's answer text.
+ * @param threshold - the weighted coverage hit threshold.
+ * @returns the hit entry ids (deduplicated, in ledger order).
+ */
+export function computeHits(ledger: readonly LedgerEntry[], answerText: string, threshold: number): MemoryId[] {
+  if (ledger.length === 0) return []
+  const answerTokens = uniqueTokens(answerText)
+  if (answerTokens.size === 0) return []
+  // IDF over the round's corpus: the injected entries' bags plus the answer.
+  const stats = buildCorpusStats([...ledger.map(item => [...item.tokens].join(' ')), answerText])
+  const hits: MemoryId[] = []
+  for (const item of ledger) {
+    if (item.tokens.size === 0) continue
+    let restated = 0
+    let total = 0
+    for (const token of item.tokens) {
+      const weight = idfOf(stats, token)
+      total += weight
+      if (answerTokens.has(token)) restated += weight
+    }
+    if (total > 0 && restated / total >= threshold) hits.push(item.id)
+  }
+  return hits
 }

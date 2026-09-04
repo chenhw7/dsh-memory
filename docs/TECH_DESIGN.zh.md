@@ -242,7 +242,11 @@ interface MemoryEntry {
                                  // 但从注入面与检索面消失；仅 supersedeEntry
                                  // 翻转该状态
   readonly supersededBy?: MemoryId // 矛盾中胜出的条目 id，
-                                 // 与 status: 'superseded' 同时设置
+                                  // 与 status: 'superseded' 同时设置
+  readonly hitCount?: number    // 使用反馈：注入后有多少轮作答回声了本条目
+                                  // 的 token（缺省 = 从未命中）；只喂 sweep
+                                  // 的选拔，绝不驱动删除
+  readonly lastHitAt?: number   // 最近一次命中的 epoch 毫秒
 }
 ```
 
@@ -344,6 +348,7 @@ interface MemorySuggestion {
   - `update`：合并字段（content / category / summary——空字符串 summary 即清除），校验并扫描合并后内容；id 不存在返回 `undefined`。
   - `search`：先结构化过滤，再做 **BM25 排序**（见下）；结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位）→ `updatedAt` 降序；默认 limit = 实时上限，`0` = 不限；返回 `{ entries, total }`。fire-and-forget 的 `stampRecalled` 对每个有变化的命中项经**表的原子 read-modify-write**（宿主 `KvTable.update`，transform 在写入链槽位上重读当前记录）刷新 `lastRecalledAt`、递增 `accessCount` 并**清除 `staleSince`**（召回证明有用，恢复注入可见性），刻意不动 `updatedAt`——并发 `memory_replace` 与召回戳交错时先落地的内容不会被戳回滚。同毫秒内已盖章且无衰减戳的条目在快照预检处跳过，不进写入链。查询里的 `recordRecall: false` 抑制这一切——管理 UI 经此标志浏览，读取绝不改写元数据。
   - `markRecalled(ids)`：`memory_list` 返回页与 `memory_get` 走同一盖章路径，同时递增 `accessCount`。
+  - `markHits(ids)`：使用反馈写入（Step 2）——经同一原子读改写递增 `hitCount`、盖章 `lastHitAt`，每批每条目至多一次命中（`ids` 内的重复 id 折叠），审计为 `update`，`updatedAt` 保持不动（命中是读取信号，不是变更）。未知 id 与中途被删的条目同陈旧 recall 盖章一样跳过。抽象 `MemoryStore` 默认为 no-op，无使用追踪的 provider 保持契约合规。
   - `archiveEntry` / `unarchiveEntry`：**手动休眠开关**——直接盖章/清除 `staleSince`，复用软衰减的表示，使一切既有表面（注入过滤、stale 徽标、召回复活）行为一致。按调用方 source 记 `update` 审计。
   - `list`：可选 scope + project 过滤，按 `createdAt` 升序。
   - `pin(id)` / `unpin(id)`：设置 `pinned` 字段（不写审计记录）；返回更新后的条目或 `undefined`。
@@ -452,7 +457,8 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 - **Janitor**（全局监听）：实时从 `memory` 命名空间读取 `decayDays`（跨命名空间读取；无 settings 服务时回退 30），`days > 0` 时执行 `memory.janitor(days)`。fire-and-forget。
 - **Curator pass**（全局监听，默认启用）：模块级计数器统计每次会话创建；每逢第 `curatorEveryNSessions` 次（默认 20）创建，选出 `content.length ≥ curatorMinChars`（默认 400）的条目，最长优先、次按创建先后，至多 `curatorMaxEntries`（默认 5）条；当合格条目 ≥ 2 且预算允许时执行 `runCuration`：一次以 id 寻址的 LLM 调用，严格的 `parseCuratedLines`（未知 id、空白内容、畸形行丢弃——喋喋不休的应答无法改写任意行），随后逐行走 store 契约的 `store.update`（含扫描）。人审模式下改写以携带 `targetEntryId` 的提议形式落地，而非就地更新。fire-and-forget。
-- **全库整合扫描**（全局监听，`sweepEnabled`，默认**关闭**）：每轮整合词面预筛之下的兜底层——重新裁决那些任何词面信号都不会在写入路径上配对的既有条目对。插件 apply 后的首次会话创建（启动趟）以及此后每逢第 `sweepEveryNSessions` 次（默认 20）创建，`rankForSweep` 按 `accessCount` 降序、次按 `COALESCE(lastRecalledAt, updatedAt)` 降序选出至多 `sweepTopN`（默认 20）条活跃条目（superseded 与软衰减条目永不入选），`selectSweepPairs` 提出加权重叠超过同一 0.2 阈值的条目对，至多一次整合调用按 `p<N>` 行协议（`SWEEP_SYSTEM_PROMPT`）裁决：`merge` 把一侧折入存活方，`update` 替换之，`conflict` 经同一 `supersedeEntry` seam 弃用目标方、注解指向存活方。被丢弃或无法解析的裁决 fail-closed 到不动作——未裁决的对两侧原样保留。提取预算刻意不约束扫描：它是 store 维护性通道，由会话节奏与 meta 表冷却（`consolidation:lastRun`，经 `setMeta` 持久，两次之间至少一小时）门控，而非提取排水。fire-and-forget；失败记 `sweep-*`。
+- **全库整合扫描**（全局监听，`sweepEnabled`，默认**关闭**）：每轮整合词面预筛之下的兜底层——重新裁决那些任何词面信号都不会在写入路径上配对的既有条目对。插件 apply 后的首次会话创建（启动趟）以及此后每逢第 `sweepEveryNSessions` 次（默认 20）创建，`rankForSweep` 按 `hitCount` 降序（使用反馈信号——模型作答回声过的条目优先）、次按 `accessCount` 降序、再次按 `COALESCE(lastRecalledAt, updatedAt)` 降序选出至多 `sweepTopN`（默认 20）条活跃条目（superseded 与软衰减条目永不入选），`selectSweepPairs` 提出加权重叠超过同一 0.2 阈值的条目对，至多一次整合调用按 `p<N>` 行协议（`SWEEP_SYSTEM_PROMPT`）裁决：`merge` 把一侧折入存活方，`update` 替换之，`conflict` 经同一 `supersedeEntry` seam 弃用目标方、注解指向存活方。被丢弃或无法解析的裁决 fail-closed 到不动作——未裁决的对两侧原样保留。提取预算刻意不约束扫描：它是 store 维护性通道，由会话节奏与 meta 表冷却（`consolidation:lastRun`，经 `setMeta` 持久，两次之间至少一小时）门控，而非提取排水。fire-and-forget；失败记 `sweep-*`。
+- **使用命中信号**（Step 2，`memory` 命名空间的 `hitSignalEnabled`，默认**关闭**）：sweep 选拔背后「模型真的用了这条事实」的信号。冻结快照注入的条目（自动召回触发时则为其围栏命中——该轮由围栏替换既有集合）记入每会话 ledger；在该轮 `assistant/message` 上计算作答对每条 ledger 条目 token（content + summary + anchors）的 IDF 加权覆盖率（`computeHits`），复述占比达到 `hitSignalThreshold`（默认 **0.25**，实测标定带的中位：真实复述 0.5–0.7、顺带一提 0.05–0.12、无关 ≈0）的条目经 `markHits` 记一次 `hitCount`。一次作答消费整个 ledger——命中属于回声它的那一次作答，不属于之后的每一轮。fire-and-forget；命中写入或计算失败记 `mark-hits`/`hit-compute`，绝不阻断事件流。`hitCount` 只重排 sweep 的选拔——`decayDays` 仍是唯一的遗忘旋钮。
 
 #### 7.3.6 人审模式（`confirmBeforeWrite`，P1-1/P1-2）
 
@@ -497,7 +503,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
+| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
 两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
@@ -613,7 +619,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 |---|---|---|---|
 | `memory` | `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
 | `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
-| `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1） |
+| `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1）, `hitSignalEnabled`, `hitSignalThreshold`（min 0） |
 | `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
 
 机制：
@@ -780,7 +786,7 @@ dsh-memory/
 ├── src/                    # TypeScript 源码（37 个文件，约 12.7 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（45 个文件，919 个用例）
+├── tests/                  # vitest specs（46 个文件，934 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -815,9 +821,9 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **45 个 vitest spec 文件、919 个用例**（913 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **46 个 vitest spec 文件、934 个用例**（928 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
-1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
+1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`hit-signal.spec`（12：使用命中的对立 fixture——复述事实的作答命中，被无视的注入与顺带一提不命中——store 的 `markHits` 记账、sweep 的 hit 优先排序、活体 ledger 监听含一次性消费与关闭态）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（40：同一契约体分别对内存版 `TestMemoryStore` 与真实 `DomainMemoryStore` 各跑一遍；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。

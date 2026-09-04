@@ -81,6 +81,8 @@ const memoryEntrySchema = zod.object({
   anchors: zod.array(zod.string()).optional(),
   status: zod.enum(['active', 'superseded']).optional(),
   supersededBy: zod.string().optional(),
+  hitCount: zod.number().optional(),
+  lastHitAt: zod.number().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
@@ -715,6 +717,42 @@ export class DomainMemoryStore extends MemoryStore {
   override markRecalled(ids: readonly string[]): void {
     if (ids.length === 0) return
     void this.stampRecalled(ids.filter(id => this.entries.get(id as MemoryId) !== undefined) as MemoryId[])
+  }
+
+  /**
+   * Record usage hits on the given entries (write-path rework Step 2):
+   * bump `hitCount` and stamp `lastHitAt` through the table's atomic
+   * read-modify-write — the same discipline as {@link stampRecalled}, so a
+   * concurrent content edit is never rolled back by a hit and vice versa.
+   * `updatedAt` is intentionally left untouched: a hit is a reading signal,
+   * not a mutation. Idempotent per call batch (one call adds exactly one
+   * hit per entry, regardless of duplicates inside `ids`); unknown ids and
+   * entries removed mid-pass are skipped like a stale recall stamp.
+   * @param ids - the ids of the entries the assistant's answer echoed.
+   */
+  override async markHits(ids: readonly MemoryId[]): Promise<void> {
+    const now = Date.now()
+    // One batch = one hit per entry, regardless of duplicates inside `ids`
+    // (the caller passes the echoed id set; a set has no multiplicity).
+    for (const id of [...new Set(ids)]) {
+      const snapshot = this.entries.get(id)
+      if (snapshot === undefined) continue
+      try {
+        await this.entries.update(id, current => ({
+          ...current,
+          hitCount: (current.hitCount ?? 0) + 1,
+          lastHitAt: now,
+        }))
+        await this.appendAudit('update', id, this.entries.get(id) ?? snapshot, 'review', undefined)
+      } catch (error) {
+        // A missing id (entry removed between the caller's answer and this
+        // write) or a domain going away mid-pass is a normal end-of-life for
+        // a hit, not a failure to report.
+        if (error instanceof Error && !error.message.includes('no record')) {
+          this.reportFailure('mark-hits', error)
+        }
+      }
+    }
   }
 
   // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────

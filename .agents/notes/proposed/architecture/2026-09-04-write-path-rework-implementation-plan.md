@@ -55,19 +55,19 @@ Step 1.4 Periodic full-corpus tier
 
 Step 2.1 Fields and write-back
 
-- `src/types.ts` + the zod mirror gain `hitCount?: number` and `lastHitAt?: number` (optional, zero-migration); the store gains `markHits(ids)`, accounted the same way as `stampRecalled` (`src/store/index.ts:600-628`, with audit).
-- Bidirectional compatibility tests per the Step 1.1 discipline.
+- `src/types.ts` + the zod mirror gain `hitCount?: number` and `lastHitAt?: number` (optional, zero-migration); the store gains `markHits(ids)`, accounted the same way as `stampRecalled` (atomic RMW, audited, `updatedAt` untouched). SHIPPED; one batch adds exactly one hit per entry (duplicate ids collapse) — a set has no multiplicity.
+- Bidirectional compatibility tests per the Step 1.1 discipline. SHIPPED in `tests/store-contract.spec.ts` (3 cases) + `tests/hit-signal.spec.ts`.
 
 Step 2.2 Intersection computation (memory-context)
 
-- The auto-recall pre-step's (`src/context/index.ts:387-412`) injected id set for the round and the standing snapshot (`freezeFor` :337-364) are recorded into a session-side ledger (hung beside the sessionMemory WeakMap).
-- A new `ctx.on('session/event')` listener on `assistant/message` (precedent: `src/review/index.ts:296`; text extraction reuses the messageText convention of `src/review/accumulator.ts:149-150`): compute answer tokens ∩ ledger entries' tokens/anchors (bm25 primitives, IDF-weighted); entries above the calibrated threshold get `markHits`; the threshold enters Config (default calibrated during implementation and written back into this note).
-- `accessCount`/`lastRecalledAt` semantics and every existing consumer (`stampRecalled`, `trimEntries` :819-839, janitor :898-973) change zero.
+- The auto-recall pre-step's injected id set for the round and the standing snapshot (`freezeFor`) are recorded into a session-side ledger (a WeakMap beside `sessionMemory`). SHIPPED; the metric is the IDF-weighted share of the ENTRY's tokens the answer restates (`computeHits`, coverage over the entry bag — not a symmetric overlap), with content+summary+anchor tokens. CALIBRATION (written back per plan): genuine restatement 0.5–0.7, incidental mention 0.05–0.12, unrelated ≈0 → default `hitSignalThreshold` **0.25**; Config `hitSignalEnabled` (default false) + `hitSignalThreshold` (default 0.25) in the `memory` namespace + the auto-recall settings card. The ledger is consumed by one answer — a hit belongs to the answer that echoed it.
+- The `ctx.on('session/event')` listener on `assistant/message` reuses the `messageText` convention; failures book as `mark-hits`/`hit-compute`. SHIPPED.
+- `accessCount`/`lastRecalledAt` semantics and every existing consumer change zero. Verified.
 
 Step 2.3 Consumption
 
-- The periodic consolidation selection switches to a hit-aware ordering (the combination rule is calibrated during implementation and written back into this note and the parent proposal); **no `maxUnusedDays` is added** — `decayDays` remains the only deleter.
-- Tests: two opposing fixtures pin the signal (injected but no answer overlap → hitCount unchanged; answer echo → +1); markHits idempotence and audit; `eval/mechanical.ts` gains the hitCount readout; same-build A/B EQUAL on the deterministic layer.
+- The periodic sweep's selection orders by `hitCount` DESC first, then `accessCount` DESC, then last-use; **no `maxUnusedDays`** — `decayDays` remains the only deleter. SHIPPED (`rankForSweep`).
+- Tests: the two opposing fixtures (restating answer hits; ignored injection and mere mention do not) in `tests/hit-signal.spec.ts` (12 cases incl. the consumed-ledger and disabled-signal wiring); markHits idempotence and audit in `tests/store-contract.spec.ts`; the eval mechanical layer's hitCount readout and the same-build A/B EQUAL check belong to the eval lane and are not vitest-pinned (the judged A/B gate stays env-gated per the parent proposal).
 
 ### Phase 3: SQLite backend
 
