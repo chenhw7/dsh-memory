@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 import { DomainMemoryStore } from '../src/store/index.ts'
+import { SqliteMemoryStore } from '../src/store/sqlite.ts'
 import type { MemoryMetaRecord } from '../src/store/index.ts'
 import { tokenizeForSearch } from '../src/store/bm25.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
@@ -297,6 +298,20 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
 // test stub, same shape as health.spec).
 runStoreContractSuite('TestMemoryStore', () => new TestMemoryStore())
 runStoreContractSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(), memTable(), memTable(), memTable()))
+// The SQLite backend passes the SAME contract suite (write-path rework
+// Step 3.1: the parameterized double-backend discipline). Each case builds
+// its own mkdtemp database; the suite's constructor seam makes this cheap.
+{
+  const dirs: string[] = []
+  runStoreContractSuite('SqliteMemoryStore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sqlite-contract-'))
+    dirs.push(dir)
+    return new SqliteMemoryStore({ dbPath: join(dir, 'storages', 'memory.db') })
+  })
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+}
 
 // The anchors/status/supersededBy consolidation fields are a domain-store
 // write-plane behavior, tested against the real implementation like the

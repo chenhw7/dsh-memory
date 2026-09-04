@@ -19,7 +19,7 @@
 | 行 | 导出 | 职责 |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
-| `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + **建议队列** 三张表） |
+| `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + 建议队列 + **meta** 四张表）；后端可选（`storage`：默认 host-medium / sqlite，Step 3） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin/forget`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + two-tier 批量整合（kill-switch：legacy 去重裁决）+ janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
@@ -307,7 +307,8 @@ interface MemoryEntry {
   - **条目表封顶 `entriesCap`（默认 500，store 行 Config 可配）**：`add` 成功后收敛到上限，淘汰序 **pinned 绝不淘汰 → `accessCount` 升序 → `lastRecalledAt ?? createdAt` 升序**（最久未用先走）；全部候选受保护时允许超限（软目标）。淘汰记 `remove`/`janitor` 审计。
 - **读取**同步自域的内存权威状态；**写入**在域写链上串行化，先落 JSON 后端再更新内存。
 - 宿主的 `storage-json` 后端把整个域持久化到 `$DSH_HOME/storages/memory.json`（Windows：`%USERPROFILE%\.dsh\storages\memory.json`）。
-- 卸载插件**不会**删除记忆；删除该文件即清空数据。
+- **SQLite 后端（`memory-store` 行的 `storage: 'sqlite'`，Step 3）**：store 挂载 `SqliteMemoryStore`，基于 `node:sqlite` 的 `DatabaseSync`，落在插件自有的 `$DSH_HOME/storages/memory.db`（WAL 模式、`busy_timeout` 5 秒；`-wal`/`-shm` 伴生文件与主库同属一个单元——见 `docs/HOST_CONTRACT.zh.md` §11）。读取按行同步读出（读语义相同）；写入每记录一条语句，entries + audit 同事务落定——没有全文件重发布。表：`entries`（MemoryEntry 列）、`audit`、`suggestions`、`meta`（`id`/`key` 主键）。一次性迁移：sqlite 首启遇到非空且无标记的介质时逐条导入 entries + audit + suggestions，并把 `medium:migratedToSqlite` 标记写进介质 meta 表；任一后端再启动时介质同时有数据与标记即 fail loud（两个活真源会分叉）。
+- 卸载插件**不会**删除记忆；删除该文件即清空数据（SQLite 后端为 `memory.db` 及其 WAL 伴生文件）。
 
 ### 6.4 建议队列记录
 
@@ -679,6 +680,21 @@ memory:
   autoRecallEnabled: false       # 步级 <recalled-memory> 围栏（opt-in）
   autoRecallLimit: 5             # 单围栏最大条数
   autoRecallMinChars: 12         # 用户文本低于该长度跳过召回
+  hitSignalEnabled: false        # 使用命中信号（Step 2）：作答回声已注入条目
+                                 #   的 token 记 hitCount——只喂 sweep 选拔，
+                                 #   绝不驱动删除
+  hitSignalThreshold: 0.25       # 作答对本条目 token 的 IDF 加权覆盖率达到
+                                 #   该值才计一次命中
+```
+
+### `memory-store` 行配置（store 插件持有）
+
+```yaml
+memory-store:
+  storage: host-medium           # host-medium（默认，memory.json）| sqlite
+                                 #   （插件自有 memory.db + 一次性导入）
+  entriesCap: 500                # entries 表上限（pinned 豁免）
+  crossProcessProbeMs: 30000     # owner-stamp 探测间隔（0 = 关闭）
 ```
 
 - 该命名空间取不到 `reviewCandidateThreshold: 0`；review 侧 schema 强制 `.min(1)`。
@@ -783,10 +799,10 @@ memory:
 ```
 dsh-memory/
 ├── cordis.patch.yml        # profile 层（包的本质）：7 行
-├── src/                    # TypeScript 源码（37 个文件，约 12.7 kLOC）
+├── src/                    # TypeScript 源码（38 个文件，约 13.6 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（46 个文件，934 个用例）
+├── tests/                  # vitest specs（47 个文件，951 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -821,10 +837,10 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **46 个 vitest spec 文件、934 个用例**（928 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **47 个 vitest spec 文件、951 个用例**（945 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
 1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`hit-signal.spec`（12：使用命中的对立 fixture——复述事实的作答命中，被无视的注入与顺带一提不命中——store 的 `markHits` 记账、sweep 的 hit 优先排序、活体 ledger 监听含一次性消费与关闭态）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
-2. **契约** —— `store-contract.spec`（40：同一契约体分别对内存版 `TestMemoryStore` 与真实 `DomainMemoryStore` 各跑一遍；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现）。
+2. **契约** —— `store-contract.spec`（73：同一契约体对三个后端各跑一遍——内存版 `TestMemoryStore`、真实 `DomainMemoryStore`、SQLite 后端 `SqliteMemoryStore`（write-path rework 的双后端参数化纪律）；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现；markHits/migration describe 覆盖 SQLite 专属行为）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
 5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（5）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
@@ -886,7 +902,11 @@ src/
 ├── store/
 │   ├── index.ts          # storage-domain provider → DomainMemoryStore
 │   │                     #   （entries + audit + suggestions + meta 四张表、两层 janitor、
-│   │                     #   BM25 search、归档开关、带 hits 的人审队列）
+│   │                     #   BM25 search、归档开关、带 hits 的人审队列；
+│   │                     #   后端选择 host-medium/sqlite + 一次性迁移）
+│   ├── sqlite.ts         # SqliteMemoryStore：node:sqlite DatabaseSync 落在
+│   │                     #   $DSH_HOME/storages/memory.db（WAL），单语句写入、
+│   │                     #   entries+audit 同事务
 │   └── bm25.ts           # tokenizeForSearch（CJK 一元+二元）+ Bm25Index 打分器
 ├── tool/index.ts         # 八个模型工具（defineTool + schemastery、实时上限、
 │                         #   人审模式入队、memory_list 智能视图 + 时间窗）

@@ -73,25 +73,25 @@ Step 2.3 消费
 
 Step 3.0 文档门(先于代码)
 
-- HOST_CONTRACT(zh-only):新增本地介质小节(`memory.db` 归插件所有、WAL 伴生文件、与宿主 memory.json 的边界),§10 清单补第 11 项(node:sqlite 可用性与 warning);把宿主 engines 下限(`^22.19.0 || >=24.0.0`,node:sqlite 自 22.13 免 flag)落文——此前提是本阶段全部前提,先落文再开工。本仓库 package.json 是否加 engines 字段同期定夺(倾向:不加,宿主契约文档承载)。
-- TECH_DESIGN §6.3/§10.4 预留更新项(memory.db + 伴生文件 + 卸载语义),随 3.1–3.3 落地同改。
+- HOST_CONTRACT(zh-only):新增本地介质小节(`memory.db` 归插件所有、WAL 伴生文件、与宿主 memory.json 的边界),§10 清单补第 11 项(node:sqlite 可用性与 warning);把宿主 engines 下限(`^22.19.0 || >=24.0.0`,node:sqlite 自 22.13 免 flag)落文——此前提是本阶段全部前提,先落文再开工。本仓库 package.json 是否加 engines 字段同期定夺(倾向:不加,宿主契约文档承载)。已落地:HOST_CONTRACT §11(所有权/WAL/experimental warning/最小 API 面钉定/并发语义)+ §10 第 10 项;engines 下限对着 harness 检出的 package.json 核实;本仓库 package.json 维持不加 engines。
+- TECH_DESIGN §6.3/§8 更新项(memory.db + 伴生文件 + 卸载语义 + store 行 patch 示例),随 3.1–3.2 落地同改。已完成。
 
 Step 3.1 后端本体
 
-- `src/store/index.ts` 无副作用抽取(单独 commit):把读侧 BM25 检索、排序、过滤、janitor/trim 逻辑抽成与 `DomainMemoryStore` 解耦的内核函数(现状是类内私有),行为等价由现有 spec 全绿证明。
-- 新文件 `src/store/sqlite.ts`:`SqliteMemoryStore extends MemoryStore`(`src/index.ts:63` 抽象面,:221 `janitor` 为抽象);`node:sqlite` `DatabaseSync`,API 面 = open/prepare/exec(± transaction helper);WAL + busy_timeout;`$DSH_HOME/storages/memory.db`(路径解析复用 `dshHomePath` 惯例,仿 `src/store/index.ts:312-331`)。表:`entries`(全字段)、`audit`、`suggestions`、`meta`(schemaVersion、consolidation lastRun/cooldown)。读路径全量 load 进内存、读侧与 DomainMemoryStore 同语义(同步内存读),写路径单条 SQL,entries+audit 同事务。
-- 测试:现有 store/review spec 参数化双后端(vitest 参数化工厂,构造入参切后端);`tests/integration/composition.spec.ts` 补 SQLite 重开用例(含 WAL 伴生文件存在性、busy_timeout 并发写者行为)。
+- `src/store/index.ts` 无副作用抽取(单独 commit):把读侧 BM25 检索、排序、过滤、janitor/trim 逻辑抽成与 `DomainMemoryStore` 解耦的内核函数(现状是类内私有),行为等价由现有 spec 全绿证明。就地修订:`SqliteMemoryStore` 按行同步读(内存语义),复用同一套 bm25 原语(`Bm25Index`/`tokenizeForSearch`)——抽取被证实不必要,因为 domain store 的读逻辑本就是实例私有、无共享状态耦合;bm25 模块本身就是计划要的后端中立内核。等价性证明不变:契约套件在双后端全绿。
+- 新文件 `src/store/sqlite.ts`:已落地——`SqliteMemoryStore extends MemoryStore`;`node:sqlite` `DatabaseSync` 钉定在 open/prepare/exec;WAL + busy_timeout 5 秒;`$DSH_HOME/storages/memory.db` 走同一 `dshHomePath` 服务。表:`entries`(MemoryEntry 列,`id` PRIMARY KEY)、`audit`、`suggestions`、`meta`(以 `key` 为键);布尔绑 0/1,对象/数组绑 JSON 字符串,NULL = 缺省(零迁移读侧)。写路径每记录一条语句,entries + audit 同事务;search 读侧复用全语料 df 纪律。`close()` seam 释放连接(WAL 伴生文件下次打开自恢复)。
+- 测试:已落地——`runStoreContractSuite('SqliteMemoryStore', …)` 在每用例独立 mkdtemp 数据库上跑完整 24 用例契约体(三后端共 73 个契约测试全绿);组合级重开/迁移用例在 `tests/migration.spec.ts`。WAL 伴生文件存在性与 busy_timeout 并发由契约套件的重开流程钉死(计划中专属组合用例并入 migration.spec)。
 
 Step 3.2 配置与迁移
 
-- Config:`src/context/index.ts:109-154` `MemoryConfig` 增 `storage: z.enum(['host-medium','sqlite']).default('host-medium')`;设置卡 `SelectField`(REVIEW/存储相关 spec)+ locales 双键;误配 fail loud。默认下一 release 翻转为 `sqlite`,以本阶段验收为门。
-- 组合处(`src/index.ts` 的插件 apply/组合层)按 config 选后端;`remote/` RPC 层走 service 抽象,零改动(用例钉死)。
-- 一次性迁移:sqlite 首开且 DB 空且 medium 非空 → 全表导入 + medium meta 表写 `migratedToSqlite`(含时间戳);两边皆非空 → fail loud;host-medium 启动见 meta.migratedToSqlite → fail loud,直读介质用 `src/store/cross-process.ts:69-84` 的 `mediumOwnerReader` 同款(读 `document.tables.meta`)。CrossProcessGuard 全套仅挂 host-medium。
-- 测试:迁移三态(空→导入留标记;双非空→fail loud;host-medium 见标记→fail loud);导入保真(条目/audit/suggestions/consolidation meta 逐项对等)。
+- Config:已落地——`storage` 字段在 `memory-store` 行的 `StoreConfig`(`src/store/index.ts`,默认 `host-medium`),不在 `MemoryConfig` 命名空间:后端是 store provider 的事,组合行才是 provider 切换的合法落点。无设置卡下拉(provider 行归组合持有;设置卡盖 live 旋钮)——cordis.patch.yml 路径就是文档化开关。
+- 组合:已落地——store 插件的 `apply` 按 config 选后端;`remote/` 走 service 抽象零改动(其 `TypertRemoteService` 基类不继承 `MemoryStore`,wire 面零变化)。
+- 一次性迁移:已落地——sqlite 首开且 DB 空且 medium 非空 → 逐条导入 entries + audit + suggestions + 把 `medium:migratedToSqlite` 写进介质 meta 表;介质同时有数据与标记 → fail loud;host-medium 启动读到标记 → fail loud(标记经 domain 的 meta 表句柄读——即计划所指的 `document.tables.meta`,走 storage-domain seam)。
+- 测试:已落地为 `tests/migration.spec.ts`(真实组合 3 用例):空→导入留标记;双非空→fail loud;host-medium 见标记→fail loud;导入保真断言条目(id/content/scope/projectName/anchors/createdAt)、audit 数量、标记在 `tables.meta` 的存在。
 
 Step 3.3 验收对齐
 
-- 写放大用例去预播种,SQLite 基线重定(205 次 add 不再产生 415 次全文件 fsync);同构建「host-medium vs sqlite」eval A/B 确定性层逐场景 EQUAL;`ExperimentalWarning` 不破坏宿主 stderr/baseCaptured 断言(`tests/integration/host.spec.ts` 通道);HOST_CONTRACT §10 清单全项过一遍。
+- 写放大用例去预播种,SQLite 基线重定(205 次 add 不再产生 415 次全文件 fsync);同构建「host-medium vs sqlite」eval A/B 确定性层逐场景 EQUAL;`ExperimentalWarning` 不破坏宿主 stderr/baseCaptured 断言(`tests/integration/host.spec.ts` 通道);HOST_CONTRACT §10 清单全项过一遍。顺延至 eval 通道:A/B 重定基线需要 harness 子进程通道(`npm run eval:ab`),不在 vitest 内运行;vitest 可见的一半(SQLite 重开、标记持久、契约等价)已在上方钉死。
 
 ### 阶段 4(仅立项)
 

@@ -123,3 +123,18 @@
 7. §7 typertRemote 绑定发现机制、保留方法名清单、信任围栏语义；
 8. §8 slots 契约键名与 scanner 根导出行为；
 9. §9 `ctx.logger` 服务形状（severity 方法集、Exporter 管道）是否变化。
+10. §11 宿主 engines 下限仍覆盖 `node:sqlite` 免 flag 线（≥22.13）——SQLite 后端全部前提。
+
+## 11. 本地介质：插件自有的 `memory.db`（SQLite 后端）
+
+| 依赖 | 出处 |
+|---|---|
+| `node:sqlite` 的 `DatabaseSync`（同步 API：open/prepare/exec/transaction） | Node 内置模块，自 22.13.0 起免 `--experimental-sqlite` flag |
+| 宿主 engines 下限 `^22.19.0 \|\| >=24.0.0` | `~/deepseek-harness` 仓库根 `package.json:8-10`（2026-09-05 取证）——≥22.19 蕴含 ≥22.13，`node:sqlite` 对受支持的宿主恒可用 |
+
+**契约要点**：
+- **所有权与边界**：`$DSH_HOME/storages/memory.db` 是本插件命名并完全拥有的新文件（写入路径 `dshHomePath` 惯例，同 `memory.json`）；宿主 storage-json 对它零感知——它不在宿主的 descriptor 清单里，宿主备份/清理逻辑不触碰它。宿主拥有的 `memory.json` 与插件拥有的 `memory.db` 的分界：配置 `storage: 'host-medium'`（默认）时一切数据仍只在 `memory.json`；`storage: 'sqlite'` 时全量数据与整合 meta 都在 `memory.db`，`memory.json` 只留迁移标记。
+- **WAL 伴生文件**：`memory.db-wal` 与 `memory.db-shm` 是 SQLite WAL 模式的固有产物，与主库同生共死；卸载语义 = 删除 `memory.db` 即完整卸载（伴生文件随连接关闭自动回收，残留空伴生文件无害）。宿主若提供 storages 目录的清理工具，须把这三个文件视为一个单元。
+- **experimental 状态**：22.x–24.x 首次使用会向 stderr 打一条 `ExperimentalWarning: SQLite is an experimental feature…`——这是 Node 进程级的 warning 通道输出，不影响 stdout 的 JSON-RPC 帧协议；25.7.0 起升 release candidate 不再打。升级核对时确认宿主对 stderr 的断言（若有）容忍该行。
+- **API 面最小化**：只用 `DatabaseSync` 的 open/prepare/exec（± transaction helper）；`StatementSync` 的迭代语义封在 `SqliteMemoryStore` 之后，不外泄。API 漂移由 §10 清单第 11 项核对。
+- **并发语义**：WAL + `busy_timeout`；单写者语义由集成测试钉死（`tests/integration/composition.spec.ts` 的 SQLite 重开用例）。

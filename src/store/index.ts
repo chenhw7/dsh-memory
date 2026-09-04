@@ -20,6 +20,7 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
+import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
 import {
   CrossProcessGuard,
   DEFAULT_CROSS_PROCESS_PROBE_MS,
@@ -144,7 +145,8 @@ const metaRecordSchema = zod.looseObject({
  * (`looseObject`): the medium holds both as opaque JSON, and a future
  * extension of their shapes must reopen cleanly on today's readers.
  */
-const memoryDomainSpec = defineDomain({
+/** The memory domain spec, exported for the SQLite backend's migration path. */
+export const memoryDomainSpec = defineDomain({
   name: 'memory',
   version: 0,
   global: {
@@ -254,6 +256,14 @@ export const inject = ['storageDomain']
  */
 export interface StoreConfig {
   /**
+   * Which storage backend mounts (write-path rework Step 3.2): `host-medium`
+   * (default) keeps everything in the host's `memory.json`; `sqlite` moves
+   * the store into the plugin-owned `$DSH_HOME/storages/memory.db` (WAL
+   * mode) with a one-time import from a non-empty medium. Misconfiguration
+   * fails loud. Defaults to `host-medium` this release.
+   */
+  storage: 'host-medium' | 'sqlite'
+  /**
    * Maximum entries retained in the `entries` table; write paths trim back
    * to it (pinned entries exempt, lowest use signal evicted first). Default
    * {@link DEFAULT_ENTRIES_CAP}. Settable from `cordis.patch.yml` under the
@@ -272,6 +282,7 @@ export interface StoreConfig {
 
 /** Schemastery configuration for the `memory-store` composition row. */
 export const Config = z.object({
+  storage: z.union(['host-medium', 'sqlite'] as const).default('host-medium'),
   entriesCap: z.number().step(1).min(1).default(DEFAULT_ENTRIES_CAP),
   crossProcessProbeMs: z.number().step(1).min(0).default(DEFAULT_CROSS_PROCESS_PROBE_MS),
 })
@@ -285,12 +296,47 @@ export const Config = z.object({
  * @param ctx - Cordis context with `storageDomain` injected.
  * @param config - row config; `entriesCap` and `crossProcessProbeMs` are read here.
  */
-export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS }): Promise<void> {
+export async function apply(ctx: Context, config: StoreConfig = { storage: 'host-medium', entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS }): Promise<void> {
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
   const suggestions: SuggestionsTable = domain.table('suggestions')
   const meta: MetaTable = domain.table('meta')
+
+  // Backend selection (write-path rework Step 3.2): `sqlite` mounts the
+  // plugin-owned memory.db instead of the domain store. The medium's
+  // migration marker guards both directions — a sqlite boot over a
+  // non-empty, never-migrated medium imports it once; a host-medium boot
+  // after a migration fails loud (two diverging sources of truth).
+  if (config.storage === 'sqlite') {
+    const dbPath = resolveSqlitePath(ctx)
+    if (dbPath === undefined) {
+      throw new Error('dsh-memory: storage: sqlite needs the dshHomePath service to resolve $DSH_HOME/storages/memory.db — the composition does not provide it; fix the row or keep storage: host-medium')
+    }
+    const sqlite = new SqliteMemoryStore({
+      dbPath,
+      failureLogger: ctx.logger,
+      entriesCap: config.entriesCap,
+    })
+    // The marker lives in the MEDIUM's meta table (the migrating boot wrote
+    // it there); the sqlite database's own meta table is the new store's
+    // progress, not the migration record.
+    const migrated = meta.get(SQLITE_MIGRATION_MARKER)
+    const mediumEntries = [...entries.entries()].map(([, entry]) => entry)
+    if (migrated === undefined && mediumEntries.length > 0) {
+      // One-time import: the medium holds data this database has never seen.
+      sqlite.importFromDomain(mediumEntries, [...audit.entries()].map(([, record]) => record), [...suggestions.entries()].map(([, row]) => row))
+      await meta.put(SQLITE_MIGRATION_MARKER, { key: 'medium', value: new Date().toISOString(), updatedAt: Date.now() })
+      ctx.logger.warn(`dsh-memory: imported ${String(mediumEntries.length)} entries from memory.json into ${dbPath}`)
+    } else if (migrated !== undefined && mediumEntries.length > 0) {
+      // Both sides hold data: the medium was written after the migration —
+      // a second writer. Failing loud is the only safe answer.
+      throw new Error('dsh-memory: storage: sqlite — the host medium holds entries but carries a migratedToSqlite marker; a host-medium process wrote memory.json after the migration. Reconcile the two stores by hand and remove the stale writes before restarting.')
+    }
+    ctx.effect(() => async () => { sqlite.close() })
+    ctx.provide('memory', sqlite)
+    return
+  }
 
   // Cross-process single-writer detection (host storage-json is
   // last-writer-wins across processes, silently): claim the medium's owner
@@ -302,6 +348,13 @@ export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DE
   // One boot identity per mount, shared by the claim and the goodbye: a
   // second `currentBootOwner()` would mint a fresh random bootId that the
   // goodbye writer would (correctly) refuse to stamp.
+  // Mixed-version guard (Step 3.2): a host-medium boot over a medium whose
+  // meta table carries the sqlite migration marker fails loud — the medium
+  // is no longer this backend's source of truth, and writing to it anyway
+  // would fork the data.
+  if (meta.get(SQLITE_MIGRATION_MARKER) !== undefined) {
+    throw new Error('dsh-memory: storage: host-medium — the medium carries the migratedToSqlite marker: its data moved into memory.db and a host-medium process must not write memory.json anymore. Start with storage: sqlite, or reconcile the stores by hand and remove the marker.')
+  }
   const own = currentBootOwner()
   const mediumReader = resolveMediumReader(ctx)
   const mediumGoodbye = resolveMediumGoodbye(ctx, own.bootId)
@@ -373,6 +426,18 @@ function resolveMediumGoodbye(ctx: Context, bootId: string): (() => Promise<void
   const homePath = (ctx as unknown as { get(name: string): unknown }).get('dshHomePath')
   if (typeof homePath !== 'function') return undefined
   return mediumGoodbyeWriter(homePath('storages', 'memory.json'), bootId)
+}
+
+/**
+ * Resolve the plugin-owned SQLite database path from the same harness-home
+ * resolver the medium reader uses (`$DSH_HOME/storages/memory.db`). Returns
+ * `undefined` when the service is absent — the sqlite backend cannot mount
+ * without it (the caller fails loud).
+ */
+function resolveSqlitePath(ctx: Context): string | undefined {
+  const homePath = (ctx as unknown as { get(name: string): unknown }).get('dshHomePath')
+  if (typeof homePath !== 'function') return undefined
+  return homePath('storages', 'memory.db') as string
 }
 
 /**

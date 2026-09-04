@@ -19,7 +19,7 @@
 | Row | Export | Responsibility |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + suggestion-queue + **meta** tables) |
+| `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + suggestion-queue + **meta** tables); backend selectable (`storage`: host-medium default / sqlite, Step 3) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin/forget`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + two-tier batch consolidation (kill-switch: legacy dedup judge) + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6 — [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
@@ -311,7 +311,8 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
   - **The entries table caps at `entriesCap` (default 500, configurable on the store row's Config)**: `add` trims back after each successful write, evicting **pinned never → ascending `accessCount` → ascending `lastRecalledAt` ?? `createdAt`** (longest-unrecalled first); when every remaining candidate is protected the table is allowed over the cap (soft target). Eviction audits as `remove`/`janitor`.
 - **Reads** are synchronous from the domain's authoritative in-memory state; **writes** serialize on the domain's write chain and reach the JSON backend before in-memory state updates.
 - The host's `storage-json` backend persists the whole domain to `$DSH_HOME/storages/memory.json` (Windows: `%USERPROFILE%\.dsh\storages\memory.json`).
-- Uninstalling the plugin does **not** delete memories; deleting that one file wipes the data.
+- **The SQLite backend (`storage: 'sqlite'` on the `memory-store` row, Step 3)**: the store mounts `SqliteMemoryStore` over `node:sqlite`'s `DatabaseSync` in the plugin-owned `$DSH_HOME/storages/memory.db` (WAL mode, `busy_timeout` 5 s; the `-wal`/`-shm` sidecars are part of the same unit — see `docs/HOST_CONTRACT.zh.md` §11). Reads serve from rows read per call (synchronous, same read semantics); writes are one statement per record with entries + audit in one transaction — no full-file republish. Tables: `entries` (MemoryEntry columns), `audit`, `suggestions`, `meta` (`id`/`key` primary keys). The one-time migration: a sqlite boot over a non-empty, unmarked medium imports entries + audit + suggestions verbatim and writes the `medium:migratedToSqlite` marker into the medium's meta table; either backend booting over a medium with data AND the marker fails loud (two live sources of truth would diverge).
+- Uninstalling the plugin does **not** delete memories; deleting that one file wipes the data (with the SQLite backend: `memory.db` plus its WAL sidecars).
 
 ### 6.4 Suggestion-queue records
 
@@ -682,6 +683,21 @@ memory:
   autoRecallEnabled: false       # step-level <recalled-memory> fence (opt-in)
   autoRecallLimit: 5             # max entries per fence
   autoRecallMinChars: 12         # skip recall below this user-text length
+  hitSignalEnabled: false        # usage-hit signal (Step 2): answers echoing an
+                                 #   injected entry's tokens book hitCount —
+                                 #   feeds the sweep's selection, never deletion
+  hitSignalThreshold: 0.25       # IDF-weighted coverage of the entry's tokens
+                                 #   above which the answer counts as a hit
+```
+
+### `memory-store` row config (owned by the store plugin)
+
+```yaml
+memory-store:
+  storage: host-medium           # host-medium (default, memory.json) | sqlite
+                                 #   (plugin-owned memory.db + one-time import)
+  entriesCap: 500                # entries-table cap (pinned exempt)
+  crossProcessProbeMs: 30000     # owner-stamp probe interval (0 = off)
 ```
 
 - `reviewCandidateThreshold: 0` is not reachable from this namespace; the review-side schema enforces `.min(1)`.
@@ -786,10 +802,10 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 ```
 dsh-memory/
 ├── cordis.patch.yml        # the profile layer (the package's substance): 7 rows
-├── src/                    # TypeScript sources (37 files, ~12.7 kLOC)
+├── src/                    # TypeScript sources (38 files, ~13.6 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (46 files, 934 cases)
+├── tests/                  # vitest specs (47 files, 951 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -824,10 +840,10 @@ Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main`
 
 ## 11. Testing Strategy
 
-The repo ships **46 vitest spec files, 934 test cases** (928 active + 6 skipped without real-API keys), in five layers:
+The repo ships **47 vitest spec files, 951 test cases** (945 active + 6 skipped without real-API keys), in five layers:
 
 1. **Pure-function units** — `extract.spec` (81: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `consolidate.spec` (29: selector signals, bucketing, verdict parsing fail-closed, all four actions, no-candidate zero-call pass-through), `sweep.spec` (25: usage-ranked selection, zero-shared-anchor pair proposal, the `p<N>` protocol fail-closed, conflict supersedes, cooldown persistence, plugin wiring gates), `hit-signal.spec` (12: the usage-hit opposing fixtures — a restating answer hits, an ignored injection and a mere mention do not — the store's `markHits` accounting, the sweep's hit-first ranking, the live ledger listeners incl. the consumed-ledger and disabled cases), `write-path-rework-acceptance.spec` (5: the phase-1 corpus replay assertions — prog101 contradiction annotated, prog112 projectName, the audited duplicate-pair baseline, the acceptance corpus contract), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
-2. **Contract** — `store-contract.spec` (40): the same contract body runs twice, over the in-memory `TestMemoryStore` and the real `DomainMemoryStore`; search assertions follow the BM25 token semantics (any query token matching counts; a bare substring matches nothing; CRUD/pin/health/scanner rejections/project-scope validation/recordRecall side-effect freedom; janitor two-tier decay, importance ranking, recall stamping, and pin TOCTOU live in dedicated describes over the real implementation).
+2. **Contract** — `store-contract.spec` (76): the same contract body runs three times, over the in-memory `TestMemoryStore`, the real `DomainMemoryStore`, and the `SqliteMemoryStore` backend (the write-path rework's parameterized double-backend discipline); search assertions follow the BM25 token semantics (any query token matching counts; a bare substring matches nothing; CRUD/pin/health/scanner rejections/project-scope validation/recordRecall side-effect freedom; janitor two-tier decay, importance ranking, recall stamping, and pin TOCTOU live in dedicated describes over the real implementation); the markHits/migration describes cover the SQLite specifics over the real implementations.
 3. **Tool behavior** — `tools.spec` (37): the eight `execute()` paths against a real `ToolRuntime` + `SystemPrompt` composition with the in-memory store; `tools-confirm-and-window.spec` (10): confirm-mode queueing (`{ pending, suggestionId }`, `targetEntryId` proposals) + `memory_list` smart view (newest-first, `since`/`until` window, metadata, widen hint).
 4. **Remote & client UI** — `remote-service.spec` (12: projects aggregation / staleSince·stale passthrough / newest-first ordering / `recordRecall:false` suppression / archive + suggestion methods); `memory-section.client.spec.tsx` (24, jsdom): tab split / lazy loading / filters / review-queue adopt·reject·edit / manage write actions / error recovery.
 5. **Integration** — `integration/composition.spec` (36): full Cordis composition with `storage-domain` + JSON backend, exercising store, tools, context injection, and notes end-to-end; `integration/host.spec` (13, P1-3): the real composition booted over a temp dir — asserting against **physical files on disk** and **assembled system-prompt text** (the layer that catches host API drift); `confirm-extraction.spec` (7): confirm-mode extraction end-to-end (queue instead of store, tool proposals, curator proposals); `dedup-integration.spec` (2) against a real store; `settings-live.spec` (5) live-settings application; `judge-real-api.spec` (6, skipped without API keys) against the real DeepSeek API.
@@ -889,7 +905,11 @@ src/
 ├── store/
 │   ├── index.ts          # storage-domain provider → DomainMemoryStore
 │   │                     #   (entries + audit + suggestions + meta tables, two-tier janitor,
-│   │                     #   BM25 search, archive toggle, review queue with hits)
+│   │                     #   BM25 search, archive toggle, review queue with hits;
+│   │                     #   backend selection host-medium/sqlite + one-time migration)
+│   ├── sqlite.ts         # SqliteMemoryStore: node:sqlite DatabaseSync over
+│   │                     #   $DSH_HOME/storages/memory.db (WAL), one-statement
+│   │                     #   writes with entries+audit in one transaction
 │   └── bm25.ts           # tokenizeForSearch (CJK uni+bi-grams) + Bm25Index scorer
 ├── tool/index.ts         # eight model tools (defineTool + schemastery, live cap,
 │                         #   confirm-mode queueing, smart memory_list view + time window)
