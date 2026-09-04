@@ -30,7 +30,7 @@ function memTable<K extends string, V>(): KvTable<K, V> {
 }
 
 function makeRealStore(): DomainMemoryStore {
-  return new DomainMemoryStore(memTable(), memTable(), memTable())
+  return new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
 }
 
 /** Stream that fails the test if the LLM is ever consulted (judge must be off). */

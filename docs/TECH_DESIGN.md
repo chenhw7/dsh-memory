@@ -19,7 +19,7 @@
 | Row | Export | Responsibility |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + **suggestion-queue** tables) |
+| `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + suggestion-queue + **meta** tables) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin/forget`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + dedup + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6 — [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
@@ -92,7 +92,7 @@ The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which insert
 | Row | Required (`inject`) | Optional (read via `ctx.get`) | Role |
 |---|---|---|---|
 | `memory-root` | — | — | No-op root entry for client-module scanner discovery |
-| `memory-store` | `storageDomain` | — | Opens the `memory` domain (entries + audit + suggestions); registers `ctx.memory` |
+| `memory-store` | `storageDomain` | — | Opens the `memory` domain (entries + audit + suggestions + meta); registers `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | Registers the eight model tools (confirm-mode aware) |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | Accumulator + periodic review + flush + janitor + curator + suggestion queue producer; owns the `memory-review` namespace |
 | `memory-notes` | — | `memory`, `settings` | Registers `ctx.projectNotes`; renders the `project-notes` prompt snapshot (pure in-memory); cleans up ≤0.5.x file-export artifacts |
@@ -105,7 +105,7 @@ flowchart TB
     base["dsh-base + dsh-web-app layers<br/>(session · agent · llm · tools · systemPrompt · settings · compaction · storage-json + storage-domain)"]
     subgraph bundle["@chenhw7/dsh-memory — one layer, seven rows"]
       root["memory-root<br/>no-op scanner entry"]
-      store["memory-store · /store<br/>ctx.memory provider + BM25 search<br/>entries + audit + suggestions tables"]
+      store["memory-store · /store<br/>ctx.memory provider + BM25 search<br/>entries + audit + suggestions + meta tables"]
       tool["tool-memory · /tool<br/>eight model tools (confirm-mode aware)"]
       review["memory-review · /review<br/>accumulator + LLM extraction + dedup<br/>+ janitor + curator + review queue · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt projection · ctx.projectNotes<br/>≤0.5.x artifact cleanup"]
@@ -226,6 +226,17 @@ interface MemoryEntry {
   readonly importance?: number   // model-assessed importance 1–5 (optional on
                                  // add/replace; clamped into range on write;
                                  // absent = not assessed)
+  readonly anchors?: string[]    // hard tokens extracted from the source
+                                 // conversation (numbers, identifiers, tool
+                                 // names, repo names/paths) for consolidation
+                                 // prefiltering; absent = none extracted —
+                                 // never used for retrieval ranking
+  readonly status?: 'active' | 'superseded' // consolidation lifecycle; absent
+                                 // reads as 'active'; 'superseded' entries
+                                 // stay tool-visible (with a badge) but drop
+                                 // out of injection and search surfaces
+  readonly supersededBy?: MemoryId // the entry that won the contradiction,
+                                 // set together with status: 'superseded'
 }
 ```
 
@@ -242,7 +253,8 @@ JSON on the durable medium:
   "pinned": true,
   "createdAt": 1755500000000,
   "updatedAt": 1755500000000,
-  "lastRecalledAt": 1755600000000
+  "lastRecalledAt": 1755600000000,
+  "anchors": ["pnpm", "package-lock.json"]
 }
 ```
 
@@ -270,10 +282,11 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
 
 ### 6.3 Persistence layout
 
-- The store provider opens a storage-domain named **`memory`** (version 0) with **three tables**:
+- The store provider opens a storage-domain named **`memory`** (version 0) with **four tables**:
   - `entries` — a KV table keyed by `MemoryId`. Records are validated against a Zod schema on load.
   - `audit` — a KV table keyed by `AuditId`. Forward-compatible addition: storage-json initializes absent tables empty, so existing v0 media reopen without migration.
   - `suggestions` — a KV table keyed by `SuggestionId` holding the pending human-review queue (§7.3.6). Same forward-compatible story: pre-P1 media reopen with the table initialized empty.
+  - `meta` — a KV table keyed by plain string holding subsystem state rows that are not memories, audit records, or suggestions: consolidation progress (`consolidation:*` keys, e.g. last-run/cooldown timestamps), medium-level migration markers (`medium:*`, e.g. `migratedToSqlite`), and schema markers (`schema:*`). A record is a permissive carrier `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }` (loose zod schema): unknown keys and unknown fields re-read without error, and pre-meta media reopen with the table initialized empty. The store exposes `getMeta(key)`/`setMeta(key, record)`; a failed write is reported as a swallowed background failure (`meta-write`), never thrown into the caller.
 - The **audit table** records every `add`/`update`/`remove` (pin/unpin mutate without audit records) with an `AuditEntry`:
   - `source`: `'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` — who triggered the write.
   - `op`: `'add'` | `'update'` | `'remove'`.
@@ -842,7 +855,7 @@ src/
 │                         #   zh/en slices) + measureInjectionCost (P1-4/P1-8)
 ├── store/
 │   ├── index.ts          # storage-domain provider → DomainMemoryStore
-│   │                     #   (entries + audit + suggestions tables, two-tier janitor,
+│   │                     #   (entries + audit + suggestions + meta tables, two-tier janitor,
 │   │                     #   BM25 search, archive toggle, review queue with hits)
 │   └── bm25.ts           # tokenizeForSearch (CJK uni+bi-grams) + Bm25Index scorer
 ├── tool/index.ts         # eight model tools (defineTool + schemastery, live cap,

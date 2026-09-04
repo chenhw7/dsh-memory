@@ -6,7 +6,8 @@
  * the automatic extraction, and the system-prompt context injection.
  *
  * The root entry re-exports the shared vocabulary (types, MemoryStore,
- * scanContent) so internal modules and downstream consumers share one surface.
+ * scanContent, the store's meta-record type) so internal modules and
+ * downstream consumers share one surface.
  *
  * @module @chenhw7/dsh-memory
  */
@@ -47,6 +48,7 @@ export type {
   SearchMemoryResult,
   UpdateMemoryInput,
 } from './types.ts'
+export type { MemoryMetaRecord } from './store/index.ts'
 export { MemoryId, AuditId, SuggestionId, scanContent }
 
 declare module '@deepseek-ai/cordis' {

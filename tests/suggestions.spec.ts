@@ -24,7 +24,7 @@ function memTable<K extends string, V>(): KvTable<K, V> {
 }
 
 function makeStore(suggestionCap?: number): DomainMemoryStore {
-  return new DomainMemoryStore(memTable(), memTable(), memTable(), 200, suggestionCap ?? 200)
+  return new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, suggestionCap ?? 200)
 }
 
 /** English content that passes the scanner; the suffix keeps it unique. */

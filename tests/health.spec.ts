@@ -42,7 +42,7 @@ function brokenAuditTable(): KvTable<AuditId, AuditEntry> {
 describe('background failure observability', () => {
   it('keeps the primary write intact when the audit append fails, and reports it', async () => {
     const warns: string[] = []
-    const store = new DomainMemoryStore(memTable(), brokenAuditTable(), memTable(), 200, 200,
+    const store = new DomainMemoryStore(memTable(), brokenAuditTable(), memTable(), memTable(), 200, 200,
       { warn: message => { warns.push(message) } })
 
     const { entry } = await store.add({ scope: 'global', content: 'always run the linter before commit' })
@@ -55,7 +55,7 @@ describe('background failure observability', () => {
 
   it('counts per site and formats one warn line per report', () => {
     const warns: string[] = []
-    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), 200, 200,
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, 200,
       { warn: message => { warns.push(message) } })
 
     store.reportFailure('judge', new Error('route missing'))
@@ -71,7 +71,7 @@ describe('background failure observability', () => {
   })
 
   it('omits backgroundFailures from health() while no failure has occurred', () => {
-    const store = new DomainMemoryStore(memTable(), memTable(), memTable())
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
     expect('backgroundFailures' in store.health()).toBe(false)
   })
 })

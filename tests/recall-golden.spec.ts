@@ -59,7 +59,7 @@ async function fixtureStore(): Promise<DomainMemoryStore> {
       updatedAt: t,
     })
   }
-  return new DomainMemoryStore(entries, memTable(), memTable())
+  return new DomainMemoryStore(entries, memTable(), memTable(), memTable())
 }
 
 const verbose = process.env.DSH_MEMORY_EVAL_VERBOSE === '1'

@@ -27,7 +27,7 @@ sequenceDiagram
 
     Host->>Store: apply(ctx) [inject: storageDomain]
     Store->>SD: ctx.storageDomain.open(memoryDomainSpec)
-    Note over SD: domain "memory" v0<br/>表：entries + audit + suggestions
+    Note over SD: domain "memory" v0<br/>表：entries + audit + suggestions + meta
     Store->>Store: domain.table('entries') + domain.table('audit')<br/>+ domain.table('suggestions')
     Store->>Host: ctx.provide('memory', DomainMemoryStore)<br/>ctx.effect(() => domain.close())
 
@@ -676,7 +676,7 @@ graph TB
     subgraph "存储层"
         Store["store/index.ts<br/>DomainMemoryStore"]
         BM25["store/bm25.ts<br/>tokenizeForSearch + Bm25Index"]
-        SD["storageDomain<br/>entries + audit + suggestions 三张表"]
+        SD["storageDomain<br/>entries + audit + suggestions + meta 四张表"]
         Scanner["scanner.ts<br/>scanContent / redactBlocked / allowlist"]
         Brand["brand.ts<br/>MemoryId / AuditId / SuggestionId"]
     end

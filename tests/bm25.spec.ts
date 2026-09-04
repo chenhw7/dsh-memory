@@ -153,7 +153,7 @@ function summaryStore(...specs: { id: string; content: string; summary?: string 
       updatedAt: 1,
     })
   }
-  return new DomainMemoryStore(entries, memTable(), memTable())
+  return new DomainMemoryStore(entries, memTable(), memTable(), memTable())
 }
 
 describe('buildCorpusStatsFromTokens (pre-tokenized seam)', () => {

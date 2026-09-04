@@ -80,6 +80,30 @@ export interface MemoryEntry {
    * entry the model keeps surfacing survives through `accessCount` instead.
    */
   readonly importance?: number | undefined
+  /**
+   * Hard tokens extracted from the source conversation for consolidation
+   * prefiltering: numbers, identifiers, tool names, repository names/paths.
+   * Absent means "no anchors extracted" — the entry then matches on lexical
+   * content alone. Anchors never affect retrieval ranking; their only
+   * consumer is the consolidation candidate selector (shared low-frequency
+   * anchors propose candidate pairs; the consolidation judge reads full text).
+   */
+  readonly anchors?: readonly string[] | undefined
+  /**
+   * Consolidation lifecycle status; absent reads as `'active'`. A
+   * `'superseded'` entry has lost to a contradictory newer fact: it stays
+   * visible through the tool/management surfaces (with a superseded badge)
+   * but is filtered out of the injection and search surfaces. The field
+   * pairs with {@link supersededBy}; supersession is terminal — no surface
+   * flips an entry back to active.
+   */
+  readonly status?: 'active' | 'superseded' | undefined
+  /**
+   * The id of the entry that superseded this one, set together with
+   * `status: 'superseded'` so a contradiction stays navigable. Absent on
+   * active entries.
+   */
+  readonly supersededBy?: MemoryId | undefined
 }
 
 /** Input for creating a new memory entry. */
@@ -107,6 +131,12 @@ export interface AddMemoryInput {
    * and mid-range alike rather than penalizing unassessed entries.
    */
   readonly importance?: number | undefined
+  /**
+   * Hard tokens (numbers, identifiers, tool names, repository names/paths)
+   * extracted from the source conversation; stored verbatim as the entry's
+   * `anchors`. Omitted when the writer extracted none.
+   */
+  readonly anchors?: readonly string[] | undefined
 }
 
 /** Input for updating an existing memory entry. */
@@ -119,6 +149,13 @@ export interface UpdateMemoryInput {
   readonly summary?: string | undefined
   /** New model-assessed importance (1–5, clamped); omitted keeps the stored value. */
   readonly importance?: number | undefined
+  /**
+   * New anchors (hard tokens from the source conversation); omitted keeps the
+   * stored value. Supersession (`status`/`supersededBy`) is deliberately NOT
+   * writable here: only the consolidation path flips an entry's status, and
+   * that path writes through its own dedicated seam.
+   */
+  readonly anchors?: readonly string[] | undefined
   /** Provenance tag for the audit trail; defaults to `'tool'` when omitted. */
   readonly source?: AuditSource | undefined
   /** Session id for the audit trail; omitted by tool writes that lack a session handle. */

@@ -3,6 +3,7 @@ import { MemoryId, scanContent, validateProjectScope, validateContent } from '..
 import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 import { DomainMemoryStore } from '../src/store/index.ts'
+import type { MemoryMetaRecord } from '../src/store/index.ts'
 import { tokenizeForSearch } from '../src/store/bm25.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
@@ -295,13 +296,117 @@ export function runStoreContractSuite(name: string, makeStore: () => MemoryStore
 // TestMemoryStore and the real storage-domain DomainMemoryStore (each table a
 // test stub, same shape as health.spec).
 runStoreContractSuite('TestMemoryStore', () => new TestMemoryStore())
-runStoreContractSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(), memTable(), memTable()))
+runStoreContractSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(), memTable(), memTable(), memTable()))
+
+// The anchors/status/supersededBy consolidation fields are a domain-store
+// write-plane behavior, tested against the real implementation like the
+// importance signals below.
+describe('consolidation-fields (DomainMemoryStore)', () => {
+  const makeStore = () => new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
+
+  it('stores anchors at add time and leaves them absent when not supplied', async () => {
+    const store = makeStore()
+    const { entry: anchored } = await store.add({
+      scope: 'project',
+      content: 'This repo uses pnpm',
+      projectName: 'demo',
+      anchors: ['pnpm', 'package-lock.json'],
+    })
+    expect(anchored.anchors).toEqual(['pnpm', 'package-lock.json'])
+    const { entry: plain } = await store.add({ scope: 'global', content: 'no anchors here' })
+    expect(plain.anchors).toBeUndefined()
+  })
+
+  it('update rewrites anchors when supplied and keeps the stored value otherwise', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({
+      scope: 'project',
+      content: 'original anchor set',
+      projectName: 'demo',
+      anchors: ['pnpm'],
+    })
+    const reanchored = await store.update(entry.id, { content: 'updated', anchors: ['pnpm', 'npm'] })
+    expect(reanchored!.anchors).toEqual(['pnpm', 'npm'])
+    const untouched = await store.update(entry.id, { content: 'updated again' })
+    expect(untouched!.anchors).toEqual(['pnpm', 'npm'])
+  })
+
+  it('persisted anchors/status/supersededBy survive a table reopen (durable round trip)', async () => {
+    // The durable medium is the real round-trip subject: the entries table
+    // stub here stands in for the domain's validated table, so the record
+    // shape written through add() must re-read unchanged after reopen.
+    const entries = memTable<MemoryId, MemoryEntry>()
+    const store = new DomainMemoryStore(entries, memTable(), memTable(), memTable())
+    const { entry: old } = await store.add({
+      scope: 'global',
+      content: 'uses pnpm',
+      anchors: ['pnpm', 'package-lock.json'],
+    })
+    const { entry: fresh } = await store.add({
+      scope: 'global',
+      content: 'uses npm',
+      anchors: ['npm'],
+    })
+    // Simulate the consolidation conflict write: mark the loser superseded.
+    const superseded = { ...store.get(old.id)!, status: 'superseded', supersededBy: fresh.id } as MemoryEntry
+    await entries.put(old.id, superseded)
+
+    const reopened = new DomainMemoryStore(entries, memTable(), memTable(), memTable())
+    const oldAfter = reopened.get(old.id)!
+    expect(oldAfter.anchors).toEqual(['pnpm', 'package-lock.json'])
+    expect(oldAfter.status).toBe('superseded')
+    expect(oldAfter.supersededBy).toBe(fresh.id)
+    expect(reopened.get(fresh.id)!.status).toBeUndefined()
+  })
+})
+
+// The meta table is a domain-store behavior (getMeta/setMeta live there);
+// round-trip persistence through reopen is its zero-migration contract.
+describe('meta-table (DomainMemoryStore)', () => {
+  it('setMeta stores a record; getMeta reads it back', async () => {
+    const meta = memTable<string, MemoryMetaRecord>()
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), meta)
+    await store.setMeta('consolidation:lastRun', { key: 'consolidation', value: '1755500000000' })
+    const record = store.getMeta('consolidation:lastRun')
+    expect(record).toBeDefined()
+    expect(record!.key).toBe('consolidation')
+    expect(record!.value).toBe('1755500000000')
+    // setMeta stamps updatedAt when the caller omits it.
+    expect(record!.updatedAt).toBeTypeOf('number')
+    expect(store.getMeta('schema:version')).toBeUndefined()
+  })
+
+  it('setMeta keeps the caller-supplied updatedAt and replaces the whole record', async () => {
+    const meta = memTable<string, MemoryMetaRecord>()
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), meta)
+    await store.setMeta('medium:migratedToSqlite', { key: 'medium', value: 'done', updatedAt: 1_700_000_000_000 })
+    expect(store.getMeta('medium:migratedToSqlite')).toEqual({ key: 'medium', value: 'done', updatedAt: 1_700_000_000_000 })
+  })
+
+  it('a meta write failure is reported as a swallowed background failure, not a throw', async () => {
+    const brokenMeta = { ...memTable<string, MemoryMetaRecord>(), put: async () => { throw new Error('disk gone') } } as KvTable<string, MemoryMetaRecord>
+    const warns: string[] = []
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), brokenMeta, 200, 200, { warn: m => { warns.push(m) } })
+    await expect(store.setMeta('consolidation:lastRun', { key: 'consolidation', value: 'x' })).resolves.toBeUndefined()
+    expect(store.health().backgroundFailures?.['meta-write']).toBe(1)
+    expect(warns[0]).toContain('meta-write failed')
+  })
+
+  it('meta records survive a reopen over the same table (durable round trip)', async () => {
+    const meta = memTable<string, MemoryMetaRecord>()
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), meta)
+    await store.setMeta('consolidation:lastRun', { key: 'consolidation', value: '1755500000000' })
+
+    const reopened = new DomainMemoryStore(memTable(), memTable(), memTable(), meta)
+    expect(reopened.getMeta('consolidation:lastRun')!.value).toBe('1755500000000')
+  })
+})
 
 // The importance/accessCount use-signals are a domain-store behavior (recall
 // stamping and the janitor live there), so they are tested against the real
 // implementation rather than the in-memory stand-in.
 describe('importance-signal (DomainMemoryStore)', () => {
-  const makeStore = () => new DomainMemoryStore(memTable(), memTable(), memTable())
+  const makeStore = () => new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
 
   it('stores a clamped add-time importance and leaves absent as absent', async () => {
     const store = makeStore()
@@ -415,7 +520,7 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
 
   it('one 50-hit search issues exactly one durable write per changed entry (no per-hit fan-out beyond the stamp)', async () => {
     const entries = countingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     for (let i = 0; i < 50; i++) {
       await store.add({ scope: 'global', content: `batch probe ${i} sharedtoken` })
     }
@@ -439,7 +544,7 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
 
   it('a memory_replace landing between search and stamp survives in the stamped record', async () => {
     const entries = countingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'global', content: 'original text editable' })
 
     // Interleave: replace (durable), then the recall stamp enqueued after it.
@@ -456,7 +561,7 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
 
   it('a recall stamp landing after a replace does not roll the edit back', async () => {
     const entries = countingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'global', content: 'editable here' })
 
     // The stamp job is enqueued first (fire-and-forget); the edit joins the
@@ -480,7 +585,7 @@ describe('recall-stamp-batching (DomainMemoryStore)', () => {
 // 'janitor' (system-initiated lifecycle write; AuditSource is a fixed enum).
 describe('entries-cap (DomainMemoryStore)', () => {
   const makeStore = (entriesCap: number) =>
-    new DomainMemoryStore(memTable(), memTable(), memTable(), 200, 200, undefined, entriesCap)
+    new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, 200, undefined, entriesCap)
 
   /** Advance monotonic-ish timestamps between adds so createdAt orders stably. */
   const tick = () => new Promise(resolve => { setTimeout(resolve, 5) })
@@ -546,7 +651,7 @@ describe('entries-cap (DomainMemoryStore)', () => {
         pinned: true,
       } as MemoryEntry)
     }
-    const store = new DomainMemoryStore(seeded, memTable(), memTable(), 200, 200, undefined, 2)
+    const store = new DomainMemoryStore(seeded, memTable(), memTable(), memTable(), 200, 200, undefined, 2)
     await store.add({ scope: 'global', content: 'one more on top' })
 
     // Cap 2 vs 5 rows: the only unpinned candidate is the fresh add itself —
@@ -602,7 +707,7 @@ describe('scale-trigger-selfcheck (DomainMemoryStore)', () => {
 
   it('warns at exactly the 80% line and cites the migration threshold', () => {
     const warns: string[] = []
-    new DomainMemoryStore(seededTable(8), memTable(), memTable(), 200, 200,
+    new DomainMemoryStore(seededTable(8), memTable(), memTable(), memTable(), 200, 200,
       { warn: message => { warns.push(message) } }, 10)
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('dsh-memory:')
@@ -612,15 +717,15 @@ describe('scale-trigger-selfcheck (DomainMemoryStore)', () => {
 
   it('stays silent below the line and on a fresh medium', () => {
     const warns: string[] = []
-    new DomainMemoryStore(seededTable(7), memTable(), memTable(), 200, 200,
+    new DomainMemoryStore(seededTable(7), memTable(), memTable(), memTable(), 200, 200,
       { warn: message => { warns.push(message) } }, 10)
-    new DomainMemoryStore(seededTable(0), memTable(), memTable(), 200, 200,
+    new DomainMemoryStore(seededTable(0), memTable(), memTable(), memTable(), 200, 200,
       { warn: message => { warns.push(message) } }, 10)
     expect(warns).toEqual([])
   })
 
   it('construction survives a missing logger (selfcheck is best-effort)', () => {
-    expect(() => new DomainMemoryStore(seededTable(10), memTable(), memTable(), 200, 200, undefined, 10)).not.toThrow()
+    expect(() => new DomainMemoryStore(seededTable(10), memTable(), memTable(), memTable(), 200, 200, undefined, 10)).not.toThrow()
   })
 
   it('composition boot over a seeded large medium warns through the host logger', async () => {
@@ -712,7 +817,7 @@ describe('janitor-pin-toctou (DomainMemoryStore)', () => {
 
   it('a pin landing between the snapshot and the soft-decay stamp keeps the entry unstamped', async () => {
     const entries = interceptingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'global', content: 'pin me before decay' })
 
     // The concurrent pin lands inside the janitor's own write-chain slot,
@@ -728,7 +833,7 @@ describe('janitor-pin-toctou (DomainMemoryStore)', () => {
 
   it('a pin landing between the snapshot and the hard-decay guard keeps a project entry', async () => {
     const entries = interceptingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'project', content: 'pinned project fact', projectName: 'demo' })
 
     entries.setHook(key => { store.pin(key) })
@@ -742,7 +847,7 @@ describe('janitor-pin-toctou (DomainMemoryStore)', () => {
 
   it('an unpinned overdue global entry is still soft-decayed through the update slot', async () => {
     const entries = interceptingTable<MemoryId, MemoryEntry>()
-    const store = new DomainMemoryStore(entries.table, memTable(), memTable())
+    const store = new DomainMemoryStore(entries.table, memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'global', content: 'decay me normally' })
 
     entries.setHook(() => { /* no concurrent pin this time */ })

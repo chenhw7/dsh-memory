@@ -602,5 +602,131 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
 
       await root2.dispose()
     })
+
+    it('opens a pre-meta, pre-consolidation-fields memory.json with zero migration', async () => {
+      // Dispose the current composition so the JSON file is released.
+      await root.dispose()
+
+      // Simulate an older writer: no meta table key, no anchors/status/
+      // supersededBy on the entry. The medium must open unchanged — no
+      // error, complete data, no noise written back.
+      const file = join(dir, 'memory.json')
+      writeFileSync(file, JSON.stringify({
+        unit: { name: 'memory', version: 0 },
+        global: null,
+        tables: {
+          entries: {
+            'legacy-id': {
+              id: 'legacy-id',
+              scope: 'global',
+              content: 'legacy fact before consolidation fields',
+              createdAt: 1755500000000,
+              updatedAt: 1755500000000,
+            },
+          },
+          audit: {},
+          suggestions: {},
+        },
+      }, null, 2) + '\n')
+
+      const ctx2 = new Context()
+      const root2 = await ctx2.plugin(Storage)
+      await ctx2.plugin(storageJson, { root: dir })
+      await ctx2.plugin(storageDomain, { backend: 'json' })
+      await ctx2.plugin(memoryStore)
+      const store2 = ctx2.get('memory') as DomainMemoryStore
+
+      const legacy = store2.list()
+      expect(legacy).toHaveLength(1)
+      expect(legacy[0]!.content).toBe('legacy fact before consolidation fields')
+      expect(legacy[0]!.anchors).toBeUndefined()
+      expect(legacy[0]!.status).toBeUndefined()
+      expect(legacy[0]!.supersededBy).toBeUndefined()
+      // Absent meta table initialized empty — no record, no throw.
+      expect(store2.getMeta('consolidation:lastRun')).toBeUndefined()
+
+      await root2.dispose()
+
+      // No noise: the dispose path itself (cross-process claim + goodbye is
+      // expected medium traffic; the pre-audit test above documents it) aside,
+      // the data plane is untouched — the legacy entry record reads back
+      // byte-identical to what we seeded.
+      const after = JSON.parse(readFileSync(file, 'utf-8')) as {
+        tables: Record<string, Record<string, unknown>>
+      }
+      expect(after.tables.entries['legacy-id']).toEqual({
+        id: 'legacy-id',
+        scope: 'global',
+        content: 'legacy fact before consolidation fields',
+        createdAt: 1755500000000,
+        updatedAt: 1755500000000,
+      })
+      expect(after.tables.meta).toEqual({})
+    })
+
+    it('reopens a medium with consolidation fields and unknown meta keys and keeps every table on write-back', async () => {
+      await root.dispose()
+
+      // A future/foreign writer's medium: new fields on the entry, a known
+      // meta key, and an UNKNOWN meta key. The current code must read all of
+      // it and write back without dropping either table's rows.
+      const file = join(dir, 'memory.json')
+      writeFileSync(file, JSON.stringify({
+        unit: { name: 'memory', version: 0 },
+        global: null,
+        tables: {
+          entries: {
+            'new-id': {
+              id: 'new-id',
+              scope: 'global',
+              content: 'entry with consolidation fields',
+              createdAt: 1755500000000,
+              updatedAt: 1755500000000,
+              anchors: ['pnpm', 'package-lock.json'],
+              status: 'superseded',
+              supersededBy: 'other-id',
+            },
+          },
+          audit: {},
+          suggestions: {},
+          meta: {
+            'consolidation:lastRun': { key: 'consolidation', value: '1755500000000', updatedAt: 1755500000000 },
+            'unknown:reserved': { key: 'schema', marker: 'future-payload' },
+          },
+        },
+      }, null, 2) + '\n')
+
+      const ctx2 = new Context()
+      const root2 = await ctx2.plugin(Storage)
+      await ctx2.plugin(storageJson, { root: dir })
+      await ctx2.plugin(storageDomain, { backend: 'json' })
+      await ctx2.plugin(memoryStore)
+      const store2 = ctx2.get('memory') as DomainMemoryStore
+
+      // The entry's new fields survive the load-time zod validation.
+      const loaded = store2.list()
+      expect(loaded).toHaveLength(1)
+      expect(loaded[0]!.anchors).toEqual(['pnpm', 'package-lock.json'])
+      expect(loaded[0]!.status).toBe('superseded')
+      expect(loaded[0]!.supersededBy).toBe('other-id')
+      // Known and unknown meta keys both read back — loose record schema.
+      expect(store2.getMeta('consolidation:lastRun')!.value).toBe('1755500000000')
+      expect(store2.getMeta('unknown:reserved')!.marker).toBe('future-payload')
+
+      // Write something so the medium republishes, then check nothing was
+      // dropped: the unknown meta key and the new entry fields survive.
+      await store2.add({ scope: 'global', content: 'post-reopen write' })
+      await root2.dispose()
+
+      const republished = JSON.parse(readFileSync(file, 'utf-8')) as {
+        tables: Record<string, Record<string, Record<string, unknown>>>
+      }
+      const entry = republished.tables.entries['new-id'] as Record<string, unknown> | undefined
+      expect(entry?.anchors).toEqual(['pnpm', 'package-lock.json'])
+      expect(entry?.status).toBe('superseded')
+      expect(entry?.supersededBy).toBe('other-id')
+      expect(republished.tables.meta['consolidation:lastRun']).toBeDefined()
+      expect(republished.tables.meta['unknown:reserved']?.marker).toBe('future-payload')
+    })
   })
 })

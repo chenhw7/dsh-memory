@@ -92,7 +92,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 | 行 | 必需（`inject`） | 可选（经 `ctx.get` 读取） | 角色 |
 |---|---|---|---|
 | `memory-root` | — | — | 无操作根条目，供客户端模块扫描器发现 |
-| `memory-store` | `storageDomain` | — | 打开 `memory` 域（entries + audit + suggestions）；注册 `ctx.memory` |
+| `memory-store` | `storageDomain` | — | 打开 `memory` 域（entries + audit + suggestions + meta）；注册 `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | 注册八个模型工具（人审模式感知） |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | 累加器 + 周期 review + flush + janitor + curator + 建议队列生产者；持有 `memory-review` 命名空间 |
 | `memory-notes` | — | `memory`, `settings` | 注册 `ctx.projectNotes`；渲染 `project-notes` prompt 快照（纯内存）；清理 ≤0.5.x 文件残留 |
@@ -105,7 +105,7 @@ flowchart TB
     base["dsh-base + dsh-web-app 层<br/>(session · agent · llm · tools · systemPrompt · settings · compaction · storage-json + storage-domain)"]
     subgraph bundle["@chenhw7/dsh-memory — 一层七行"]
       root["memory-root<br/>无操作扫描入口"]
-      store["memory-store · /store<br/>ctx.memory provider + BM25 检索<br/>entries + audit + suggestions 三张表"]
+      store["memory-store · /store<br/>ctx.memory provider + BM25 检索<br/>entries + audit + suggestions + meta 四张表"]
       tool["tool-memory · /tool<br/>八个模型工具（人审模式感知）"]
       review["memory-review · /review<br/>累加器 + LLM 提取 + 去重<br/>+ janitor + curator + 人审队列 · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt 投影 · ctx.projectNotes<br/>≤0.5.x 文件残留清理"]
@@ -226,6 +226,14 @@ interface MemoryEntry {
   readonly importance?: number   // 模型自评重要性 1–5（add/replace 可选；
                                  // 写入时收窄进范围；
                                  // 缺省 = 未评估）
+  readonly anchors?: string[]    // 提取自源对话的硬 token（数字、标识符、
+                                 // 工具名、仓库名/路径），供整合预筛使用；
+                                 // 缺省 = 未提取——从不参与检索排序
+  readonly status?: 'active' | 'superseded' // 整合生命周期；缺省读作 'active'；
+                                 // 'superseded' 条目在工具面仍可见（带徽标），
+                                 // 但从注入面与检索面消失
+  readonly supersededBy?: MemoryId // 矛盾中胜出的条目 id，
+                                 // 与 status: 'superseded' 同时设置
 }
 ```
 
@@ -242,7 +250,8 @@ interface MemoryEntry {
   "pinned": true,
   "createdAt": 1755500000000,
   "updatedAt": 1755500000000,
-  "lastRecalledAt": 1755600000000
+  "lastRecalledAt": 1755600000000,
+  "anchors": ["pnpm", "package-lock.json"]
 }
 ```
 
@@ -270,10 +279,11 @@ interface MemoryEntry {
 
 ### 6.3 持久化布局
 
-- store provider 打开名为 **`memory`** 的 storage-domain（版本 0），含**三张表**：
+- store provider 打开名为 **`memory`** 的 storage-domain（版本 0），含**四张表**：
   - `entries` — 以 `MemoryId` 为键的 KV 表。记录加载时经 Zod schema 校验。
   - `audit` — 以 `AuditId` 为键的 KV 表。属向前兼容的新增：storage-json 把缺失表初始化为空 map，旧 v0 介质无需迁移即可重新打开。
   - `suggestions` — 以 `SuggestionId` 为键的 KV 表，承载待确认人审队列（§7.3.6）。同样是向前兼容的故事：P1 之前的介质重新打开时该表初始化为空。
+  - `meta` — 以普通字符串为键的 KV 表，承载既非记忆、也非审计记录或建议的子系统状态行：整合进度（`consolidation:*` 键，如 last-run/cooldown 时间戳）、介质层迁移标记（`medium:*`，如 `migratedToSqlite`）与 schema 标记（`schema:*`）。记录是宽容载体 `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }`（loose zod schema）：未知键与未知字段重读不报错，meta 之前的介质重新打开时该表初始化为空。store 暴露 `getMeta(key)`/`setMeta(key, record)`；写失败记为被吞的后台失败（`meta-write`），绝不抛给调用方。
 - **审计表**为每次 `add`/`update`/`remove`（pin/unpin 变更不写审计）追加一条 `AuditEntry`：
   - `source`：`'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` —— 触发者。
   - `op`：`'add'` | `'update'` | `'remove'`。
@@ -842,7 +852,7 @@ src/
 │                         #   zh/en 切片）+ measureInjectionCost（P1-4/P1-8）
 ├── store/
 │   ├── index.ts          # storage-domain provider → DomainMemoryStore
-│   │                     #   （entries + audit + suggestions 三张表、两层 janitor、
+│   │                     #   （entries + audit + suggestions + meta 四张表、两层 janitor、
 │   │                     #   BM25 search、归档开关、带 hits 的人审队列）
 │   └── bm25.ts           # tokenizeForSearch（CJK 一元+二元）+ Bm25Index 打分器
 ├── tool/index.ts         # 八个模型工具（defineTool + schemastery、实时上限、

@@ -1,7 +1,9 @@
 /**
  * storage-domain provider for the long-term memory store. Opens a `memory`
- * domain with one table (`entries`) keyed by `MemoryId` and implements the
- * {@link MemoryStore} abstract service against it. Reads are synchronous from
+ * domain with four tables (`entries` keyed by `MemoryId`, `audit`, and
+ * `suggestions` for the review queue, `meta` for subsystem state rows) and
+ * implements the {@link MemoryStore} abstract service against them. Reads are
+ * synchronous from
  * the domain's authoritative in-memory state; writes serialize on the domain's
  * write chain and reach the backend before updating memory.
  *
@@ -43,6 +45,24 @@ import type {
   UpdateMemoryInput,
 } from '../types.ts'
 
+/**
+ * One record of the domain's fourth table (`meta`): durable state that is not
+ * a memory entry, an audit record, or a suggestion — consolidation progress
+ * (lastRun/cooldown under the `'consolidation'` key), medium-level migration
+ * markers (`'medium'`, e.g. `migratedToSqlite`), and schema-version markers
+ * (`'schema'`). The row is keyed by its `key` in the table plus any caller
+ * suffix; the carrier fields are permissive-on-read by design (zero
+ * migration): unknown keys and unknown fields re-read without error.
+ */
+export interface MemoryMetaRecord {
+  /** Which subsystem owns this row. */
+  readonly key: 'consolidation' | 'medium' | 'schema'
+  /** Opaque string payload (timestamps, markers, version stamps as text). */
+  readonly value?: string | undefined
+  /** Unix epoch ms of the last write to this record. */
+  readonly updatedAt?: number | undefined
+}
+
 /** Zod schema for one memory entry record on the durable medium. */
 const memoryEntrySchema = zod.object({
   id: zod.string().min(1),
@@ -58,6 +78,9 @@ const memoryEntrySchema = zod.object({
   staleSince: zod.number().optional(),
   accessCount: zod.number().optional(),
   importance: zod.number().optional(),
+  anchors: zod.array(zod.string()).optional(),
+  status: zod.enum(['active', 'superseded']).optional(),
+  supersededBy: zod.string().optional(),
 })
 
 /** Zod schema for one audit-record entry on the durable medium. */
@@ -91,19 +114,33 @@ const suggestionSchema = zod.object({
 })
 
 /**
+ * Zod schema for one meta record on the durable medium. The record is a
+ * deliberately permissive carrier: the `key` discriminates which subsystem
+ * owns the row, and every payload field is optional so a future carrier
+ * extension reopens on today's readers (zero-migration, the same looseObject
+ * rationale as the owner stamp).
+ */
+const metaRecordSchema = zod.looseObject({
+  key: zod.enum(['consolidation', 'medium', 'schema']),
+  value: zod.string().optional(),
+  updatedAt: zod.number().optional(),
+}) as unknown as zod.ZodType<MemoryMetaRecord>
+
+/**
  * The memory domain spec: `entries` (memory records keyed by id) plus `audit`
- * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue), plus
- * a global singleton carrying the single-writer owner stamp (P3
- * cross-process detection). Domain version stays at 0 — all three later
+ * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue) plus
+ * `meta` (subsystem state rows: consolidation progress, migration markers),
+ * plus a global singleton carrying the single-writer owner stamp (P3
+ * cross-process detection). Domain version stays at 0 — all four later
  * additions are forward-compatible: storage-json reads only declared tables
  * and initializes any absent table as an empty map, and a medium whose global
  * slot was never written reads as `null`, which the domain replaces with the
  * spec's `initial` without materializing it, so existing v0 media reopen
  * without migration.
  *
- * The stamp schema accepts extra keys on purpose (`looseObject`): the medium
- * holds the global as opaque JSON, and a future extension of the stamp shape
- * must reopen cleanly on today's readers.
+ * The stamp and meta-record schemas accept extra keys on purpose
+ * (`looseObject`): the medium holds both as opaque JSON, and a future
+ * extension of their shapes must reopen cleanly on today's readers.
  */
 const memoryDomainSpec = defineDomain({
   name: 'memory',
@@ -116,6 +153,7 @@ const memoryDomainSpec = defineDomain({
     entries: domainTable<MemoryId, MemoryEntry>(memoryEntrySchema as unknown as zod.ZodType<MemoryEntry>),
     audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as zod.ZodType<AuditEntry>),
     suggestions: domainTable<SuggestionId, MemorySuggestion>(suggestionSchema as unknown as zod.ZodType<MemorySuggestion>),
+    meta: domainTable<string, MemoryMetaRecord>(metaRecordSchema),
   },
 })
 
@@ -130,6 +168,9 @@ type AuditTable = KvTable<AuditId, AuditEntry>
 
 /** The suggestions table from the opened domain (P1-1 review queue). */
 type SuggestionsTable = KvTable<SuggestionId, MemorySuggestion>
+
+/** The meta table from the opened domain (subsystem state rows). */
+type MetaTable = KvTable<string, MemoryMetaRecord>
 
 /**
  * Maximum audit records retained; oldest are trimmed on overflow. Protocol
@@ -247,6 +288,7 @@ export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DE
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
   const suggestions: SuggestionsTable = domain.table('suggestions')
+  const meta: MetaTable = domain.table('meta')
 
   // Cross-process single-writer detection (host storage-json is
   // last-writer-wins across processes, silently): claim the medium's owner
@@ -261,7 +303,7 @@ export async function apply(ctx: Context, config: StoreConfig = { entriesCap: DE
   const own = currentBootOwner()
   const mediumReader = resolveMediumReader(ctx)
   const mediumGoodbye = resolveMediumGoodbye(ctx, own.bootId)
-  const store = new DomainMemoryStore(entries, audit, suggestions, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap)
+  const store = new DomainMemoryStore(entries, audit, suggestions, meta, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap)
   const guard = new CrossProcessGuard(
     own,
     mediumReader,
@@ -363,6 +405,7 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly entries: EntriesTable
   private readonly audit: AuditTable
   private readonly suggestions: SuggestionsTable
+  private readonly meta: MetaTable
   private readonly auditCap: number
   private readonly suggestionCap: number
   private readonly entriesCap: number
@@ -377,6 +420,7 @@ export class DomainMemoryStore extends MemoryStore {
     entries: EntriesTable,
     audit: AuditTable,
     suggestions: SuggestionsTable,
+    meta: MetaTable,
     auditCap: number = DEFAULT_AUDIT_CAP,
     suggestionCap: number = DEFAULT_SUGGESTION_CAP,
     failureLogger?: { warn(message: string): void },
@@ -386,6 +430,7 @@ export class DomainMemoryStore extends MemoryStore {
     this.entries = entries
     this.audit = audit
     this.suggestions = suggestions
+    this.meta = meta
     this.auditCap = auditCap
     this.suggestionCap = suggestionCap
     this.entriesCap = entriesCap
@@ -422,6 +467,34 @@ export class DomainMemoryStore extends MemoryStore {
     this.failureLogger?.warn(`dsh-memory: ${site} failed${error === undefined ? '' : `: ${String(error)}`}`)
   }
 
+  // ─── Meta table (subsystem state rows, § consolidation/migration) ──────────
+
+  /**
+   * Read one meta record, synchronously from the domain's in-memory state.
+   * @param key - the record's table key (the owning subsystem's `key` plus
+   *   any caller suffix, e.g. `'consolidation:lastRun'`).
+   * @returns the record, or `undefined` when never written.
+   */
+  getMeta(key: string): MemoryMetaRecord | undefined {
+    return this.meta.get(key)
+  }
+
+  /**
+   * Write one meta record durably (insert or full replace — the table's `put`
+   * contract, no partial merge). Best-effort on failure: a meta write never
+   * breaks the caller's primary path, mirroring the audit-append discipline.
+   * @param key - the record's table key.
+   * @param record - the full new record; `updatedAt` is stamped here when the
+   *   caller leaves it off.
+   */
+  async setMeta(key: string, record: MemoryMetaRecord): Promise<void> {
+    try {
+      await this.meta.put(key, record.updatedAt !== undefined ? record : { ...record, updatedAt: Date.now() })
+    } catch (error) {
+      this.reportFailure('meta-write', error)
+    }
+  }
+
   /** Next monotonic audit sequence number (survives reopen via the medium). */
   private nextAuditSeq(): number {
     if (this.auditSeq === undefined) {
@@ -456,6 +529,7 @@ export class DomainMemoryStore extends MemoryStore {
       createdAt: now,
       updatedAt: now,
       ...clampImportance(input.importance),
+      ...input.anchors !== undefined ? { anchors: input.anchors } : {},
     }
     await this.entries.put(id, entry)
     await this.appendAudit('add', id, entry, input.source, input.sessionId)
@@ -504,6 +578,8 @@ export class DomainMemoryStore extends MemoryStore {
       // Only rewrite the field when the caller supplies one; `undefined`
       // keeps the stored importance (add-time assessment stands).
       ...clampImportance(input.importance),
+      // Same absent-means-keep semantics for anchors.
+      ...(input.anchors !== undefined ? { anchors: input.anchors } : {}),
     }
     const updated: MemoryEntry = input.summary === ''
       ? (() => { const { summary: _c, ...rest } = base; return rest as MemoryEntry })()
