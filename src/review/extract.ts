@@ -25,6 +25,10 @@ import type { MemoryId } from '../brand.ts'
 import type { MemoryStore } from '../index.ts'
 import { PITFALL_RESOLVED_SIGNAL, type MemoryCandidate } from './accumulator.ts'
 import { findDuplicate, mergeContent, toDedupCandidate, type JudgeVerdict, JUDGE_SYSTEM_PROMPT, buildJudgePrompt, parseJudgeVerdict } from './dedup.ts'
+import { applyConsolidation } from './consolidate.ts'
+
+/** Which dedup/consolidation write path {@link storeMemories} runs. */
+export type ConsolidationMode = 'two-tier' | 'legacy-judge'
 
 /** Producer attribution for the synthetic extraction request message. */
 const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
@@ -559,12 +563,24 @@ export async function suggestMemories(
  * entry is independent: a scanner rejection or store failure skips that
  * entry without throwing. Does nothing when no memory store is mounted.
  *
- * Dedup flow: the cheap Jaccard prefilter runs first. When it flags a
- * near-duplicate, an optional LLM judge (§3.4) determines the verdict:
- * `duplicate` → merge content, `update` → replace with new content,
- * `new` → create a separate entry. The judge is best-effort: on failure
- * it falls back to `duplicate` (safe merge). When `judgeEnabled` is false,
- * prefilter hits merge directly (the original §3.4 behavior).
+ * Two write paths, selected by {@link ConsolidationMode} (the `consolidation`
+ * Config field; default `two-tier`):
+ *
+ * - `two-tier` (default): the batch first normalizes through the per-entry
+ *   gates (tag strip, date-prefix strip, content scan), then the two-tier
+ *   consolidation runs — a lexical/anchor candidate selection plus at most
+ *   ONE LLM consolidation call per batch ({@link applyConsolidation}). With
+ *   no candidates the batch writes directly with zero consolidation calls.
+ *   The per-pair `judgeDuplicate` does NOT run on this path; `judgeEnabled`
+ *   has no effect here (it remains the legacy path's knob).
+ *
+ * - `legacy-judge` (kill-switch, kept one release): the original per-entry
+ *   flow — the cheap overlap prefilter runs first; a flagged pair goes to
+ *   the LLM judge when `judgeEnabled` (§3.4): `duplicate` → merge content,
+ *   `update` → replace with new content, `new` → create a separate entry.
+ *   The judge is best-effort: on failure it falls back to `duplicate` (safe
+ *   merge). When `judgeEnabled` is false, prefilter hits merge directly (the
+ *   original §3.4 behavior).
  * @param ctx - context carrying an optional `memory` service.
  * @param parsed - the entries to store.
  * @param attachCategory - optional category to attach to every entry.
@@ -574,12 +590,14 @@ export async function suggestMemories(
  *   entries that lack a projectName get this value (§3.6 project auto-detection);
  *   an entry's own `[project: …]` tag (parsed into `parsed.projectName`) wins
  *   over the cwd inference.
- * @param session - the live session, for routing the LLM judge call.
+ * @param session - the live session, for routing the judge/consolidation call.
  * @param modelOverride - optional provider/model override for the judge (§3.6).
- * @param judgeEnabled - whether to run the LLM judge on prefilter hits (default true).
+ * @param judgeEnabled - whether to run the LLM judge on prefilter hits (default true);
+ *   legacy-judge path only.
  * @param confirmMode - when true, proposals land in the human-review queue
  *   instead of the store (P1-1); the judge is skipped there (see
  *   {@link suggestMemories}).
+ * @param consolidation - which write path runs; default `two-tier`.
  */
 export async function storeMemories(
   ctx: Context,
@@ -592,6 +610,7 @@ export async function storeMemories(
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
   confirmMode?: boolean,
+  consolidation: ConsolidationMode = 'two-tier',
 ): Promise<void> {
   if (confirmMode === true) {
     await suggestMemories(ctx, parsed, attachCategory, source, sessionId, inferredProjectName)
@@ -599,13 +618,10 @@ export async function storeMemories(
   }
   const memory = ctx.get('memory')
   if (memory === undefined) return
-  // Snapshot the current entries once for the dedup prefilter. This is cheap:
-  // a synchronous in-memory list at the entry counts we target (tens–hundreds).
-  const existing = memory.list().map(toDedupCandidate)
-  // Project name: the entry's own `[project: …]` tag (parsed.projectName)
-  // wins over the cwd inference, which applies only when the tag is absent.
-  const projectName = (entryScope: MemoryEntry['scope'], tagged: string | undefined): string | undefined =>
-    entryScope === 'project' ? (tagged ?? inferredProjectName) : undefined
+  // Per-entry normalization shared by both paths: category tag resolution,
+  // model-date prefix stripping, and the content scan — every surviving
+  // entry is clean before either write path sees it.
+  const normalized: ParsedMemory[] = []
   for (const entry of parsed) {
     // The extraction prompts may prefix content with a category tag
     // ("[procedure] ", "[convention] ", "[preference] ", "[pitfall] ");
@@ -619,11 +635,71 @@ export async function storeMemories(
     if (content.length === 0) continue
     const scan = scanContent(content)
     if (!scan.allowed) continue
+    normalized.push({
+      scope: entry.scope,
+      content,
+      anchors: entry.anchors ?? [],
+      ...category !== undefined ? { category } : {},
+      ...entry.summary !== undefined ? { summary: entry.summary } : {},
+      ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
+    })
+  }
+  if (normalized.length === 0) return
+  if (consolidation !== 'legacy-judge') {
+    // Two-tier: batch-level candidate selection + at most one consolidation
+    // call (zero when the selector finds no candidate), then the verdict
+    // application and direct writes live inside applyConsolidation.
+    await applyConsolidation(ctx, session, normalized, memory.list(), {
+      source,
+      sessionId,
+      inferredProjectName,
+      modelOverride,
+      signal: undefined,
+    })
+    return
+  }
+  await legacyStoreMemories(ctx, memory, normalized, source, sessionId, session, modelOverride, judgeEnabled, inferredProjectName)
+}
 
-    // Dedup prefilter: if a near-duplicate already exists in the same scope,
-    // run the LLM judge (when enabled) or merge directly.
-    const dupId = findDuplicate(content, entry.scope, existing)
+/**
+ * The legacy per-entry dedup + judge write path (§3.4), preserved verbatim as
+ * the `consolidation: 'legacy-judge'` kill-switch target for one release.
+ * Consumes the already-normalized entries (tags stripped, date prefixes
+ * stripped, scanner-clean) produced by {@link storeMemories}.
+ * @param ctx - context carrying an optional `memory` service.
+ * @param memory - the mounted memory store.
+ * @param normalized - the scanner-clean parsed entries.
+ * @param source - provenance tag for the audit trail.
+ * @param sessionId - the session id, recorded in each audit entry.
+ * @param session - the live session, for routing the LLM judge call.
+ * @param modelOverride - optional provider/model override for the judge.
+ * @param judgeEnabled - whether to run the LLM judge on prefilter hits.
+ */
+async function legacyStoreMemories(
+  ctx: Context,
+  memory: MemoryStore,
+  normalized: readonly ParsedMemory[],
+  source?: AuditSource,
+  sessionId?: string,
+  session?: Session,
+  modelOverride?: ExtractionModelOverride,
+  judgeEnabled?: boolean,
+  inferredProjectName?: string,
+): Promise<void> {
+  // Snapshot the current entries once for the dedup prefilter. This is cheap:
+  // a synchronous in-memory list at the entry counts we target (tens–hundreds).
+  const existing = memory.list().map(toDedupCandidate)
+  // Project name: the entry's own `[project: …]` tag (parsed.projectName)
+  // wins over the cwd inference, which applies only when the tag is absent.
+  const projectName = (entryScope: MemoryEntry['scope'], tagged: string | undefined): string | undefined =>
+    entryScope === 'project' ? (tagged ?? inferredProjectName) : undefined
+  for (const entry of normalized) {
+    const category = entry.category
+    const content = entry.content
     try {
+      // Dedup prefilter: if a near-duplicate already exists in the same scope,
+      // run the LLM judge (when enabled) or merge directly.
+      const dupId = findDuplicate(content, entry.scope, existing)
       if (dupId !== undefined) {
         const existingEntry = memory.get(dupId as MemoryId)
         if (existingEntry !== undefined) {
@@ -641,10 +717,6 @@ export async function storeMemories(
               sessionId,
               ...category !== undefined ? { category } : {},
               ...entry.summary !== undefined ? { summary: entry.summary } : {},
-              // Absent-means-keep does not apply at add time: an empty
-              // anchors list is equivalent to an absent one, so it is
-              // omitted rather than stored as `[]`. `?? []` tolerates
-              // hand-built ParsedMemory values predating the anchors field.
               ...(entry.anchors ?? []).length > 0 ? { anchors: entry.anchors } : {},
               ...projectName(entry.scope, entry.projectName) !== undefined ? { projectName: projectName(entry.scope, entry.projectName) } : {},
             }
@@ -678,8 +750,6 @@ export async function storeMemories(
         ...entry.summary !== undefined ? { summary: entry.summary } : {},
         // Anchors: an empty list is equivalent to an absent one at add time
         // (no anchors extracted), so it is omitted rather than stored as [].
-        // `?? []` tolerates hand-built ParsedMemory values predating the
-        // anchors field (same tolerance as the summary/category gates above).
         ...(entry.anchors ?? []).length > 0 ? { anchors: entry.anchors } : {},
         // Project auto-detection: project-scoped entries get the entry's own
         // [project: …] tag when present, else the inferred projectName (§3.6).
@@ -712,6 +782,7 @@ export async function runReviewExtraction(
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
   confirmMode?: boolean,
+  consolidation: ConsolidationMode = 'two-tier',
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
@@ -726,7 +797,7 @@ export async function runReviewExtraction(
   if (pitfallCandidates.length > 0) {
     const messages = buildPitfallMessages(snapshot, pitfallCandidates)
     const parsed = await extractMemories(ctx, agent.session, PITFALL_SYSTEM_PROMPT, messages, undefined, modelOverride)
-    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode)
+    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation)
     stored += parsed.length
   }
 
@@ -737,7 +808,7 @@ export async function runReviewExtraction(
     // A correction-only batch maps naturally to the `correction` category;
     // explicitly tagged entries override this default inside storeMemories.
     const correctionOnly = rest.every(c => c.signal === 'correction')
-    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode)
+    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation)
     stored += parsed.length
   }
   return stored
@@ -900,10 +971,11 @@ export async function runFlushExtraction(
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
   confirmMode?: boolean,
+  consolidation: ConsolidationMode = 'two-tier',
 ): Promise<number> {
   const messages = buildFlushMessages(fragments)
   const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal, modelOverride)
   const projectName = inferProjectName(session)
-  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled, confirmMode)
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled, confirmMode, consolidation)
   return parsed.length
 }

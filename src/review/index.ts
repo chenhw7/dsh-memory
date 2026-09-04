@@ -97,6 +97,13 @@ export interface Config {
    * settings section. Defaults to `false` (the original fully-automatic behavior).
    */
   confirmBeforeWrite?: boolean
+  /**
+   * Which write path the batch extraction runs (kill-switch, write-path
+   * rework Step 1.3). `two-tier` (default) replaces the per-pair dedup judge
+   * with one batch-consolidation call; `legacy-judge` restores the original
+   * `judgeDuplicate` flow for one release. Defaults to `two-tier`.
+   */
+  consolidation?: 'two-tier' | 'legacy-judge'
 }
 
 export const Config: z<Config> = z.object({
@@ -114,6 +121,7 @@ export const Config: z<Config> = z.object({
   curatorMaxEntries: z.number().step(1).min(1).default(5),
   curatorMinChars: z.number().step(1).min(1).default(400),
   confirmBeforeWrite: z.boolean().default(false),
+  consolidation: z.union(['two-tier', 'legacy-judge'] as const).default('two-tier'),
 })
 
 /** Resolved config with every default materialized. */
@@ -131,6 +139,7 @@ interface ResolvedConfig {
   readonly curatorMaxEntries: number
   readonly curatorMinChars: number
   readonly confirmBeforeWrite: boolean
+  readonly consolidation: 'two-tier' | 'legacy-judge'
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -156,6 +165,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     curatorMaxEntries: config.curatorMaxEntries ?? 5,
     curatorMinChars: config.curatorMinChars ?? 400,
     confirmBeforeWrite: config.confirmBeforeWrite ?? false,
+    consolidation: config.consolidation ?? 'two-tier',
   }
 }
 
@@ -199,15 +209,15 @@ function findCompactionSummary(session: Session, compactionId: SessionEvent<'com
 }
 
 /** Fire-and-forget flush on `compaction/end`: extract the shadowed fragments. */
-async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean): Promise<void> {
+async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
   const summary = findCompactionSummary(session, compactionId)
   if (summary === undefined) return
   const fragments = collectShadowedFragments(session, summary.data.shadowedSeqs)
-  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode)
+  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode, consolidation)
 }
 
 /** Fire-and-forget flush on `session/disposed`: extract recent derived messages. */
-async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean): Promise<void> {
+async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
   const messages = session.deriveMessages()
   const fragments: string[] = []
   for (const message of messages) {
@@ -215,7 +225,7 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
     if (fragment !== undefined) fragments.push(fragment)
   }
   const signal = AbortSignal.timeout(DISPOSE_FLUSH_TIMEOUT_MS)
-  await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled, confirmMode)
+  await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled, confirmMode, consolidation)
 }
 
 /**
@@ -283,7 +293,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!signal.aborted && cfg.reviewEnabled) {
       try {
-        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite)
+        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation)
       } catch (reviewError) {
         // Best-effort: a review failure must never block the step.
         ctx.get('memory')?.reportFailure('review-drain', reviewError)
@@ -299,7 +309,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnCompaction) return
     if (!checkBudget(session)) return
-    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch((error: unknown) => {
+    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
       // Best-effort: never blocks compaction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-compaction', error)
     })
@@ -310,7 +320,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnDispose) return
     if (!checkBudget(session)) return
-    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite).catch((error: unknown) => {
+    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
       // Best-effort: dispose must not block on memory extraction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-dispose', error)
     })
@@ -374,6 +384,7 @@ async function maybeRunReview(
   checkBudget: (session: Session) => boolean,
   judgeEnabled: boolean,
   confirmMode: boolean,
+  consolidation: 'two-tier' | 'legacy-judge',
 ): Promise<void> {
   const projections = ctx.get('sessionProjections')
   if (projections === undefined) return
@@ -386,7 +397,7 @@ async function maybeRunReview(
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)
   if (unprocessed.length < threshold) return
   if (!checkBudget(session)) return
-  await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled, confirmMode)
+  await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled, confirmMode, consolidation)
   const nextMark = unprocessed.reduce((max, candidate) => Math.max(max, candidate.seq), mark)
   highWaterMarks.set(session, nextMark)
 }

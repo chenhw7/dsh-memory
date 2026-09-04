@@ -53,3 +53,16 @@ export function modelOptions({ catalog, draft }: SelectOptionsInput): { value: s
 
 /** Re-export so consumers name one module for the catalog contract. */
 export type { CatalogModelEntry, CatalogProviderGroup, ModelCatalogView } from './NamespaceCard.tsx'
+
+/**
+ * Consolidation-path dropdown (kill-switch): the fixed two-value protocol
+ * enum — no catalog involved, so the resolver ignores its input. The field
+ * always carries the schema default (`two-tier`), so the value is never empty
+ * and no sentinel option is needed.
+ */
+export function consolidationOptions(): { value: string; label: string }[] {
+  return [
+    { value: 'two-tier', label: 'two-tier' },
+    { value: 'legacy-judge', label: 'legacy-judge' },
+  ]
+}

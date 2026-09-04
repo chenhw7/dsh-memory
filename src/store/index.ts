@@ -604,8 +604,11 @@ export class DomainMemoryStore extends MemoryStore {
   override search(query: MemorySearchQuery): SearchMemoryResult {
     const limit = query.limit ?? 50
     // Structured filters first; scoring runs over the surviving candidates.
+    // Superseded entries are excluded (consolidation conflict verdicts leave
+    // them to the navigable-only surfaces: memory_get/memory_list/management UI).
     const candidates: MemoryEntry[] = []
     for (const [, entry] of this.entries.entries()) {
+      if (entry.status === 'superseded') continue
       if (query.scope !== undefined && entry.scope !== query.scope) continue
       if (query.category !== undefined && entry.category !== query.category) continue
       if (query.projectName !== undefined && entry.projectName !== query.projectName) continue
@@ -953,6 +956,37 @@ export class DomainMemoryStore extends MemoryStore {
     const updated: MemoryEntry = rest as MemoryEntry
     await this.entries.put(id, updated)
     await this.appendAudit('update', id, updated, 'ui', undefined)
+    return updated
+  }
+
+  /**
+   * Supersede one entry (batch-consolidation seam, Step 1.3): flip `status`
+   * to `'superseded'`, stamp `supersededBy`, and append the caller's visible
+   * annotation to the content in one atomic write. Idempotent on an already
+   * superseded entry (returned unchanged, no audit). The audit trail records
+   * source `'janitor'` — the `AuditSource` enum has no consolidation member,
+   * and extending the durable enum shape is not this seam's business (the
+   * same rationale as {@link trimEntries}'s eviction records).
+   * @param id - the entry being superseded.
+   * @param supersededBy - the id of the newer, contradicting entry.
+   * @param annotate - optional content annotation (receives the pre-stamp
+   *   entry, returns the new content); called before the write so the
+   *   annotation lands atomically with the status flip.
+   * @returns the superseded entry, or `undefined` when the id does not exist.
+   */
+  override async supersedeEntry(id: MemoryId, supersededBy: MemoryId, annotate?: (entry: MemoryEntry) => string): Promise<MemoryEntry | undefined> {
+    const existing = this.entries.get(id)
+    if (existing === undefined) return undefined
+    if (existing.status === 'superseded') return existing
+    const annotated = annotate === undefined ? existing.content : annotate(existing)
+    const updated: MemoryEntry = {
+      ...existing,
+      content: annotated,
+      status: 'superseded',
+      supersededBy,
+    }
+    await this.entries.put(id, updated)
+    await this.appendAudit('update', id, updated, 'janitor', undefined)
     return updated
   }
 

@@ -549,6 +549,9 @@ describe('storeMemories', () => {
     const store = {
       add: vi.fn().mockRejectedValue(new Error('boom')),
       list: () => [],
+      // The two-tier path books the swallowed add through reportFailure; the
+      // hand-rolled mock carries a no-op like the base-class default.
+      reportFailure: () => {},
     } as unknown as MemoryStore
     const ctx = fakeCtx(() => makeTextStream(''), store)
     await expect(storeMemories(ctx, [{ scope: 'user', content: 'a' }, { scope: 'global', content: 'b' }])).resolves.toBeUndefined()
@@ -747,7 +750,7 @@ describe('LLM dedup judge (§3.4)', () => {
     // token; under the IDF-weighted metric this scores ~0.44, above the
     // 0.15 prefilter line — "prefers/answers" wording kept the old shared-
     // token pair below the new line, so the rewrite drops those words).
-    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true, undefined, 'legacy-judge')
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
     // Merged content contains both the old and new text.
@@ -758,7 +761,7 @@ describe('LLM dedup judge (§3.4)', () => {
     const { store, updated, added } = storeWithExisting('use pnpm here')
     const ctx = fakeCtx(() => makeTextStream('update'), store)
     const session = fakeSession()
-    await storeMemories(ctx, [{ scope: 'global', content: 'use pnpm v9 here' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    await storeMemories(ctx, [{ scope: 'global', content: 'use pnpm v9 here' }], undefined, 'review', session.id, undefined, session, undefined, true, undefined, 'legacy-judge')
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
     // The new content replaces the old entirely.
@@ -771,7 +774,7 @@ describe('LLM dedup judge (§3.4)', () => {
     const session = fakeSession()
     // The prefilter flags this as a near-duplicate (shared 项/目), but the
     // judge correctly says "new" — they're about different tools.
-    await storeMemories(ctx, [{ scope: 'global', content: '这个项目使用vitest' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    await storeMemories(ctx, [{ scope: 'global', content: '这个项目使用vitest' }], undefined, 'review', session.id, undefined, session, undefined, true, undefined, 'legacy-judge')
     expect(added).toHaveLength(1)
     expect(updated).toHaveLength(0)
     expect(added[0]!.content).toBe('这个项目使用vitest')
@@ -782,7 +785,7 @@ describe('LLM dedup judge (§3.4)', () => {
     const ctx = fakeCtx(() => makeTextStream('new'), store)
     const session = fakeSession()
     // judgeEnabled = false → prefilter hit merges directly, no LLM call.
-    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, false)
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, false, undefined, 'legacy-judge')
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
   })
@@ -792,7 +795,7 @@ describe('LLM dedup judge (§3.4)', () => {
     // Stream that errors on finish.
     const ctx = fakeCtx(() => makeTextStream('garbage', { type: 'finish', reason: { kind: 'error', failure: { message: 'boom', code: 'ERR' } } }), store)
     const session = fakeSession()
-    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true)
+    await storeMemories(ctx, [{ scope: 'global', content: 'the user likes concise responses' }], undefined, 'review', session.id, undefined, session, undefined, true, undefined, 'legacy-judge')
     // Safe fallback: merge — and the swallowed judge failure is reported, not lost.
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)

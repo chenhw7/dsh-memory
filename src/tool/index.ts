@@ -80,6 +80,7 @@ interface EntryJson {
   readonly category?: MemoryCategory
   readonly projectName?: string
   readonly stale?: boolean
+  readonly superseded?: string
   readonly importance?: number
   readonly accessCount?: number
 }
@@ -88,9 +89,13 @@ interface EntryJson {
  * Project one {@link MemoryEntry} to the model-facing wire shape: the branded
  * id serializes as a plain string, and optional fields stay optional. A
  * soft-decay stamp surfaces as `stale: true` so the model knows the entry is
- * hidden from standing injections and may be outdated. Content and summary
- * are display-redacted: scanner-blocked payloads surface as `[BLOCKED: …]`;
- * the unredacted text is reachable only through `memory_get` with `raw`.
+ * hidden from standing injections and may be outdated. A superseded entry
+ * surfaces as `superseded: <newEntryId>` (plus the trailing content
+ * annotation) so the model can follow the contradiction to its replacement —
+ * superseded entries stay tool-visible by design (only the injection/search
+ * surfaces hide them). Content and summary are display-redacted:
+ * scanner-blocked payloads surface as `[BLOCKED: …]`; the unredacted text is
+ * reachable only through `memory_get` with `raw`.
  */
 function toEntryJson(entry: MemoryEntry): EntryJson {
   return {
@@ -103,6 +108,7 @@ function toEntryJson(entry: MemoryEntry): EntryJson {
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.staleSince !== undefined ? { stale: true } : {},
+    ...entry.supersededBy !== undefined ? { superseded: entry.supersededBy as string } : {},
     ...entry.importance !== undefined ? { importance: entry.importance } : {},
     ...entry.accessCount !== undefined ? { accessCount: entry.accessCount } : {},
   }
@@ -125,6 +131,7 @@ function toEntryJsonRaw(entry: MemoryEntry): EntryJson {
     ...entry.category !== undefined ? { category: entry.category } : {},
     ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
     ...entry.staleSince !== undefined ? { stale: true } : {},
+    ...entry.supersededBy !== undefined ? { superseded: entry.supersededBy as string } : {},
     ...entry.importance !== undefined ? { importance: entry.importance } : {},
     ...entry.accessCount !== undefined ? { accessCount: entry.accessCount } : {},
   }
@@ -219,6 +226,7 @@ interface RenderEntry {
   readonly scope: MemoryScope
   readonly content: string
   readonly category?: MemoryCategory
+  readonly superseded?: string
 }
 
 /**
@@ -233,13 +241,16 @@ function scopeLabel(entry: Pick<RenderEntry, 'scope' | 'category'>): string {
 
 /**
  * Format one entry as a single readable line for render output:
- * `[id] (scope[/category]) content`. Content is display-redacted at the
+ * `[id] (scope[/category]) content`, with a trailing ` [superseded →
+ * <newEntryId>]` marker on a superseded entry (pinned format, same annotation
+ * the store writes onto the content). Content is display-redacted at the
  * projection layer before reaching this formatter.
  * @param entry - the entry to format.
  * @returns the formatted line.
  */
 function formatEntryLine(entry: RenderEntry): string {
-  return `[${entry.id}] (${scopeLabel(entry)}) ${redactBlocked(entry.content)}`
+  const superseded = entry.superseded !== undefined ? ` [superseded → ${entry.superseded}]` : ''
+  return `[${entry.id}] (${scopeLabel(entry)}) ${redactBlocked(entry.content)}${superseded}`
 }
 
 /**
@@ -329,6 +340,7 @@ export function apply(ctx: Context, config: Config): void {
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
                 stale: { type: 'boolean' },
+                superseded: { type: 'string' },
                 importance: { type: 'integer' },
                 accessCount: { type: 'integer' },
               },
@@ -461,6 +473,7 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              superseded: { type: 'string' },
               importance: { type: 'integer' },
               accessCount: { type: 'integer' },
             },
@@ -565,6 +578,7 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              superseded: { type: 'string' },
               importance: { type: 'integer' },
               accessCount: { type: 'integer' },
             },
@@ -828,6 +842,7 @@ export function apply(ctx: Context, config: Config): void {
                 createdAt: { type: 'integer', required: true },
                 updatedAt: { type: 'integer', required: true },
                 stale: { type: 'boolean' },
+                superseded: { type: 'string' },
                 importance: { type: 'integer' },
                 accessCount: { type: 'integer' },
               },
@@ -955,6 +970,7 @@ export function apply(ctx: Context, config: Config): void {
               createdAt: { type: 'integer', required: true },
               updatedAt: { type: 'integer', required: true },
               stale: { type: 'boolean' },
+              superseded: { type: 'string' },
               importance: { type: 'integer' },
               accessCount: { type: 'integer' },
             },

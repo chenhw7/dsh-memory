@@ -21,7 +21,7 @@
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
 | `memory-store` | `@chenhw7/dsh-memory/store` | 持久 KV 存储 + BM25 词法检索；注册 `ctx.memory` 服务（entries + audit + **建议队列** 三张表） |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin/forget`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
-| `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + 去重 + janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
+| `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + two-tier 批量整合（kill-switch：legacy 去重裁决）+ janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
 | `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
@@ -94,7 +94,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 | `memory-root` | — | — | 无操作根条目，供客户端模块扫描器发现 |
 | `memory-store` | `storageDomain` | — | 打开 `memory` 域（entries + audit + suggestions + meta）；注册 `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | 注册八个模型工具（人审模式感知） |
-| `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | 累加器 + 周期 review + flush + janitor + curator + 建议队列生产者；持有 `memory-review` 命名空间 |
+| `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | 累加器 + 周期 review + flush + two-tier 整合 + janitor + curator + 建议队列生产者；持有 `memory-review` 命名空间 |
 | `memory-notes` | — | `memory`, `settings` | 注册 `ctx.projectNotes`；渲染 `project-notes` prompt 快照（纯内存）；清理 ≤0.5.x 文件残留 |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | prompt 注入段 + 自动召回中间件；持有 `memory` 命名空间 |
 | `memory-remote` | `memory` | — | 记忆管理 UI 的 `@Remote` 服务 |
@@ -107,7 +107,7 @@ flowchart TB
       root["memory-root<br/>无操作扫描入口"]
       store["memory-store · /store<br/>ctx.memory provider + BM25 检索<br/>entries + audit + suggestions + meta 四张表"]
       tool["tool-memory · /tool<br/>八个模型工具（人审模式感知）"]
-      review["memory-review · /review<br/>累加器 + LLM 提取 + 去重<br/>+ janitor + curator + 人审队列 · memory-review ns"]
+      review["memory-review · /review<br/>累加器 + LLM 提取 + two-tier 整合<br/>+ janitor + curator + 人审队列 · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt 投影 · ctx.projectNotes<br/>≤0.5.x 文件残留清理"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 段<br/>自动召回中间件 · memory ns"]
       remote["memory-remote · /remote-service<br/>UI 用 @Remote 服务（14 个方法）"]
@@ -158,7 +158,7 @@ flowchart LR
 
 从 UI 采纳一条队列中的提议，走的是同一条 `store.add` / `store.update` 路径（审计 `source: 'ui'`）；拒绝则删除队例行。`replace` 提议携带 `targetEntryId`，因此已确认的条目在有人类点头之前绝不会被改动。
 
-**读取路径：** `memory_search` 先做结构化过滤（scope / category / projectName），再用 **BM25** 对幸存候选打分——CJK 感知分词（Latin 词元；CJK 一元 + 相邻二元 bigram）、非负 IDF、K1=1.2、B=0.75。结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位，不惩罚未评估条目）→ `updatedAt` 降序排列；`limit` 默认取实时 `maxSearchResults`（`0` = 不限）。命中的条目被 fire-and-forget 地盖 `lastRecalledAt` 戳并递增 `accessCount`，同时清除软衰减戳——管理 UI 传 `recordRecall: false`，因此浏览永远不盖戳。`memory_list` 呈现**智能默认视图**：按 `limit`/`offset` 分页、最新优先，可选 `since`/`until` 创建时间窗，附带 `earliest`/`latest`/`hasStale` 元数据，且在非空 store 上窄化查询为空时给出放宽过滤的提示；仅对返回页标记召回。`memory_get` 标记单条召回。
+**读取路径：** `memory_search` 先做结构化过滤（scope / category / projectName），再用 **BM25** 对幸存候选打分——CJK 感知分词（Latin 词元；CJK 一元 + 相邻二元 bigram）、非负 IDF、K1=1.2、B=0.75；superseded 条目完全退出候选池（它们仍可经工具面到达，见 §7.2）。结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位，不惩罚未评估条目）→ `updatedAt` 降序排列；`limit` 默认取实时 `maxSearchResults`（`0` = 不限）。命中的条目被 fire-and-forget 地盖 `lastRecalledAt` 戳并递增 `accessCount`，同时清除软衰减戳——管理 UI 传 `recordRecall: false`，因此浏览永远不盖戳。`memory_list` 呈现**智能默认视图**：按 `limit`/`offset` 分页、最新优先，可选 `since`/`until` 创建时间窗，附带 `earliest`/`latest`/`hasStale` 元数据，且在非空 store 上窄化查询为空时给出放宽过滤的提示；仅对返回页标记召回。`memory_get` 标记单条召回。
 
 **自动提取路径：**
 
@@ -187,6 +187,14 @@ sequenceDiagram
         STEP->>STORE: findDuplicate → judgeDuplicate → merge/update/add<br/>（被拒行跳过）
       end
     end
+    STEP->>STORE: selectConsolidationCandidates（词面重叠 ≥0.2 ∨ 共享锚点 df≤2，<br/>同/跨作用域分桶）
+    alt 有候选（且有可用 session 路由）
+      STEP->>LLM: 一次整合调用 → CONSOLIDATE_SYSTEM_PROMPT<br/>（两桶合并喂入，含防误合并规则）
+      LLM-->>STEP: 若干行 "<candidateId> <action> [targetEntryId] [content]"
+    else 无候选 / 无路由
+      Note over STEP: 零整合调用
+    end
+    STEP->>STORE: 应用裁决：merge/update → memory.update<br/>conflict → supersedeEntry + 新条目入库 · new → add<br/>（被丢弃的行 fail-closed 到 new）
     STEP->>ACC: 仅成功后推进高水位
   else 低于阈值
     Note over STEP: no-op
@@ -231,7 +239,8 @@ interface MemoryEntry {
                                  // 缺省 = 未提取——从不参与检索排序
   readonly status?: 'active' | 'superseded' // 整合生命周期；缺省读作 'active'；
                                  // 'superseded' 条目在工具面仍可见（带徽标），
-                                 // 但从注入面与检索面消失
+                                 // 但从注入面与检索面消失；仅 supersedeEntry
+                                 // 翻转该状态
   readonly supersededBy?: MemoryId // 矛盾中胜出的条目 id，
                                  // 与 status: 'superseded' 同时设置
 }
@@ -285,7 +294,7 @@ interface MemoryEntry {
   - `suggestions` — 以 `SuggestionId` 为键的 KV 表，承载待确认人审队列（§7.3.6）。同样是向前兼容的故事：P1 之前的介质重新打开时该表初始化为空。
   - `meta` — 以普通字符串为键的 KV 表，承载既非记忆、也非审计记录或建议的子系统状态行：整合进度（`consolidation:*` 键，如 last-run/cooldown 时间戳）、介质层迁移标记（`medium:*`，如 `migratedToSqlite`）与 schema 标记（`schema:*`）。记录是宽容载体 `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }`（loose zod schema）：未知键与未知字段重读不报错，meta 之前的介质重新打开时该表初始化为空。store 暴露 `getMeta(key)`/`setMeta(key, record)`；写失败记为被吞的后台失败（`meta-write`），绝不抛给调用方。
 - **审计表**为每次 `add`/`update`/`remove`（pin/unpin 变更不写审计）追加一条 `AuditEntry`：
-  - `source`：`'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` —— 触发者。
+  - `source`：`'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` —— 触发者。经批量整合 `supersedeEntry` 接口落下的 supersede 复用 `'janitor'`：`AuditSource` 枚举没有整合成员，扩展持久化枚举形状不是该接口的职责（与 `trimEntries` 淘汰记录同一理由）。
   - `op`：`'add'` | `'update'` | `'remove'`。
   - `contentPreview`：前 ~100 字符；若预览本身未通过扫描则替换为 `'[content redacted]'`。
   - `ts`：Unix epoch ms，外加单调递增 `seq`（首次追加时从介质播种），同毫秒写入因此有确定性顺序。
@@ -341,8 +350,9 @@ interface MemorySuggestion {
   - `janitor(decayDays)`：**两层生命周期策略**。快照迭代仅作候选预筛；每个写入决策都在**写入链槽位上重读当前记录**（`KvTable.update` 原子 RMW，与召回戳同一纪律）：
     - `project` 作用域 → **硬衰减**：守卫 update 先重读 `pinned`（pinned → 原样返回并跳过），未 pinned 才删除并审计 `remove`/`janitor`（守卫与删除之间残留一个宿主原语无法关闭的窄窗口，代码注释如实记录）；
     - `global`/`user` 作用域 → **软衰减**：过期判定、importance 宽限、pinned 豁免、衰减幂等全部在 update 的 transform 内基于重读值判定，通过则打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。`importance` 4–5 的条目享有 1.5× 的宽限窗口（模型"这条重要"的自评延长可容忍的静默期；召回仍是更强的信号——`stampRecalled` 直接清除衰减戳）。
+    - **`supersedeEntry(id, supersededBy, annotate?)`：** 把 `status` 翻转为 `'superseded'`、盖 `supersededBy`、并把调用方的标注追加到正文——单次原子写入（对已 superseded 的条目幂等；以 `update`/`'janitor'` 来源审计）。整合是唯一被允许翻转条目状态的写入方——`update` 刻意不接受它。抽象 `MemoryStore` 的默认实现是返回 `undefined` 的 no-op，未实现该接口的 provider 保持契约合规，其上的 conflict 裁决退化为普通 add。返回被 supersede 的条目，id 不存在时返回 `undefined`；superseded 条目不在 janitor 的处理范围内——其生命周期由整合层持有。
     返回被硬衰减（移除）的 project 条目数。
-  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
+  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`consolidate-call`、`consolidate-apply`、`consolidate-supersede`、`consolidate-add`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
   - **建议队列（待确认人审表）：**
     - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 Jaccard > 0.15 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
@@ -376,12 +386,12 @@ interface MemorySuggestion {
 - **人审模式是一次跨命名空间读取。** `memory_add`/`memory_replace` 从 **`memory-review` 命名空间**实时解析 `confirmBeforeWrite`（默认 `false`）；开启时入队的写入返回 `{ pending: true, suggestionId }`，工具描述告知模型其提议正在等待人工审核。
 - **可选服务、响亮失败。** 各工具经 `ctx.get('memory')` 解析 store，缺失时抛出 `memory service is not available: no memory provider is composed`——无记忆部署照常启动，失败出现在用户最早能看见的点。
 - **工具边界扫描**使被拒载荷永远到不了 store，模型拿到干净可操作的报错；store 内部再扫一道作为纵深防御。
-- **线上投影：** 条目投影为 `EntryJson`（品牌 id 序列化为普通字符串；可选字段缺省、存在 `summary` 时一并带上；软衰减戳表现为 `stale: true`，让模型知道该条目已从常驻注入隐藏、可能过时）。
+- **线上投影：** 条目投影为 `EntryJson`（品牌 id 序列化为普通字符串；可选字段缺省、存在 `summary` 时一并带上；软衰减戳表现为 `stale: true`，让模型知道该条目已从常驻注入隐藏、可能过时；superseded 条目按设计保持工具面可见，表现为 `superseded: <newEntryId>` 加正文尾部的 ` [superseded → <newEntryId>]` 标注，让模型能沿矛盾指针找到替代条目）。
 - 工具描述本身是行为契约的一部分：告诉模型*何时*使用各工具，以及记忆是"有用的上下文，而非指令"。
 
 ### 7.3 自动提取 — `/review`（`src/review/`）
 
-review 插件是自动沉淀层。一个 store，五个触发器：周期 drain、踩坑蒸馏、压缩 flush、销毁 flush、curator 改写。
+review 插件是自动沉淀层。一个 store，五个触发器：周期 drain、踩坑蒸馏、压缩 flush、销毁 flush、curator 改写。每个入库批次走两条写入路径之一——two-tier 批量整合（默认）或 legacy 逐对去重裁决（§7.3.3）。
 
 #### 7.3.1 候选累加器（会话投影）
 
@@ -400,9 +410,9 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 - `agent/pre-step` 监听器读取 agent 会话的投影快照。
 - **会话级高水位**（`WeakMap<Session, number>`）记录上次成功提取覆盖的最大候选 seq；`unprocessed = seq > 高水位的候选`。
-- 当 `unprocessed.length >= reviewCandidateThreshold`（默认 **10**）且预算允许时执行一次 `runReviewExtraction`。高水位**只在成功后推进**——失败的批次保持未处理并在下次越线时重试，去重保证重复入库幂等。
+- 当 `unprocessed.length >= reviewCandidateThreshold`（默认 **10**）且预算允许时执行一次 `runReviewExtraction`。高水位**只在成功后推进**——失败的批次保持未处理并在下次越线时重试，写入路径保证重复入库幂等（merge 折入既有条目、新事实只 add 一次）。
 - **提取预算：** `extractionBudget`（默认 **20**，0 = 不限）是跨 review drain、两种 flush 与 curator pass 共享的会话级预算。按 drain/flush/curator *触发*记账（而非内部每次 LLM 调用），因此一个同时发踩坑调用与 review 调用的 drain 只消耗一个单位。
-- **裁决开关：** `judgeEnabled`（默认 **true**）控制预过滤命中是否跑 LLM 去重裁决。`false`（或无 session）时预过滤命中直接合并（更廉价，可能误合并）。
+- **裁决开关：** `judgeEnabled`（默认 **true**）控制 legacy 路径上预过滤命中是否跑 LLM 去重裁决。`false`（或无 session）时预过滤命中直接合并（更廉价，可能误合并）。它对默认的 two-tier 整合路径没有作用。
 - 整个 drain 包裹在 try/catch 中：**review 失败绝不能阻塞 step。**
 
 #### 7.3.3 LLM 提取核心（`src/review/extract.ts`）
@@ -419,14 +429,17 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 - **输出协议：** 每行一条记忆，`scope: [tag] [summary:…] content`，scope ∈ {`global`, `project`, `user`}，tag ∈ {[procedure], [convention], [preference], [pitfall]} 映射类别 procedure/convention/preference/failure，可选的 `[summary:…]` 标签提供 index/自动召回表面优先于截断正文的短摘要。`parseExtractedMemories` 纯函数且严格：空行、缺冒号、未知作用域、空内容的行一律丢弃；类别与摘要标签在解析层即被消费，入库收到的是干净字段。
 - **程序盖时间戳：** `stripModelDatePrefix` 在入库边界剥掉模型臆造在提取内容上的日期前缀（`(YYYY-MM-DD)` / `[YYYY-MM-DD]` / ISO 时间 / `[git branch]` 形态，循环处理堆叠前缀），使 `createdAt`/`updatedAt` 永远来自程序。
 - **候选分区：** drain 把候选分为 `pitfall-resolved` 子集（→ 踩坑 prompt，条目附带类别 `failure`）与其余（→ review prompt；全为 correction 的批次附带类别 `correction`）。两次调用相互独立、尽力而为。
-- **去重管线：** 入库前 `findDuplicate`（停用词过滤后的 Jaccard > 0.15，仅同作用域）对照既有条目。命中且 `judgeEnabled` 且有 session 时，`judgeDuplicate` 运行单词裁决的 LLM judge：
-  - `duplicate` → 合并进既有条目（`mergeContent`）；
-  - `update` → 用新内容替换；
-  - `new` → 新建独立条目（预过滤误报）。
-  judge 失败回退 `duplicate`（安全合并）。`judgeEnabled: false` 时预过滤命中直接合并。
+- **去重管线：** 两条写入路径，由 `consolidation` 字段选择（默认 `two-tier`）：
+  - **`two-tier`（默认）：** 批次经 `applyConsolidation`（`src/review/consolidate.ts`）处理。词法预选器（`selectConsolidationCandidates`，构建在检索面同一套 BM25 原语上）提出候选对——IDF 加权重叠超过 `CONSOLIDATION_SIMILARITY_THRESHOLD`（**0.2**）∨ 共享一个文档频率 ≤ `ANCHOR_DF_CAP`（**2**）的锚点——并按作用域关系分桶（同作用域对可取任意动作；跨作用域对被 prompt 引导到 `new`/`conflict`；两桶合入同一次调用，封顶 20 对）。只有存在至少一个候选且有可用 session 路由时，批次才发出**一次**整合 LLM 调用，行协议 `<candidateId> <action> [targetEntryId] [content]`，action ∈ {`merge`, `update`, `conflict`, `new`}：
+    - `merge` → 合并进既有条目（`mergeContent` + `memory.update`）；
+    - `update` → 用裁决携带的内容（缺省时用批次内容）替换目标条目；
+    - `conflict` → 新事实独立入库，旧条目经 store 专用的 `supersedeEntry` 接口翻转：`status: 'superseded'`、`supersededBy: <newEntryId>`、正文追加可见标注 ` [superseded → <newEntryId>]`；
+    - `new` → 新建独立条目。
+    解析是 offer 列表 fail-closed：外来 `candidateId`、悬空 target 或无法解析的行被丢弃并解析为 `new`（误判 new 只留下冗余，周期整合层可回收；误判 merge 会静默删除信息）。无候选（或无路由）时批次直接写入，**零**整合调用。
+  - **`legacy-judge`（kill-switch，保留一个发布周期）：** 原逐条流程——入库前 `findDuplicate`（停用词过滤后的 Jaccard > 0.15，仅同作用域）对照既有条目；命中且 `judgeEnabled` 且有 session 时，`judgeDuplicate` 运行单词裁决的 LLM judge（`duplicate` → 合并、`update` → 替换、`new` → 独立条目）。judge 失败回退 `duplicate`（安全合并）；`judgeEnabled: false` 时预过滤命中直接合并。
 - **合并上限：** `mergeContent` 在一方包含另一方时取较长者，否则拼接——但拼接超过 `MERGE_CHAR_LIMIT`（**600 字符**）后退化为取较长者，杜绝无限增长；真正的再摘要属于 curator。
-- **入库：** `storeMemories` 逐行扫描并独立入库；某行的扫描拒绝或 store 失败只跳过该行。本地去重候选列表随批次推进更新，后续行能看到先前入库的结果。**人审模式下**同一行改为落入建议队列（§7.3.6）：`findDuplicate` 仍然运行，但其命中成为提议的 `targetEntryId`——绝不就地合并。
-- **流处理：** `collectStreamText` 用 `BlockAssembler` 拼装 `ctx.llm.stream` 分块；`error` / `aborted` / `max-tokens` 终态映射为 fail-closed 错误，整批跳过。
+- **入库：** 逐条归一化（类别标签剥离、日期前缀剥离、内容扫描）先行；存活行再走所选写入路径，某行的扫描拒绝或 store 失败只跳过该行。**人审模式下**批次改落入建议队列（§7.3.6），两条整合路径都不运行。
+- **流处理：** `collectStreamText` 用 `BlockAssembler` 拼装 `ctx.llm.stream` 分块；`error` / `aborted` / `max-tokens` 终态映射为 fail-closed 错误，整批跳过。整合调用走同一 seam：整合响应失败或不可解析时经 `reportFailure` 记账，批次 fail-closed 为直接 add。
 
 #### 7.3.4 Flush 路径（压缩与销毁）
 
@@ -450,15 +463,18 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 - **采纳是唯一写入。** `suggestAdopt` 经完整 store 契约（扫描器 + 审计，`source: 'ui'`）落实提议，并尊重 Review tab 里做的人类修改（"先编辑后采纳"）；`suggestReject` 删除该行。两者均经远程方法暴露并在「记忆」区 UI 中提供（§7.7、§7.8）。
 - **读侧消费方优雅降级。** 没有建议队列的 provider 经默认空实现保持契约合规；人审模式的调用方把"不支持"当作空队列。
 
-#### 7.3.7 去重管线（`src/review/dedup.ts`）
+#### 7.3.7 去重与整合原语
 
 1. **预过滤（无 embedding）：**
    - `uniqueTokens(text)`：复用 BM25 的 `tokenizeForSearch` 分词（Latin 词元 + CJK 字 + 相邻 bigram，与检索同一套，无独立停用表），返回唯一 token `Set`。
    - `weightedOverlapSimilarity(stats, a, b)`：IDF 加权重叠度 `Σidf(交集) / Σidf(并集)`——IDF 由共享的 `buildCorpusStats` 在参与比较的文本上统计（非负 Robertson/Sparck-Jones），高频语法成分的权重自然趋零，无需手写停用表。
-   - `findDuplicate(candidate, scope, existing)`：仅同作用域比较；返回超过 `DEDUP_SIMILARITY_THRESHOLD`（0.15）的最佳匹配条目 id 或 `undefined`。
-2. **LLM judge（可选）：**
+   - `findDuplicate(candidate, scope, existing)`：仅同作用域比较；返回超过 `DEDUP_SIMILARITY_THRESHOLD`（0.15）的最佳匹配条目 id 或 `undefined`。它支撑人审模式的 `targetEntryId` 查找与 legacy-judge kill-switch 路径。
+2. **LLM judge（仅 legacy 路径）：**
    - `JUDGE_SYSTEM_PROMPT`：单词协议——`duplicate`（同一事实换个说法 → 保留既有）、`update`（修正/更精确 → 替换）、`new`（碰巧共享词语的不同事实 → 两者都留）。
    - `parseJudgeVerdict(text)`：小写、修剪、匹配三个词；无法识别一律回退 `duplicate`（宁可合并不可制造伪重复）。
+3. **整合选择器（`src/review/consolidate.ts`，two-tier 路径）：**
+   - `selectConsolidationCandidates(parsed, existing)`：在同一套 BM25 原语上提出（新解析行，既有条目）候选对——加权重叠超过 **0.2** ∨ 共享一个在存量语料中 df ≤ **2** 的锚点——并按同作用域/跨作用域分桶；一对可能落在跨作用域桶（`findDuplicate` 结构上不可见）。已 superseded 的条目永不作为目标；候选封顶每次调用 20 对。
+   - `parseConsolidateVerdicts(text, allowed)`：沿袭 `parseCuratedLines` 纪律——只有带合法 action 且 `candidateId` 在 offer 列表内的行存活；merge/update/conflict 要求 target 是被 offer 过的既有侧 id；被丢弃的行在 `applyConsolidation` 中解析为 `new`。
 
 - **`mergeContent(old, new, maxChars = 600)`**：一方包含另一方 → 取较长者；否则空格拼接——超过上限时改为取较长者。
 
@@ -481,7 +497,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
 | `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
-| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
+| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
 
 两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
 
@@ -507,6 +523,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
   - `notes` —— `ctx.get('projectNotes')?.snapshotFor(cwd)`（禁用或服务缺失时空）；
   - 三者存入 `WeakMap<Session, FrozenSnapshot>`，每次冻结读取一次，使两次 compaction 之间的 system prompt 前缀保持 KV-cache 稳定。
 - **防重复注入排除：** notes 启用时快照读取器排除满足 `isRenderedEntry(entry, projectNameOf(cwd))` 的条目，笔记已渲染的内容不会再出现在 memory 段落/索引里。
+- **superseded 可见性：** prompt 快照、存在索引与自动召回围栏都把 `status: 'superseded'` 的条目按与软衰减相同的方式剔除——矛盾裁决不能让落败的事实继续流入新会话。superseded 条目经工具面（§7.2）保持可见，携带 `superseded` 字段与正文标注。
 - **冲突标注（已接线）：** 在单个作用域内，`annotateConflicts` 把 `correction` 类别条目视为较新的陈述，对与其重叠的旧条目标注——Jaccard ≥ 0.2 且含矛盾信号词（"actually"、"不对"、"改了"等）判 `conflicting`，渲染"(⚠ contradicts a newer correction — verify before trusting)"；仅有主题重叠（≥ 0.15）判 `stale`，渲染"(⚠ possibly outdated…)"。确定性且发生在冻结时刻，标注随快照一起缓存稳定。
 - **按模式组装**（`buildMemorySectionText`，纯函数）：
 
@@ -528,7 +545,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 1. 读实时设置；`autoRecallEnabled` 未开直接跳过。
 2. 用本步入站 user 消息文本块（拼接）作为查询；短于 `autoRecallMinChars`（默认 12）跳过。
-3. 同步执行 BM25 store 搜索，`limit: autoRecallLimit`（默认 5），过滤软衰减命中，对幸存者盖召回戳。
+3. 同步执行 BM25 store 搜索，`limit: autoRecallLimit`（默认 5），过滤软衰减与 superseded 命中，对幸存者盖召回戳。
 4. 渲染 `buildAutoRecallBlock`：带围栏的 `<recalled-memory>` 块——框定说明加 `- [scope/category] summary-or-content[:200]` 行（条目的 `summary` 优先），总长封顶 `AUTO_RECALL_CHAR_LIMIT`（**1200 字符**），末尾附 `fence: N characters ≈M tokens` 尾注，使每步注入成本始终可见。
 5. 以 plugin 来源追加为一条 user 消息：返回 `{ kind: 'enter', messages: [...payload.messages, recallMessage] }`。
 
@@ -596,7 +613,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | `memory` | `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
 | `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1） |
-| `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
+| `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
 
 机制：
 
@@ -672,7 +689,8 @@ memory-review:
   extractionModelProvider: ""    # 空 = 会话路由
   extractionModelModel: ""       # 空 = 会话路由
   extractionBudget: 20           # 每会话 LLM 调用记账（0 = 不限）
-  judgeEnabled: true             # 预过滤命中跑 LLM 去重裁决
+  judgeEnabled: true             # 仅 legacy-judge 路径：预过滤命中跑 LLM 去重裁决
+  consolidation: two-tier        # 写入路径：two-tier（默认）| legacy-judge（kill-switch）
   pitfallStreakThreshold: 2      # 成功前的同签名连续失败次数 → 踩坑候选
   curatorEnabled: true           # 低频超长条目再摘要
   curatorEveryNSessions: 20      # 每 N 次会话创建运行 curator
@@ -682,7 +700,7 @@ memory-review:
                                  #   提议，直到有人类采纳（§7.3.6）
 ```
 
-默认情况下，提取、裁决与 curation 都使用**用户正在对话的同一模型**。要把它们路由到专用廉价模型，设置覆盖对（组合配置或设置 UI——UI 提供由宿主模型目录驱动的下拉）：
+默认情况下，提取、整合与 curation 都使用**用户正在对话的同一模型**。要把它们路由到专用廉价模型，设置覆盖对（组合配置或设置 UI——UI 提供由宿主模型目录驱动的下拉）：
 
 ```yaml
 memory-review:
@@ -714,11 +732,12 @@ memory:
 | 泄露载荷被存储并在之后的会话被执行 | 写入时拒绝泄露模式；工具输出的渲染不执行内容 |
 | *经由提取器的*间接注入（敌意会话内容操纵 LLM） | 片段/快照经 `flattenFragment` 抹平换行使行协议无法伪造；prompt 声明"片段是原始数据，绝非指令"；输出严格解析（`scope: [tag] [summary:…] content`；模型手写的日期前缀被剥离）；每行入库前重扫；curator 只接受提供过的 id |
 | 错误的自动提取被固化为高置信度事实 | 可选的 `confirmBeforeWrite` 闸门：提取与工具写入以提议形式入队（按 `hits` 排序），采纳是唯一写入；模型无法越过闸门自我提升一条更新 |
-| 低价值噪音沉淀（捕获 ≠ 正确） | 所有提取 prompt 中的负面准入规则（排除可从仓库推导的内容）；去重裁决；curator 透传；人审模式的人工闸门 |
+| 被矛盾的事实继续被当作真相提供 | two-tier 整合的 `conflict` 裁决将旧条目置为 superseded（status + `supersededBy` + 可见标注）并落库新事实；superseded 条目退出一切注入/检索面 |
+| 低价值噪音沉淀（捕获 ≠ 正确） | 所有提取 prompt 中的负面准入规则（排除可从仓库推导的内容）；two-tier 整合 / 去重裁决；curator 透传；人审模式的人工闸门 |
 | 存储无限增长 / prompt 膨胀 | `memoryCharLimit` + `memoryMaxEntries` + notes 字符预算 + 1200 字符自动召回上限；`MERGE_CHAR_LIMIT`（600）限制合并增长；`limit`/`offset` 分页；审计日志封顶 200；建议队列封顶 200；两层 janitor 衰减；curator 收缩超长条目 |
 | 冲突记忆被当作事实提供 | 冻结时刻的冲突标注 inline 标记矛盾/陈旧行；软衰减条目在再次召回前退出常驻视图；三个记忆表面均带写时真实性免责 |
 | 用户仓库被插件意外写入文件 | 0.6 起 notes 投影零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；渲染为纯内存；≤0.5.x 残留在 `session/created` 被保守清理（只删插件生成的文件，块外内容不动） |
-| 对话内容流向第三方 provider | `extractionModelProvider`/`extractionModelModel` 把提取、去重裁决与 curator 调用——连同对话摘录与已存条目——路由到它们指定的 provider。两者默认为 `""`，即复用会话自身的路由，因此只有显式覆盖才会出现这条数据通路；指定 provider 等同于把对话内容授予它 |
+| 对话内容流向第三方 provider | `extractionModelProvider`/`extractionModelModel` 把提取、整合与 curator 调用——连同对话摘录与已存条目——路由到它们指定的 provider。两者默认为 `""`，即复用会话自身的路由，因此只有显式覆盖才会出现这条数据通路；指定 provider 等同于把对话内容授予它 |
 | 同网段其他主机读写记忆库 | 双层闸门（见 §7.7）：宿主的传输层信任围栏（`trustedHosts`）仍是第一道门；其后的 `remoteWritesEnabled`（缺省 `false`）让远程**写**方法缺省拒绝——过宽的 `trustedHosts` 配置下写入通道缺省关闭，读仍放行（浏览器管理需部署显式开启写开关）。写入内容进入后续会话 system prompt 的持久注入通道因此需要两个条件同时成立：栅栏放行 + 部署显式开启写 |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
 
@@ -728,14 +747,16 @@ memory:
 |---|---|
 | 未组合 `storageDomain`（如 headless 未加存储行） | `memory-store` 行组合失败——响亮、符合设计（该行 `inject` 了 `storageDomain`） |
 | `ctx.memory` 缺失时调用工具 | 工具抛 `memory service is not available…`——部署仍可启动 |
-| 会话请求头无 provider/model（且无覆盖） | 提取/curation 解析不到路由而抛错；调用方吞掉——静默 no-op |
-| LLM 流 error / aborted / max-tokens 截断 | 整批跳过；step/compaction/dispose 不受影响 |
+| 会话请求头无 provider/model（且无覆盖） | 提取/curation 解析不到路由而抛错；调用方吞掉——静默 no-op；整合路径走其零调用直写回退 |
+| LLM 流 error / aborted / max-tokens 截断 | 提取批次跳过；step/compaction/dispose 不受影响。整合调用失败记 `consolidate-call` 账，批次 fail-closed 为直接 add |
 | 扫描器拒绝某条提取行 | 仅跳过该行；批次其余正常入库 |
 | 某条提取/curated 条目 store 写入失败 | 该条跳过；其余继续 |
 | 未组合 `sessionProjections`（headless 组装） | 累加器未注册；周期 review no-op；flush 路径不受影响（不依赖投影） |
 | flush 运行中会话被销毁 | `AbortSignal.timeout(5000)` 约束进行中的提取 |
 | `extractionBudget` 耗尽 | review drain、两种 flush、curator 均停止记账直到下一会话 |
-| `judgeEnabled: false`（或 judge 流失败） | 预过滤命中直接经 `mergeContent` 合并（安全回退 `duplicate`） |
+| `judgeEnabled: false`（或 judge 流失败） | 仅 legacy 路径：预过滤命中直接经 `mergeContent` 合并（安全回退 `duplicate`）；two-tier 路径不受此开关影响 |
+| 整合调用失败或裁决行解析失败 | Fail-closed：整批作为新条目直接 add；失败经 `reportFailure` 记账（`consolidate-*` 站点） |
+| conflict 裁决的新条目入库后 `supersedeEntry` 失败 | 新事实已落库；旧条目保持 active 状态（未标注）——矛盾以两条独立条目可见 |
 | 在 provider 未实现建议队列时开启 `confirmBeforeWrite: true` | 提取行被跳过（尽力而为）；工具写入把拒绝以模型可读错误呈现 |
 | 建议队列超过 200 行上限 | 先淘汰 `hits` 最低、再按 `lastSeenAt` 最旧的行；被采纳/拒绝的行立即离开 |
 | 清理在非 git 项目 / 缺权限目录运行 | 全程 best-effort：`readdir`/`rm`/`writeFile` 逐项 catch，失败即跳过；每个项目根每进程仅尝试一次 |
@@ -752,10 +773,10 @@ memory:
 ```
 dsh-memory/
 ├── cordis.patch.yml        # profile 层（包的本质）：7 行
-├── src/                    # TypeScript 源码（35 个文件，约 10.1 kLOC）
+├── src/                    # TypeScript 源码（36 个文件，约 12.2 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（28 个文件，505 个用例）
+├── tests/                  # vitest specs（43 个文件，887 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -790,13 +811,13 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **28 个 vitest spec 文件、547 个用例**（541 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **43 个 vitest spec 文件、887 个用例**（881 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
-1. **纯函数单元** —— `extract.spec`（67：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
+1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（40：同一契约体分别对内存版 `TestMemoryStore` 与真实 `DomainMemoryStore` 各跑一遍；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
-5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（4）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
+5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（5）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
 
 ---
 
@@ -823,8 +844,9 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 | dsh 处于开发者预览期，API 漂移 | 组合损坏 | peer-dep 范围钉住 dsh 发布线；类型增强在构建期快速失败；CI 发布门校验 tag 版本 |
 | Git 安装需要 pnpm build 白名单条目 | git 首装多一步 | 文档化的两步 `allowBuilds` 流程；npm/tarball 路径完全规避 |
 | 注入记忆影响 prompt 质量 | 模型行为波动 | policy 文本把记忆定性为非指令上下文；扫描器写入时拦截指令式载荷、读取时脱敏；`off`/`policy-only` 模式可用 |
-| LLM 提取入库垃圾 | 存储污染 | 严格行协议、防伪造扁平化、逐行重扫、prompt 准入规则、去重管线、curator 清理、类别标注 |
-| `judgeEnabled: false` 时去重误合并 | 相关但不同的条目被并成一条 | 保守阈值（0.15）+ 停用词过滤；`mergeContent` 600 字符封顶增长；judge 对歧义默认安全合并 |
+| LLM 提取入库垃圾 | 存储污染 | 严格行协议、防伪造扁平化、逐行重扫、prompt 准入规则、two-tier 整合 / 去重裁决、curator 清理、类别标注 |
+| 去重误合并 | 相关但不同的条目被并成一条 | two-tier 选择器高于 0.15 预过滤线（0.2）且其 fail-closed 裁决是 `new`；`mergeContent` 600 字符封顶增长；防误合并规则把环境观察与跨作用域对引离 merge/update；legacy judge 对歧义默认安全合并 |
+| 整合裁决静默吞掉矛盾 | 过期事实继续被当作真相流转 | `conflict` 裁决走专用 `supersedeEntry` 接口（status + `supersededBy` + 可见标注）；superseded 条目保持工具面可见，模型可沿指针找到替代条目 |
 | BM25 词法失配（同义词、跨语言查询） | 相关条目未被检出 | golden-set CI 地板值捕捉排序回退（success@5 = 100% / MRR = 0.958 基线）；存在索引模式与 `memory_list` 提供穷举浏览；pin 抬升已知重要条目；跨语言语义召回按设计不在词法检索范围内 |
 | 软衰减藏起用户仍需要的条目 | 信息静默丢失 | stale 条目保持可搜索；一切召回（search/get/list 页/auto-recall）解除 stamp；health 暴露 stale 计数；手动归档开关复用同一可恢复表示 |
 | CSS 注入顺序 bug（esbuild CJS var 提升） | 客户端卡片裸奔无样式 | `card-styles.ts` 中 `RULES` 定义先于 `inject()`（已文档化的教训） |
@@ -860,13 +882,16 @@ src/
 ├── review/
 │   ├── index.ts          # 插件装配：累加器、pre-step drain、压缩/销毁 flush、
 │   │                     #   janitor、curator、预算、confirmBeforeWrite、
-│   │                     #   memory-review 命名空间
+│   │                     #   consolidation 写入路径选择、memory-review 命名空间
 │   ├── accumulator.ts    # 纯折叠、信号模式、失败序列状态机、
 │   │                     #   签名归一化、投影键 + Zod schema
 │   ├── dedup.ts          # tokenize（停用词过滤）、Jaccard、LLM judge、mergeContent
+│   ├── consolidate.ts    # two-tier 批量整合：候选选择器（BM25 原语）、
+│   │                     #   行协议裁决、裁决应用
 │   └── extract.ts        # 4 个 system prompt（含负面准则）、flattenFragment、
 │                         #   行/id 解析 + [summary:…] 标签 + stripModelDatePrefix、
-│                         #   去重 / 入队管线、curator pass、项目名自动探测
+│                         #   写入路径选择（two-tier / legacy-judge）、curator pass、
+│                         #   项目名自动探测
 ├── notes/
 │   ├── index.ts          # 插件：ProjectNotesService（同步纯内存渲染）+
 │   │                     #   session/created 一次性残留清理

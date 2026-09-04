@@ -227,7 +227,9 @@ export function readMemorySnapshot(
   for (const scope of SNAPSHOT_SCOPES) {
     const all = memory.list(scope)
     hiddenStale += all.filter(entry => entry.staleSince !== undefined).length
-    const visible = all.filter(entry => entry.staleSince === undefined)
+    // Superseded entries (consolidation conflict verdicts) drop out of the
+    // injection snapshot entirely — they stay navigable through the tools.
+    const visible = all.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
     const filtered = exclude === undefined ? visible : visible.filter(entry => !exclude(entry))
     if (filtered.length === 0) continue
     const capped = maxEntries > 0
@@ -277,7 +279,9 @@ export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?
   if (charLimit <= 0) return ''
   const all = exclude === undefined ? memory.list() : memory.list().filter(entry => !exclude(entry))
   const hiddenStale = all.filter(entry => entry.staleSince !== undefined).length
-  const visible = all.filter(entry => entry.staleSince === undefined)
+  // Superseded entries are excluded from the existence index like stale ones —
+  // the index surfaces only injectable memories.
+  const visible = all.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
   const entries: IndexEntry[] = visible.map(entry => ({
     id: entry.id as string,
     scope: entry.scope,
@@ -393,8 +397,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       const query = payload.messages.map(userMessageText).join('\n').trim()
       if (query.length < settings.autoRecallMinChars) return next()
       const result = memory.search({ query, limit: settings.autoRecallLimit })
-      // Soft-decayed entries stay hidden until deliberately recalled again.
-      const hits = result.entries.filter(entry => entry.staleSince === undefined)
+      // Soft-decayed and superseded entries stay hidden until deliberately
+      // recalled through the tool surface.
+      const hits = result.entries.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
       if (hits.length === 0) return next()
       memory.markRecalled(hits.map(entry => entry.id))
       const block = buildAutoRecallBlock(hits, AUTO_RECALL_CHAR_LIMIT)

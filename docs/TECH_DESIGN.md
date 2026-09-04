@@ -21,7 +21,7 @@
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
 | `memory-store` | `@chenhw7/dsh-memory/store` | Durable KV storage + BM25 lexical search; registers the `ctx.memory` service (entries + audit + suggestion-queue + **meta** tables) |
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (`memory_search/add/replace/remove/list/get/pin/unpin/forget`); in human-confirm mode, `add`/`replace` queue proposals instead of writing |
-| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + dedup + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
+| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic learning: signal accumulator (incl. failure-streak pitfall pairing) + LLM extraction + compaction/dispose flush + two-tier batch consolidation (kill-switch: legacy dedup judge) + janitor decay + low-frequency curator pass + **human-review queue** (`confirmBeforeWrite`); owns the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection: renders convention/pitfall entries into the `project-notes` prompt section (no repo files since 0.6 — [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)), registers the `ctx.projectNotes` service; cleans up ≤0.5.x file-export artifacts on session start |
 | `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt sections (`memory` @90, `project-notes` @91) + step-level auto-recall middleware; owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (three tabs, full write path) |
@@ -94,7 +94,7 @@ The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which insert
 | `memory-root` | — | — | No-op root entry for client-module scanner discovery |
 | `memory-store` | `storageDomain` | — | Opens the `memory` domain (entries + audit + suggestions + meta); registers `ctx.memory` |
 | `tool-memory` | `tools` | `memory`, `settings` | Registers the eight model tools (confirm-mode aware) |
-| `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | Accumulator + periodic review + flush + janitor + curator + suggestion queue producer; owns the `memory-review` namespace |
+| `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | Accumulator + periodic review + flush + two-tier consolidation + janitor + curator + suggestion queue producer; owns the `memory-review` namespace |
 | `memory-notes` | — | `memory`, `settings` | Registers `ctx.projectNotes`; renders the `project-notes` prompt snapshot (pure in-memory); cleans up ≤0.5.x file-export artifacts |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | Prompt sections + auto-recall middleware; owns the `memory` namespace |
 | `memory-remote` | `memory` | — | `@Remote` service for the memory management UI |
@@ -107,7 +107,7 @@ flowchart TB
       root["memory-root<br/>no-op scanner entry"]
       store["memory-store · /store<br/>ctx.memory provider + BM25 search<br/>entries + audit + suggestions + meta tables"]
       tool["tool-memory · /tool<br/>eight model tools (confirm-mode aware)"]
-      review["memory-review · /review<br/>accumulator + LLM extraction + dedup<br/>+ janitor + curator + review queue · memory-review ns"]
+      review["memory-review · /review<br/>accumulator + LLM extraction + two-tier consolidation<br/>+ janitor + curator + review queue · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt projection · ctx.projectNotes<br/>≤0.5.x artifact cleanup"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 sections<br/>auto-recall middleware · memory ns"]
       remote["memory-remote · /remote-service<br/>@Remote service for UI (14 methods)"]
@@ -158,7 +158,7 @@ flowchart LR
 
 Adopting a queued proposal from the UI runs the very same `store.add` / `store.update` path (audited with `source: 'ui'`); rejecting deletes the queue row. A `replace` proposal carries `targetEntryId`, so an already-confirmed entry is never touched until a human says yes.
 
-**Read path:** `memory_search` applies structured filters first (scope / category / projectName), then scores the surviving candidates with **BM25** over CJK-aware tokenization (Latin word tokens; CJK unigrams + adjacent bigrams, non-negative IDF, K1=1.2, B=0.75). Results sort by score desc → pinned desc → importance desc (absent reads as mid-range, so unassessed entries are not penalized) → `updatedAt` desc; `limit` defaults to the live `maxSearchResults` (`0` = unlimited). Returned hits get a fire-and-forget `lastRecalledAt` stamp plus an `accessCount` increment, which also clears any soft-decay stamp — the management UI passes `recordRecall: false` so browsing never stamps. `memory_list` presents the **smart default view**: newest-first pagination (`limit`/`offset`) over an optional `since`/`until` creation-time window, carrying `earliest`/`latest`/`hasStale` metadata and a widen-the-filter hint when a narrowed query is empty over a non-empty store; only the returned page counts as recalled. `memory_get` marks the single entry recalled.
+**Read path:** `memory_search` applies structured filters first (scope / category / projectName), then scores the surviving candidates with **BM25** over CJK-aware tokenization (Latin word tokens; CJK unigrams + adjacent bigrams, non-negative IDF, K1=1.2, B=0.75); superseded entries drop out of the candidate pool entirely (they stay reachable through the tool surface, §7.2). Results sort by score desc → pinned desc → importance desc (absent reads as mid-range, so unassessed entries are not penalized) → `updatedAt` desc; `limit` defaults to the live `maxSearchResults` (`0` = unlimited). Returned hits get a fire-and-forget `lastRecalledAt` stamp plus an `accessCount` increment, which also clears any soft-decay stamp — the management UI passes `recordRecall: false` so browsing never stamps. `memory_list` presents the **smart default view**: newest-first pagination (`limit`/`offset`) over an optional `since`/`until` creation-time window, carrying `earliest`/`latest`/`hasStale` metadata and a widen-the-filter hint when a narrowed query is empty over a non-empty store; only the returned page counts as recalled. `memory_get` marks the single entry recalled.
 
 **Automatic-extraction path:**
 
@@ -187,6 +187,14 @@ sequenceDiagram
         STEP->>STORE: findDuplicate → judgeDuplicate → merge/update/add<br/>(rejected lines skipped)
       end
     end
+    STEP->>STORE: selectConsolidationCandidates(lexical ≥0.2 ∨ shared anchor df≤2,<br/>same/cross-scope buckets)
+    alt candidates exist (and a session route is available)
+      STEP->>LLM: ONE consolidation call → CONSOLIDATE_SYSTEM_PROMPT<br/>(both buckets, anti-over-merge rules)
+      LLM-->>STEP: "<candidateId> <action> [targetEntryId] [content]" lines
+    else no candidates / no route
+      Note over STEP: zero consolidation calls
+    end
+    STEP->>STORE: apply verdicts: merge/update → memory.update<br/>conflict → supersedeEntry + fresh add · new → add<br/>(dropped lines fail closed to new)
     STEP->>ACC: advance high-water mark (success only)
   else below threshold
     Note over STEP: no-op
@@ -234,7 +242,8 @@ interface MemoryEntry {
   readonly status?: 'active' | 'superseded' // consolidation lifecycle; absent
                                  // reads as 'active'; 'superseded' entries
                                  // stay tool-visible (with a badge) but drop
-                                 // out of injection and search surfaces
+                                 // out of injection and search surfaces;
+                                 // only supersedeEntry flips the status
   readonly supersededBy?: MemoryId // the entry that won the contradiction,
                                  // set together with status: 'superseded'
 }
@@ -288,7 +297,7 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
   - `suggestions` — a KV table keyed by `SuggestionId` holding the pending human-review queue (§7.3.6). Same forward-compatible story: pre-P1 media reopen with the table initialized empty.
   - `meta` — a KV table keyed by plain string holding subsystem state rows that are not memories, audit records, or suggestions: consolidation progress (`consolidation:*` keys, e.g. last-run/cooldown timestamps), medium-level migration markers (`medium:*`, e.g. `migratedToSqlite`), and schema markers (`schema:*`). A record is a permissive carrier `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }` (loose zod schema): unknown keys and unknown fields re-read without error, and pre-meta media reopen with the table initialized empty. The store exposes `getMeta(key)`/`setMeta(key, record)`; a failed write is reported as a swallowed background failure (`meta-write`), never thrown into the caller.
 - The **audit table** records every `add`/`update`/`remove` (pin/unpin mutate without audit records) with an `AuditEntry`:
-  - `source`: `'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` — who triggered the write.
+  - `source`: `'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` — who triggered the write. A supersession through the batch-consolidation `supersedeEntry` seam reuses `'janitor'`: the `AuditSource` enum has no consolidation member, and extending the durable enum shape is not that seam's business (the same rationale as `trimEntries`' eviction records).
   - `op`: `'add'` | `'update'` | `'remove'`.
   - `contentPreview`: first ~100 chars, replaced by `'[content redacted]'` when the preview itself fails the scanner.
   - `ts`: Unix epoch ms, plus a monotonic `seq` (lazily seeded from the medium) so same-millisecond writes order deterministically.
@@ -344,8 +353,8 @@ A suggestion is **not** a memory: it never injects, never searches, and never de
   - `janitor(decayDays)`: the **two-tier lifecycle policy**. The snapshot pass only pre-filters candidates; every write decision re-reads the current record at the **write-chain slot** (`KvTable.update` atomic RMW — the same discipline as the recall stamp):
     - `project` scope → **hard decay**: a guard update re-reads `pinned` first (pinned → returns unchanged and skips), and only an unpinned record is removed, audited as `remove`/`janitor` (a narrow window between guard and delete remains that the host primitives cannot close; the code comment records it honestly);
     - `global`/`user` scope → **soft decay**: the overdue check, importance grace, pin exemption, and decay idempotence are all decided inside the update transform from the re-read record; a passing decision stamps `staleSince = now` and audits `update`/`janitor`; never auto-deleted. Stale entries drop out of injection surfaces (prompt snapshot, index, notes files, auto-recall) but stay searchable; being recalled again clears the stamp. Entries with `importance` 4–5 get a 1.5× grace window (the model's "this matters" judgment extends the tolerable quiet period; recall stays the stronger signal — `stampRecalled` clears the decay stamp outright).
-    Returns the count of hard-decayed (removed) project entries.
-  - `health()`: `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` — `stale` counts currently soft-decayed entries; `lastExtractionTs` is the newest audit record sourced `review`/`flush`; `backgroundFailures` counts, per site (`audit-append`, `review-drain`, `flush-compaction`, `flush-dispose`, `janitor`, `curator`, `judge`, `row-rewrite`, `compaction-refreeze`, `auto-recall`, `recall-stamp`, `notes-snapshot`, `legacy-cleanup`), the failures swallowed by best-effort background paths — each report also warns once through the host `ctx.logger` channel, so a silently degraded path stays observable (in-process counters; they reset on restart).
+    - **`supersedeEntry(id, supersededBy, annotate?)`:** flips `status` to `'superseded'`, stamps `supersededBy`, and appends the caller's annotation to the content in one atomic write (idempotent on an already-superseded entry; audited as `update` with source `'janitor'`). Consolidation is the only writer allowed to flip an entry's status — `update` deliberately does not accept it. The abstract `MemoryStore` default is a no-op returning `undefined`, so providers without the seam stay contract-conformant and a conflict verdict on them degrades to a plain add. Returns the superseded entry, or `undefined` when the id does not exist; superseded entries stay out of the janitor's scope — consolidation owns their lifecycle.
+  - `health()`: `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` — `stale` counts currently soft-decayed entries; `lastExtractionTs` is the newest audit record sourced `review`/`flush`; `backgroundFailures` counts, per site (`audit-append`, `review-drain`, `flush-compaction`, `flush-dispose`, `janitor`, `curator`, `judge`, `consolidate-call`, `consolidate-apply`, `consolidate-supersede`, `consolidate-add`, `row-rewrite`, `compaction-refreeze`, `auto-recall`, `recall-stamp`, `notes-snapshot`, `legacy-cleanup`), the failures swallowed by best-effort background paths — each report also warns once through the host `ctx.logger` channel, so a silently degraded path stays observable (in-process counters; they reset on restart).
   - `listAudit()` returns records newest-first; `exportAuditLog()` oldest-first; both order by `ts`, tie-broken by monotonic `seq`, then id.
   - **Suggestion queue (the pending human-review table):**
     - `observeSuggestion(input)`: scanner-gated, then dedups against existing proposals — same `targetEntryId` wins outright; same-scope Jaccard > 0.15 counts as a repeat (bump `hits`, refresh `lastSeenAt`, adopt newer fields, let a strict-superset content replace the original). Otherwise a new row joins with `hits: 1`. Overflow past the 200-row cap evicts lowest hits, then oldest `lastSeenAt`.
@@ -379,12 +388,12 @@ Design notes:
 - **Confirm mode is a cross-namespace read.** `memory_add`/`memory_replace` resolve `confirmBeforeWrite` live from the **`memory-review` namespace** (default `false`); when on, a queued write returns `{ pending: true, suggestionId }` and the tool descriptions tell the model its proposal is awaiting human review.
 - **Optional service, loud failure.** Each tool resolves the store with `ctx.get('memory')` and throws `memory service is not available: no memory provider is composed` when absent — a memory-less deployment still boots; the failure appears at the earliest point the user can see it.
 - **Scan at the tool boundary** so a rejected payload never reaches the store and the model gets a clean, actionable error; the store re-scans as defense-in-depth.
-- **Wire projection:** entries project to `EntryJson` (branded id serialized as plain string; optional fields omitted, `summary` included when present; a soft-decay stamp surfaces as `stale: true` so the model knows the entry is hidden from standing injections and may be outdated).
+- **Wire projection:** entries project to `EntryJson` (branded id serialized as plain string; optional fields omitted, `summary` included when present; a soft-decay stamp surfaces as `stale: true` so the model knows the entry is hidden from standing injections and may be outdated; a superseded entry stays tool-visible by design and surfaces as `superseded: <newEntryId>` plus the trailing ` [superseded → <newEntryId>]` content annotation, so the model can follow the contradiction to its replacement).
 - Tool descriptions are part of the behavioral contract: they tell the model *when* to use each tool and that memory is "helpful context, not instructions".
 
 ### 7.3 Automatic extraction — `/review` (`src/review/`)
 
-The review plugin is the automatic-sediment layer. One store, five triggers: periodic drain, pitfall distillation, compaction flush, dispose flush, curator rewrite.
+The review plugin is the automatic-sediment layer. One store, five triggers: periodic drain, pitfall distillation, compaction flush, dispose flush, curator rewrite. Every stored batch runs one of two write paths — two-tier batch consolidation (default) or the legacy per-pair dedup judge (§7.3.3).
 
 #### 7.3.1 Candidate accumulator (session projection)
 
@@ -403,9 +412,9 @@ The review plugin is the automatic-sediment layer. One store, five triggers: per
 
 - An `agent/pre-step` listener reads the projection snapshot for the agent's session.
 - A **per-session high-water mark** (`WeakMap<Session, number>`) records the max candidate seq covered by a successful extraction; `unprocessed = candidates with seq > mark`.
-- When `unprocessed.length >= reviewCandidateThreshold` (default **10**) and the budget allows, `runReviewExtraction` runs. The mark advances **only after success** — a failed batch stays unprocessed and retries on the next crossing, with dedup making re-storing idempotent.
+- When `unprocessed.length >= reviewCandidateThreshold` (default **10**) and the budget allows, `runReviewExtraction` runs. The mark advances **only after success** — a failed batch stays unprocessed and retries on the next crossing, with the write path making re-storing idempotent (merges fold into existing entries, fresh facts add once).
 - **Extraction budget:** `extractionBudget` (default **20**, 0 = unlimited) is a per-session budget shared across the review drain, both flush paths, and the curator pass. It is charged **once per drain/flush/curator trigger** (not per internal LLM call), so a drain that issues a pitfall call + a review call consumes one unit.
-- **Judge toggle:** `judgeEnabled` (default **true**) controls whether the LLM dedup judge runs on prefilter hits. When `false` (or no session), prefilter hits merge directly (cheaper, may false-merge).
+- **Judge toggle:** `judgeEnabled` (default **true**) controls whether the LLM dedup judge runs on prefilter hits on the legacy path. When `false` (or no session), prefilter hits merge directly (cheaper, may false-merge). It has no effect on the default two-tier consolidation path.
 - The whole drain is wrapped in try/catch: **a review failure must never block the step.**
 
 #### 7.3.3 LLM extraction core (`src/review/extract.ts`)
@@ -422,14 +431,17 @@ The review plugin is the automatic-sediment layer. One store, five triggers: per
 - **Output protocol:** one memory per line, `scope: [tag] [summary:…] content`, where scope ∈ {`global`, `project`, `user`}, tag ∈ {[procedure], [convention], [preference], [pitfall]} mapping to categories procedure/convention/preference/failure, and the optional `[summary:…]` tag supplies the short summary index/auto-recall surfaces prefer over truncated content. `parseExtractedMemories` is pure and strict: blank lines, missing colon, unknown scope, or empty content are dropped; category and summary tags are consumed at the parse layer so storage receives clean fields.
 - **Program-stamped time:** `stripModelDatePrefix` removes any date prefixes the model hallucinated onto extracted content (`(YYYY-MM-DD)` / `[YYYY-MM-DD]` / ISO datetime / `[git branch]` shapes, looped for stacked prefixes) at the store boundary, so `createdAt`/`updatedAt` always come from the program.
 - **Candidate partitioning:** a drain splits candidates into the `pitfall-resolved` subset (→ pitfall prompt, entries attached category `failure`) and the rest (→ review prompt; a batch that is entirely corrections attaches category `correction`). Each call is independent and best-effort.
-- **Dedup pipeline:** before storing each parsed line, `findDuplicate` (Jaccard > 0.15 after stop-word filtering, same scope only) checks existing entries. On a hit and with `judgeEnabled` + a session available, `judgeDuplicate` runs the one-word-verdict LLM judge:
-  - `duplicate` → merge content into the existing entry (`mergeContent`);
-  - `update` → replace with the new content;
-  - `new` → create a separate entry (prefilter was a false positive).
-  Judge failures fall back to `duplicate` (safe merge). With `judgeEnabled: false`, prefilter hits merge directly.
+- **Dedup pipeline:** two write paths, selected by the `consolidation` field (default `two-tier`):
+  - **`two-tier` (default):** the batch runs through `applyConsolidation` (`src/review/consolidate.ts`). A lexical pre-selector (`selectConsolidationCandidates`, built on the retrieval plane's BM25 primitives) proposes candidate pairs — IDF-weighted overlap above `CONSOLIDATION_SIMILARITY_THRESHOLD` (**0.2**) ∨ a shared anchor with document frequency ≤ `ANCHOR_DF_CAP` (**2**) — and buckets them by scope relation (same-scope pairs may take any action; cross-scope pairs are prompted toward `new`/`conflict` only; both buckets are folded into one call, capped at 20 pairs). Only when at least one candidate exists and a session route is available does the batch issue **one** consolidation LLM call over the line protocol `<candidateId> <action> [targetEntryId] [content]`, action ∈ {`merge`, `update`, `conflict`, `new`}:
+    - `merge` → merge content into the existing entry (`mergeContent` + `memory.update`);
+    - `update` → the verdict's content (or the batch content when omitted) replaces the targeted entry;
+    - `conflict` → the new fact is stored fresh, and the old entry flips through the store's dedicated `supersedeEntry` seam: `status: 'superseded'`, `supersededBy: <newEntryId>`, and the visible annotation ` [superseded → <newEntryId>]` appended to its content;
+    - `new` → a separate entry.
+    Parsing is offer-list fail-closed: a line with a foreign `candidateId`, a dangling target, or an unparseable shape is dropped and resolves to `new` (a false new leaves redundancy the periodic consolidation layer recovers; a false merge would delete information). With no candidates (or no route) the batch writes directly with **zero** consolidation calls.
+  - **`legacy-judge` (kill-switch, kept one release):** the original per-entry flow — before storing each parsed line, `findDuplicate` (Jaccard > 0.15 after stop-word filtering, same scope only) checks existing entries; on a hit and with `judgeEnabled` + a session available, `judgeDuplicate` runs the one-word-verdict LLM judge (`duplicate` → merge, `update` → replace, `new` → separate entry). Judge failures fall back to `duplicate` (safe merge); with `judgeEnabled: false`, prefilter hits merge directly.
 - **Bounded merges:** `mergeContent` keeps the longer side when one content contains the other, otherwise concatenates — but past `MERGE_CHAR_LIMIT` (**600 chars**) it falls back to the longer side instead of growing forever; true re-summarization belongs to the curator.
-- **Storage:** `storeMemories` scans each line and stores entries independently; a scanner rejection or store failure skips that line only. The local dedup-candidate list is updated as the batch proceeds so later lines see earlier stores. In **confirm mode** the same line lands in the suggestion queue instead (§7.3.6): `findDuplicate` still runs, but its hit becomes the proposal's `targetEntryId` — never an in-place merge.
-- **Stream handling:** `collectStreamText` assembles `ctx.llm.stream` chunks via `BlockAssembler`; terminal finishes of `error` / `aborted` / `max-tokens` map to fail-closed errors and the batch is skipped.
+- **Storage:** per-entry normalization (category tag strip, date-prefix strip, content scan) runs first; every surviving line then goes through the selected write path, and a scanner rejection or store failure skips that line only. In **confirm mode** the batch lands in the suggestion queue instead (§7.3.6) and neither consolidation path runs.
+- **Stream handling:** `collectStreamText` assembles `ctx.llm.stream` chunks via `BlockAssembler`; terminal finishes of `error` / `aborted` / `max-tokens` map to fail-closed errors and the batch is skipped. The consolidation call rides the same seam: a failed or unparseable consolidation response is booked through `reportFailure` and the batch fails closed to plain adds.
 
 #### 7.3.4 Flush paths (compaction & dispose)
 
@@ -453,15 +465,18 @@ Fully-automatic extraction has a structural flaw: a wrong extraction is written 
 - **Adoption is the only write.** `suggestAdopt` applies the proposal through the full store contract (scanner + audit, `source: 'ui'`), honoring any human edits made in the Review tab ("edit before adopt"); `suggestReject` deletes the row. Both are exposed remotely and in the Memory section UI (§7.7, §7.8).
 - **Read-side consumers degrade gracefully.** Providers without a suggestion queue stay contract-conformant via the default no-op implementations; confirm-mode callers treat "unsupported" as an empty queue.
 
-#### 7.3.7 Dedup pipeline (`src/review/dedup.ts`)
+#### 7.3.7 Dedup & consolidation primitives
 
 1. **Prefilter (embedding-free):**
    - `uniqueTokens(text)`: reuses the BM25 tokenizer (`tokenizeForSearch` — Latin word tokens + CJK unigrams and bigrams, one tokenizer for retrieval and dedup, no separate stop-word list). Returns a `Set` of unique tokens.
    - `weightedOverlapSimilarity(stats, a, b)`: IDF-weighted overlap `Σidf(intersection) / Σidf(union)` — the IDF comes from the shared `buildCorpusStats` over the compared texts (non-negative Robertson/Sparck-Jones), so high-frequency grammatical particles weigh ~0 without a hand-maintained stop list.
-   - `findDuplicate(candidate, scope, existing)`: same-scope-only comparison; returns the best-matching entry id above `DEDUP_SIMILARITY_THRESHOLD` (0.15), or `undefined`.
-2. **LLM judge (optional):**
+   - `findDuplicate(candidate, scope, existing)`: same-scope-only comparison; returns the best-matching entry id above `DEDUP_SIMILARITY_THRESHOLD` (0.15), or `undefined`. It backs the confirm-mode `targetEntryId` lookup and the legacy-judge kill-switch path.
+2. **LLM judge (legacy path only):**
    - `JUDGE_SYSTEM_PROMPT`: one-word protocol — `duplicate` (same fact, different wording → keep existing), `update` (correction/more precise → replace), `new` (genuinely different fact → keep both).
    - `parseJudgeVerdict(text)`: lowercases, trims, matches the three words; anything unrecognized defaults to `duplicate` (merge rather than create a spurious duplicate).
+3. **Consolidation selector (`src/review/consolidate.ts`, two-tier path):**
+   - `selectConsolidationCandidates(parsed, existing)`: proposes (new parsed line, stored entry) pairs on the same BM25 primitives — weighted overlap above **0.2** ∨ a shared anchor with df ≤ **2** over the stored corpus — and buckets them same-scope vs cross-scope; a pair may appear in the cross-scope bucket (structurally invisible to `findDuplicate`). Already-superseded entries are never targets; the candidate cap is 20 pairs per call.
+   - `parseConsolidateVerdicts(text, allowed)`: mirrors the `parseCuratedLines` discipline — only offered `candidateId`s with a valid action survive; merge/update/conflict require a target id that was offered as an existing side; dropped lines resolve to `new` in `applyConsolidation`.
 
 - **`mergeContent(old, new, maxChars = 600)`:** substring containment → longer side wins; otherwise concatenate with a space — unless the concatenation exceeds the cap, in which case the more informative side stands alone.
 
@@ -484,7 +499,7 @@ Two namespaces, both live:
 | Namespace | Owner | Keys (default) |
 |---|---|---|
 | `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
-| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
+| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
 
 Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored).
 
@@ -510,6 +525,7 @@ Each resolves in layers: schema defaults → composition `config:` base → user
   - `notes` — `ctx.get('projectNotes')?.snapshotFor(cwd)` (or empty when disabled/absent);
   - all three stored in `WeakMap<Session, FrozenSnapshot>` and read once per freeze, keeping the system-prompt prefix KV-cache-stable between compactions.
 - **No-double-injection exclusion:** while notes are enabled, the snapshot reader excludes entries matching `isRenderedEntry(entry, projectNameOf(cwd))`, so notes-rendered content never also appears in the memory section/index.
+- **Superseded visibility:** the prompt snapshot, the existence index, and the auto-recall fence all drop `status: 'superseded'` entries the same way they drop soft-decayed ones — a contradiction verdict must not keep feeding the losing fact into new sessions. Superseded entries stay visible through the tool surface (§7.2) carrying the `superseded` field and the content annotation.
 - **Conflict annotation (wired):** within one scope, `annotateConflicts` treats `correction`-category entries as newer statements and flags overlapping older entries — `conflicting` (Jaccard ≥ 0.2 + contradiction signal words like "actually", "不对", "改了") renders "(⚠ contradicts a newer correction — verify before trusting)", `stale` (topic overlap only, ≥ 0.15) renders "(⚠ possibly outdated…)". Deterministic and freeze-time, so annotations stay cache-stable.
 - **Composition by mode** (`buildMemorySectionText`, pure):
 
@@ -531,7 +547,7 @@ An `agent/pre-step` middleware (registered by `memory-context`):
 
 1. Reads live settings; no-ops unless `autoRecallEnabled`.
 2. Builds the query from the incoming step's user-message text blocks (joined); skips when shorter than `autoRecallMinChars` (default 12).
-3. Runs a synchronous BM25 store search with `limit: autoRecallLimit` (default 5), drops soft-decayed hits, stamps the survivors recalled.
+3. Runs a synchronous BM25 store search with `limit: autoRecallLimit` (default 5), drops soft-decayed and superseded hits, stamps the survivors recalled.
 4. Renders `buildAutoRecallBlock`: a fenced `<recalled-memory>` block — framing note plus `- [scope/category] summary-or-content[:200]` lines (an entry's `summary` is preferred), capped at `AUTO_RECALL_CHAR_LIMIT` (**1200 chars**) and trailed by a `fence: N characters ≈M tokens` footer so the per-step injection cost is always visible.
 5. Appends it as one plugin-sourced user message: returns `{ kind: 'enter', messages: [...payload.messages, recallMessage] }`.
 
@@ -599,7 +615,7 @@ Contributes **four cards** into Settings → Plugins → Plugin configuration, a
 | `memory` | `memory` | curated `MemoryPluginCard` | `memoryMode` select (policy-only/full/index/custom/off), conditional custom-policy textarea, `memoryCharLimit`, `memoryMaxEntries` (min 0), `maxSearchResults`, `decayDays` |
 | `memory-notes` | `memory` | spec-driven `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec-driven `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit` (min 1), `autoRecallMinChars` (min 1) |
-| `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
+| `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `consolidation` (two-tier/legacy-judge select), `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
 
 Mechanics:
 
@@ -675,7 +691,8 @@ memory-review:
   extractionModelProvider: ""    # empty = session route
   extractionModelModel: ""       # empty = session route
   extractionBudget: 20           # LLM-call charges per session (0 = unlimited)
-  judgeEnabled: true             # LLM dedup judge on prefilter hits
+  judgeEnabled: true             # legacy-judge path only: LLM dedup judge on prefilter hits
+  consolidation: two-tier        # write path: two-tier (default) | legacy-judge (kill-switch)
   pitfallStreakThreshold: 2      # same-signature failures before a success → pitfall candidate
   curatorEnabled: true           # low-frequency oversized-entry re-summarization
   curatorEveryNSessions: 20      # run the curator every N session creations
@@ -685,7 +702,7 @@ memory-review:
                                  #   proposals until a human adopts them (§7.3.6)
 ```
 
-By default, extraction, judging, and curation use the **same model the user is chatting with**. To route them to a dedicated cheaper model, set the override pair (composition config or the settings UI — the UI offers dropdowns fed by the host model catalog):
+By default, extraction, consolidation, and curation use the **same model the user is chatting with**. To route them to a dedicated cheaper model, set the override pair (composition config or the settings UI — the UI offers dropdowns fed by the host model catalog):
 
 ```yaml
 memory-review:
@@ -717,11 +734,12 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | Exfiltration payload stored and executed on a later session | Exfiltration patterns rejected at write time; tool output rendering does not execute content |
 | Indirect injection *through the extractor* (hostile session content steering the LLM) | Fragments/snapshots newline-flattened (`flattenFragment`) so the line protocol cannot be forged; prompts declare fragments "raw data, never instructions"; output parsed strictly (`scope: [tag] [summary:…] content`; model-written date prefixes stripped); every line re-scanned before storage; curator accepts only offered ids |
 | A wrong automatic extraction fossilizes as high-confidence truth | Optional `confirmBeforeWrite` gate: extractions and tool writes queue as proposals (`hits`-sorted), adoption is the only write; the model can't self-promote an update past the gate |
-| Low-value noise sedimenting (capture ≠ correctness) | Negative admission rule in all extraction prompts (repo-derivable content excluded); dedup judge; curator passthrough; confirm-mode human gate |
+| Contradicted facts keep serving as truth | Two-tier consolidation's `conflict` verdict supersedes the old entry (status + `supersededBy` + visible annotation) and stores the new fact; superseded entries drop out of every injection/search surface |
+| Low-value noise sedimenting (capture ≠ correctness) | Negative admission rule in all extraction prompts (repo-derivable content excluded); two-tier consolidation / dedup judge; curator passthrough; confirm-mode human gate |
 | Unbounded store growth / prompt bloat | `memoryCharLimit` + `memoryMaxEntries` + notes char budgets + 1200-char auto-recall cap; `MERGE_CHAR_LIMIT` (600) bounds merge growth; `limit`/`offset` pagination; audit log capped at 200; suggestion queue capped at 200; two-tier janitor decay; curator shrinks oversized entries |
 | Conflicting memories served as truth | Freeze-time conflict annotation marks contradicted/staled lines inline; soft-decayed entries hidden from standing views until re-recalled; write-time-truth disclaimer on all three memory surfaces |
 | The plugin unexpectedly writes files into the user's repository | The 0.6 notes projection does zero file I/O (see the [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.md)); rendering is pure in-memory; ≤0.5.x artifacts are conservatively cleaned on `session/created` (only plugin-generated files; content outside the markers untouched) |
-| Conversation content leaving for a third-party provider | `extractionModelProvider`/`extractionModelModel` route extraction, judge, and curator calls — and therefore conversation excerpts and stored entries — to whatever provider they name. Both default to `""`, which reuses the session's own route, so an override is the only way this data path appears; treat naming a provider as granting it conversation content |
+| Conversation content leaving for a third-party provider | `extractionModelProvider`/`extractionModelModel` route extraction, consolidation, and curator calls — and therefore conversation excerpts and stored entries — to whatever provider they name. Both default to `""`, which reuses the session's own route, so an override is the only way this data path appears; treat naming a provider as granting it conversation content |
 | Another host on the network reading or writing the store | Two gates (§7.7): the host's transport trust fence (`trustedHosts`) stays first, and behind it `remoteWritesEnabled` (default `false`) makes the remote **write** methods deny by default — with a wide `trustedHosts`, the write channel is closed unless the deployment explicitly enables it, while reads pass (browser management requires opting in). The persistent injection channel — writes reaching later sessions' system prompts — therefore needs both conditions at once: fence admission and an explicit write-enable |
 | Retrieval quality regressing unnoticed | Golden-set CI floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) — a tokenizer/weight/budget regression fails the build |
 
@@ -731,14 +749,16 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 |---|---|
 | No `storageDomain` composed (e.g. headless without storage rows) | Composition fails at the `memory-store` row — loud, by design (the store row `inject`s `storageDomain`) |
 | Tool called while `ctx.memory` is absent | Tool throws `memory service is not available…` — deployment still boots |
-| No provider/model in the session request header (and no override) | Extraction/curation resolve no route and throw; callers swallow — silent no-op |
-| LLM stream error / aborted / truncated at max tokens | Batch skipped; step/compaction/dispose unaffected |
+| No provider/model in the session request header (and no override) | Extraction/curation resolve no route and throw; callers swallow — silent no-op; the consolidation path takes its zero-call direct-write fallback |
+| LLM stream error / aborted / truncated at max tokens | Extraction batch skipped; step/compaction/dispose unaffected. A consolidation call failure books `consolidate-call` and the batch direct-adds (fail-closed `new`) |
 | Scanner rejects an extracted line | That line is skipped; the rest of the batch is stored |
 | Store write fails for one extracted/curated entry | Entry skipped; others proceed |
 | `sessionProjections` not composed (headless assembly) | Accumulator not registered; periodic review no-ops; flush paths still work (they don't depend on projections) |
 | Session disposed while a flush is running | `AbortSignal.timeout(5000)` bounds the in-flight extraction |
 | `extractionBudget` exhausted | Review drains, both flushes, and the curator stop charging further calls until the next session |
-| `judgeEnabled: false` (or judge stream fails) | Prefilter hits merge directly via `mergeContent` (safe fallback `duplicate`) |
+| `judgeEnabled: false` (or judge stream fails) | Legacy path only: prefilter hits merge directly via `mergeContent` (safe fallback `duplicate`); the two-tier path ignores this flag |
+| Consolidation call fails or its verdicts fail to parse | Fail-closed: the whole batch direct-adds as fresh entries; the failure is booked through `reportFailure` (`consolidate-*` sites) |
+| `supersedeEntry` fails after the conflict verdict's fresh add | The new fact is already stored; the old entry keeps its active status (unannotated) — the contradiction stays visible as two entries |
 | `confirmBeforeWrite: true` on a provider without a suggestion queue | Extraction lines are skipped (best-effort); tool writes surface the rejection as a model-readable error |
 | Suggestion queue exceeds the 200-row cap | Lowest-`hits`, then oldest-`lastSeenAt` rows evicted; adopted/rejected rows leave immediately |
 | Cleanup runs in a non-git project / permission-denied directory | Entirely best-effort: every `readdir`/`rm`/`writeFile` failure is caught and skipped; attempted once per project root per process |
@@ -755,10 +775,10 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 ```
 dsh-memory/
 ├── cordis.patch.yml        # the profile layer (the package's substance): 7 rows
-├── src/                    # TypeScript sources (35 files, ~10.1 kLOC)
+├── src/                    # TypeScript sources (36 files, ~12.2 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (28 files, 505 cases)
+├── tests/                  # vitest specs (43 files, 887 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -793,13 +813,13 @@ Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main`
 
 ## 11. Testing Strategy
 
-The repo ships **28 vitest spec files, 547 test cases** (541 active + 6 skipped without real-API keys), in five layers:
+The repo ships **43 vitest spec files, 887 test cases** (881 active + 6 skipped without real-API keys), in five layers:
 
-1. **Pure-function units** — `extract.spec` (67: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
+1. **Pure-function units** — `extract.spec` (81: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `consolidate.spec` (29: selector signals, bucketing, verdict parsing fail-closed, all four actions, no-candidate zero-call pass-through), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
 2. **Contract** — `store-contract.spec` (40): the same contract body runs twice, over the in-memory `TestMemoryStore` and the real `DomainMemoryStore`; search assertions follow the BM25 token semantics (any query token matching counts; a bare substring matches nothing; CRUD/pin/health/scanner rejections/project-scope validation/recordRecall side-effect freedom; janitor two-tier decay, importance ranking, recall stamping, and pin TOCTOU live in dedicated describes over the real implementation).
 3. **Tool behavior** — `tools.spec` (37): the eight `execute()` paths against a real `ToolRuntime` + `SystemPrompt` composition with the in-memory store; `tools-confirm-and-window.spec` (10): confirm-mode queueing (`{ pending, suggestionId }`, `targetEntryId` proposals) + `memory_list` smart view (newest-first, `since`/`until` window, metadata, widen hint).
 4. **Remote & client UI** — `remote-service.spec` (12: projects aggregation / staleSince·stale passthrough / newest-first ordering / `recordRecall:false` suppression / archive + suggestion methods); `memory-section.client.spec.tsx` (24, jsdom): tab split / lazy loading / filters / review-queue adopt·reject·edit / manage write actions / error recovery.
-5. **Integration** — `integration/composition.spec` (36): full Cordis composition with `storage-domain` + JSON backend, exercising store, tools, context injection, and notes end-to-end; `integration/host.spec` (13, P1-3): the real composition booted over a temp dir — asserting against **physical files on disk** and **assembled system-prompt text** (the layer that catches host API drift); `confirm-extraction.spec` (7): confirm-mode extraction end-to-end (queue instead of store, tool proposals, curator proposals); `dedup-integration.spec` (2) against a real store; `settings-live.spec` (4) live-settings application; `judge-real-api.spec` (6, skipped without API keys) against the real DeepSeek API.
+5. **Integration** — `integration/composition.spec` (36): full Cordis composition with `storage-domain` + JSON backend, exercising store, tools, context injection, and notes end-to-end; `integration/host.spec` (13, P1-3): the real composition booted over a temp dir — asserting against **physical files on disk** and **assembled system-prompt text** (the layer that catches host API drift); `confirm-extraction.spec` (7): confirm-mode extraction end-to-end (queue instead of store, tool proposals, curator proposals); `dedup-integration.spec` (2) against a real store; `settings-live.spec` (5) live-settings application; `judge-real-api.spec` (6, skipped without API keys) against the real DeepSeek API.
 
 ---
 
@@ -826,8 +846,9 @@ The repo ships **28 vitest spec files, 547 test cases** (541 active + 6 skipped 
 | dsh is in developer preview; API drift | Composition breakage | Peer-dep ranges pinned to the dsh release line; type-level augmentation fails fast at build time; CI publish gate on tagged versions |
 | Git-hosted install requires a pnpm build-allowlist entry | One extra step on first-time git install | Documented two-step `allowBuilds` procedure; npm/tarball paths avoid it entirely |
 | Injected memory affects prompt quality | Model behavior variance | Policy text frames memory as non-instructional context; scanner blocks instruction-like payloads at write and redacts at load; `off`/`policy-only` modes available |
-| LLM extraction stores garbage | Store pollution | Strict line protocol, anti-forgery flattening, per-line re-scan, admission rules in prompts, dedup pipeline, curator cleanup, category tagging |
-| Dedup false-merge when `judgeEnabled: false` | Related-but-distinct entries merged | Conservative threshold (0.15) + stop-word filtering; `mergeContent` caps growth at 600 chars; judge defaults to safe-merge on ambiguity |
+| LLM extraction stores garbage | Store pollution | Strict line protocol, anti-forgery flattening, per-line re-scan, admission rules in prompts, two-tier consolidation / dedup judge, curator cleanup, category tagging |
+| Dedup false-merge | Related-but-distinct entries merged | The two-tier selector sits above the 0.15 prefilter line (0.2) and its fail-closed verdict is `new`; `mergeContent` caps growth at 600 chars; the anti-over-merge rules route environment-observations and cross-scope pairs away from merge/update; the legacy judge defaults to safe-merge on ambiguity |
+| Consolidation verdict silently swallows a contradiction | A stale fact keeps circulating as truth | `conflict` verdicts route through the dedicated `supersedeEntry` seam (status + `supersededBy` + visible annotation); a superseded entry stays tool-visible so the model can follow the pointer to its replacement |
 | BM25 lexical mismatch (synonyms, cross-language queries) | Relevant entry not surfaced | Golden-set CI floors catch ranking regressions (success@5 = 100% / MRR = 0.902 baseline); existence-index mode and `memory_list` give exhaustive browsing; pins elevate known-important entries; cross-language semantic recall is out of scope for lexical search by design |
 | Soft-decay hides an entry the user still needs | Silent information loss | Stale entries remain searchable; every recall (search/get/list page/auto-recall) un-stamps; health exposes the stale count; the manual archive toggle uses the same recoverable representation |
 | CSS injection order bug (esbuild CJS var hoisting) | Client card renders without styles | `RULES` defined before `inject()` in `card-styles.ts` (documented lesson) |
@@ -863,14 +884,16 @@ src/
 ├── review/
 │   ├── index.ts          # plugin wiring: accumulator, pre-step drain, compaction/dispose
 │   │                     #   flush, janitor, curator, budget, confirmBeforeWrite,
-│   │                     #   memory-review namespace
+│   │                     #   consolidation write-path selector, memory-review namespace
 │   ├── accumulator.ts    # pure fold, signal patterns, failure-streak state machine,
 │   │                     #   signature normalization, projection key + Zod schema
 │   ├── dedup.ts          # tokenize (stop-word filtered), Jaccard, LLM judge, mergeContent
+│   ├── consolidate.ts    # two-tier batch consolidation: candidate selector (BM25
+│   │                     #   primitives), line-protocol judge, verdict application
 │   └── extract.ts        # 4 system prompts (incl. negative criterion), flattenFragment,
 │                         #   line/id parsing + [summary:…] tag + stripModelDatePrefix,
-│                         #   dedup / queue storage pipelines, curator pass,
-│                         #   project auto-detection
+│                         #   write-path selection (two-tier / legacy-judge), curator
+│                         #   pass, project auto-detection
 ├── notes/
 │   ├── index.ts          # plugin: ProjectNotesService (pure in-memory render) +
 │   │                     #   session/created one-time artifact cleanup

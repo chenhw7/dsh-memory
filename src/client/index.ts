@@ -59,7 +59,7 @@ import type {
 } from './NamespaceCard.tsx'
 import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
-import { modelOptions, providerOptions } from './model-catalog.ts'
+import { modelOptions, providerOptions, consolidationOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
 /**
@@ -126,6 +126,7 @@ const REVIEW_SPEC: NamespaceCardSpec = {
     },
     { key: 'extractionBudget', kind: 'number' },
     { key: 'judgeEnabled', kind: 'checkbox' },
+    { key: 'consolidation', kind: 'select', options: consolidationOptions, labelKey: 'consolidation', hintKey: 'consolidationHint' },
     { key: 'pitfallStreakThreshold', kind: 'number', minValue: 1 },
     {
       key: 'confirmBeforeWrite',

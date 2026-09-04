@@ -245,6 +245,20 @@ export abstract class MemoryStore {
    * support stay contract-conformant.
    */
   getRaw(_id: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
+
+  /**
+   * Supersede one entry through the batch-consolidation path (write-path
+   * rework): flips `status` to `'superseded'`, stamps `supersededBy`, and
+   * appends a visible supersession annotation to the content — the ONLY
+   * write path allowed to flip an entry's status (`update` deliberately does
+   * not accept it). Returns the superseded entry, or `undefined` when the id
+   * does not exist or the provider has no supersession support. The default
+   * is a no-op returning `undefined`, so providers without the seam stay
+   * contract-conformant and the consolidation path degrades to a plain add.
+   * @param _id - The entry being superseded.
+   * @param _supersededBy - The id of the newer, contradicting entry.
+   */
+  supersedeEntry(_id: MemoryId, _supersededBy: MemoryId): Promise<MemoryEntry | undefined> { return Promise.resolve(undefined) }
 }
 
 /**

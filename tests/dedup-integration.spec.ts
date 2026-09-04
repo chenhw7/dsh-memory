@@ -45,18 +45,21 @@ describe('dedup pipeline (§3.4)', () => {
   it('merges near-duplicates: ≤5% duplicate rate, ≥95% retention', async () => {
     // Feed all seed facts + their rewrites (200 candidates) through storeMemories.
     // The dedup prefilter should merge the 3 rewrites into each seed → ~50 entries,
-    // not 200.
+    // not 200. The corpus pins the LEGACY dedup pipeline (same-scope prefilter,
+    // single threshold), so it runs under the `legacy-judge` kill-switch — the
+    // two-tier consolidation path has its own specs (tests/consolidate.spec.ts)
+    // and deliberately different fail-closed semantics.
     const parsed = SEED_FACTS.flatMap(fact =>
       [fact.original, ...fact.rewrites].map(content => ({
         scope: fact.scope,
         content,
       })),
     )
-    await storeMemories(ctx, parsed, undefined, 'review', 'test-session')
+    await storeMemories(ctx, parsed, undefined, 'review', 'test-session', undefined, undefined, undefined, true, undefined, 'legacy-judge')
 
     // Feed the 50 distinct control facts — each should create a new entry.
     const controlParsed = CONTROL_FACTS.map(f => ({ scope: f.scope, content: f.content }))
-    await storeMemories(ctx, controlParsed, undefined, 'review', 'test-session')
+    await storeMemories(ctx, controlParsed, undefined, 'review', 'test-session', undefined, undefined, undefined, true, undefined, 'legacy-judge')
 
     const all = store.list()
     // With a 0.25 Jaccard threshold, ~130/153 rewrites merge into their seed.
