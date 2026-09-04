@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   distinctiveTokens,
+  duplicatePairCount,
   factMatchesLine,
   factStandingHit,
   injectedEntryLines,
@@ -316,5 +317,22 @@ describe('fact materialization (rubric Inputs rule)', () => {
     const fact: FactText = { content: home.statement, ...(home.summary !== undefined ? { summary: home.summary } : {}) }
     expect(factMatchesLine(fact, 'global/convention · f-a · A summary')).toBe(true)
     expect(factMatchesLine({ content: home.statement }, 'global/convention · f-a · A summary')).toBe(false)
+  })
+})
+
+describe('duplicate pair count (write-path rework mechanical item)', () => {
+  it('counts verdicts beyond the first per planted fact; null plantedId never counts', () => {
+    expect(duplicatePairCount([
+      { plantedId: 'f1' },
+      { plantedId: 'f1' },
+      { plantedId: 'f1' },
+      { plantedId: 'f2' },
+      { plantedId: null },
+    ])).toBe(2)
+  })
+
+  it('one verdict per fact is zero pairs; the judge-skipped null stays null', () => {
+    expect(duplicatePairCount([{ plantedId: 'f1' }, { plantedId: 'f2' }])).toBe(0)
+    expect(duplicatePairCount(null)).toBeNull()
   })
 })

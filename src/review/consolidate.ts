@@ -531,8 +531,12 @@ async function addParsed(
   return result.entry
 }
 
-/** Resolve the provider/model pair for the consolidation call (override wins over the session header). */
-function resolveTarget(session: Session, override?: ExtractionModelOverride): { provider: string; model: string } | undefined {
+/**
+ * Resolve the provider/model pair for a consolidation call (override wins
+ * over the session header). Exported for the periodic sweep tier, which
+ * routes its calls through the same override/session-header rule.
+ */
+export function resolveTarget(session: Session, override?: ExtractionModelOverride): { provider: string; model: string } | undefined {
   const config = session.requestHeader()?.config
   const sessionProvider = config?.provider ?? ''
   const sessionModel = config?.model ?? ''

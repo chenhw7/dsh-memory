@@ -454,6 +454,7 @@ The review plugin is the automatic-sediment layer. One store, five triggers: per
 
 - **Janitor** (global listener): reads `decayDays` live from the `memory` namespace (cross-namespace read; fallback 30 when no settings service) and runs `memory.janitor(days)` unless `days <= 0`. Fire-and-forget.
 - **Curator pass** (global listener, default enabled): a module-level counter ticks every session creation; every `curatorEveryNSessions`-th creation (default 20) it selects entries with `content.length ≥ curatorMinChars` (default 400), longest first then oldest first, up to `curatorMaxEntries` (default 5), and — provided at least 2 qualify and the budget holds — runs `runCuration`: one id-addressed LLM call, strict `parseCuratedLines` (unknown ids, blank content, malformed lines dropped — a chatty response cannot rewrite arbitrary rows), then per-row `store.update` through the store contract (scanner included). In confirm mode the rewrite lands as a proposal targeting the entry (`targetEntryId`) instead of an in-place update. Fire-and-forget.
+- **Whole-store consolidation sweep** (global listener, `sweepEnabled`, default **false**): the fallback tier under the per-round consolidation's lexical pre-screen — it re-judges pairs of stored entries no word-face signal would pair on the write path. On the first session creation after plugin apply (startup pass) and then every `sweepEveryNSessions`-th creation (default 20), `rankForSweep` selects up to `sweepTopN` (default 20) active entries by `accessCount` DESC, then `COALESCE(lastRecalledAt, updatedAt)` DESC (superseded and soft-decayed entries never enter), `selectSweepPairs` proposes pairs whose weighted overlap exceeds the same 0.2 threshold, and at most one consolidation call judges them over the `p<N>` line protocol (`SWEEP_SYSTEM_PROMPT`): `merge` folds one side into the surviving target, `update` replaces it, `conflict` supersedes the target through the same `supersedeEntry` seam with the annotation pointing at the survivor. A dropped or unparseable verdict is fail-closed to inaction — both sides of an unjudged pair stay. The extraction budget deliberately does not bound the sweep: it is a store-maintenance pass gated by the session cadence and a meta-table cooldown (`consolidation:lastRun`, persisted via `setMeta`, one hour minimum between passes), not an extraction drain. Fire-and-forget; failures book as `sweep-*`.
 
 #### 7.3.6 Human-confirm mode (`confirmBeforeWrite`, P1-1/P1-2)
 
@@ -499,7 +500,7 @@ Two namespaces, both live:
 | Namespace | Owner | Keys (default) |
 |---|---|---|
 | `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
-| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
+| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
 Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored).
 
@@ -615,7 +616,7 @@ Contributes **four cards** into Settings → Plugins → Plugin configuration, a
 | `memory` | `memory` | curated `MemoryPluginCard` | `memoryMode` select (policy-only/full/index/custom/off), conditional custom-policy textarea, `memoryCharLimit`, `memoryMaxEntries` (min 0), `maxSearchResults`, `decayDays` |
 | `memory-notes` | `memory` | spec-driven `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec-driven `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit` (min 1), `autoRecallMinChars` (min 1) |
-| `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `consolidation` (two-tier/legacy-judge select), `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
+| `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `consolidation` (two-tier/legacy-judge select), `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
 
 Mechanics:
 
@@ -693,6 +694,9 @@ memory-review:
   extractionBudget: 20           # LLM-call charges per session (0 = unlimited)
   judgeEnabled: true             # legacy-judge path only: LLM dedup judge on prefilter hits
   consolidation: two-tier        # write path: two-tier (default) | legacy-judge (kill-switch)
+  sweepEnabled: false            # whole-store consolidation sweep (startup pass + every N sessions, meta-table cooldown)
+  sweepEveryNSessions: 20        # run the sweep every N session creations
+  sweepTopN: 20                  # max entries selected per sweep pass (most-used first)
   pitfallStreakThreshold: 2      # same-signature failures before a success → pitfall candidate
   curatorEnabled: true           # low-frequency oversized-entry re-summarization
   curatorEveryNSessions: 20      # run the curator every N session creations
@@ -775,10 +779,10 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 ```
 dsh-memory/
 ├── cordis.patch.yml        # the profile layer (the package's substance): 7 rows
-├── src/                    # TypeScript sources (36 files, ~12.2 kLOC)
+├── src/                    # TypeScript sources (37 files, ~12.7 kLOC)
 ├── lib/                    # tsc + esbuild build output (published)
 ├── scripts/                # build-client.cjs (esbuild), fix-imports.cjs
-├── tests/                  # vitest specs (43 files, 887 cases)
+├── tests/                  # vitest specs (45 files, 919 cases)
 └── package.json            # exports map, dsh.bundle.patch manifest, peer deps
 ```
 
@@ -813,9 +817,9 @@ Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main`
 
 ## 11. Testing Strategy
 
-The repo ships **43 vitest spec files, 887 test cases** (881 active + 6 skipped without real-API keys), in five layers:
+The repo ships **45 vitest spec files, 919 test cases** (913 active + 6 skipped without real-API keys), in five layers:
 
-1. **Pure-function units** — `extract.spec` (81: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `consolidate.spec` (29: selector signals, bucketing, verdict parsing fail-closed, all four actions, no-candidate zero-call pass-through), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
+1. **Pure-function units** — `extract.spec` (81: parse/build/prompts incl. the negative admission rule + date-prefix stripping/storeMemories/curator with a stubbed LLM seam), `consolidate.spec` (29: selector signals, bucketing, verdict parsing fail-closed, all four actions, no-candidate zero-call pass-through), `sweep.spec` (25: usage-ranked selection, zero-shared-anchor pair proposal, the `p<N>` protocol fail-closed, conflict supersedes, cooldown persistence, plugin wiring gates), `write-path-rework-acceptance.spec` (5: the phase-1 corpus replay assertions — prog101 contradiction annotated, prog112 projectName, the audited duplicate-pair baseline, the acceptance corpus contract), `accumulator.spec` (41: fold, keyword/correction signals, failure-streak pairing, signature normalization, caps), `dedup.spec` (27: tokenize w/ stop words, Jaccard, findDuplicate, judge prompts/verdicts, bounded mergeContent), `scanner.spec` (19) + `scanner-corpus.spec` (44 corpus-driven), `policy.spec` (27: mode composition, index roll-up, auto-recall block incl. token footer, notes section), `types.spec` (11), `bm25.spec` (10: tokenizer, IDF non-negativity, ranking), `smoke.spec` (9: module-load sanity), `conflict.spec` (13), `notes.spec` (31: render matrix, renderers, prompt-only projection with zero disk writes, ≤0.5.x artifact-cleanup branches), `model-catalog.spec` (7: option resolvers incl. the undefined-provider regression), `auto-recall.spec` (5), `context-refresh.spec` (2), `suggestions.spec` (13: observe/re-observe hits, superset replace, cap eviction, adopt/reject through the contract), `recall-golden.spec` (2: the golden-set floors + three-mode injection-cost snapshot, §7.9).
 2. **Contract** — `store-contract.spec` (40): the same contract body runs twice, over the in-memory `TestMemoryStore` and the real `DomainMemoryStore`; search assertions follow the BM25 token semantics (any query token matching counts; a bare substring matches nothing; CRUD/pin/health/scanner rejections/project-scope validation/recordRecall side-effect freedom; janitor two-tier decay, importance ranking, recall stamping, and pin TOCTOU live in dedicated describes over the real implementation).
 3. **Tool behavior** — `tools.spec` (37): the eight `execute()` paths against a real `ToolRuntime` + `SystemPrompt` composition with the in-memory store; `tools-confirm-and-window.spec` (10): confirm-mode queueing (`{ pending, suggestionId }`, `targetEntryId` proposals) + `memory_list` smart view (newest-first, `since`/`until` window, metadata, widen hint).
 4. **Remote & client UI** — `remote-service.spec` (12: projects aggregation / staleSince·stale passthrough / newest-first ordering / `recordRecall:false` suppression / archive + suggestion methods); `memory-section.client.spec.tsx` (24, jsdom): tab split / lazy loading / filters / review-queue adopt·reject·edit / manage write actions / error recovery.
@@ -829,6 +833,7 @@ The repo ships **43 vitest spec files, 887 test cases** (881 active + 6 skipped 
 - **Auto-recall cost:** one synchronous store search per agent step when enabled — no LLM involvement; the 1200-char fence bounds prompt impact; `autoRecallMinChars` avoids trivial queries.
 - **Janitor cost:** O(n) scan, once per session creation (skipped when `decayDays <= 0`).
 - **Curator cost:** one LLM call every N session creations, ≤5 entries, budget-gated.
+- **Sweep cost:** at most one consolidation call per startup + every N session creations, gated by the meta-table cooldown (≥1 h) and `sweepEnabled` (default off); the 0.2 lexical gate bounds the pair bucket to ≤20 pairs per call.
 - **Audit log:** capped at 200 records; `appendAudit` best-effort and never blocks a write; deterministic ordering via the monotonic `seq`. The suggestion queue is likewise capped (200 rows, hit-aware eviction).
 - **Suggestion-queue cost:** `observeSuggestion` dedups against the queue (same-target lookup + same-scope Jaccard over ≤200 rows) — negligible next to the LLM call that produced the proposal; list/adopt/reject are O(n)/O(1) KV operations.
 - **Prompt budget:** memory content ≤ `memoryCharLimit` (5000 chars ≈ 1.2–1.5 k tokens) **and ≤ `memoryMaxEntries` entries (default 20)** + policy block (~0.4 k tokens); the snapshot footer and the auto-recall fence footer both report ≈tokens; index mode collapses tails into category roll-up lines; project-notes ≤ `notesCharLimit` (4000); auto-recall fence ≤ 1200 chars. Standing per-mode cost over the golden fixture is measured in §7.9 (policy-only ≈344 tokens flat regardless of store size).
@@ -883,13 +888,15 @@ src/
 │                         #   confirm-mode queueing, smart memory_list view + time window)
 ├── review/
 │   ├── index.ts          # plugin wiring: accumulator, pre-step drain, compaction/dispose
-│   │                     #   flush, janitor, curator, budget, confirmBeforeWrite,
+│   │                     #   flush, janitor, curator, sweep gating, budget, confirmBeforeWrite,
 │   │                     #   consolidation write-path selector, memory-review namespace
 │   ├── accumulator.ts    # pure fold, signal patterns, failure-streak state machine,
 │   │                     #   signature normalization, projection key + Zod schema
 │   ├── dedup.ts          # tokenize (stop-word filtered), Jaccard, LLM judge, mergeContent
 │   ├── consolidate.ts    # two-tier batch consolidation: candidate selector (BM25
 │   │                     #   primitives), line-protocol judge, verdict application
+│   ├── sweep.ts          # whole-store consolidation tier: usage-ranked selection,
+│   │                     #   p<N> line protocol, meta-table cooldown persistence
 │   └── extract.ts        # 4 system prompts (incl. negative criterion), flattenFragment,
 │                         #   line/id parsing + [summary:…] tag + stripModelDatePrefix,
 │                         #   write-path selection (two-tier / legacy-judge), curator

@@ -45,6 +45,7 @@ import {
 } from './accumulator.ts'
 import type { AccumulatorState, AccumulatorView } from './accumulator.ts'
 import { runFlushExtraction, runReviewExtraction, runCuration, type ExtractionModelOverride } from './extract.ts'
+import { runSweepPass, stampSweepLastRun, sweepCooldownOpen, type SweepStoreFace } from './sweep.ts'
 import type { MemoryEntry } from '../types.ts'
 
 /** Cordis function-plugin name. */
@@ -104,6 +105,19 @@ export interface Config {
    * `judgeDuplicate` flow for one release. Defaults to `two-tier`.
    */
   consolidation?: 'two-tier' | 'legacy-judge'
+  /**
+   * Enable the periodic whole-store consolidation sweep (write-path rework
+   * Step 1.4) — the fallback pass that re-judges usage-ranked pairs of stored
+   * entries through the same verdict protocol, catching reworded duplicates
+   * the per-round lexical pre-screen structurally cannot see. Defaults to
+   * `false` (opt-in this release: the per-round layer already owns the write
+   * path; the sweep is the additional whole-store net).
+   */
+  sweepEnabled?: boolean
+  /** Run the consolidation sweep every N session creations. Defaults to `20`. */
+  sweepEveryNSessions?: number
+  /** Max entries selected per sweep pass (usage-ranked). Defaults to `20`. */
+  sweepTopN?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -122,6 +136,9 @@ export const Config: z<Config> = z.object({
   curatorMinChars: z.number().step(1).min(1).default(400),
   confirmBeforeWrite: z.boolean().default(false),
   consolidation: z.union(['two-tier', 'legacy-judge'] as const).default('two-tier'),
+  sweepEnabled: z.boolean().default(false),
+  sweepEveryNSessions: z.number().step(1).min(1).default(20),
+  sweepTopN: z.number().step(1).min(2).default(20),
 })
 
 /** Resolved config with every default materialized. */
@@ -140,6 +157,9 @@ interface ResolvedConfig {
   readonly curatorMinChars: number
   readonly confirmBeforeWrite: boolean
   readonly consolidation: 'two-tier' | 'legacy-judge'
+  readonly sweepEnabled: boolean
+  readonly sweepEveryNSessions: number
+  readonly sweepTopN: number
 }
 
 /** Best-effort timeout for the dispose flush, in milliseconds. */
@@ -166,6 +186,9 @@ function resolveConfig(config: Config): ResolvedConfig {
     curatorMinChars: config.curatorMinChars ?? 400,
     confirmBeforeWrite: config.confirmBeforeWrite ?? false,
     consolidation: config.consolidation ?? 'two-tier',
+    sweepEnabled: config.sweepEnabled ?? false,
+    sweepEveryNSessions: config.sweepEveryNSessions ?? 20,
+    sweepTopN: config.sweepTopN ?? 20,
   }
 }
 
@@ -363,6 +386,41 @@ export function apply(ctx: Context, config: Config = {}): void {
       // Best-effort: curation failures never surface into session creation, but stay observable.
       ctx.get('memory')?.reportFailure('curator', error)
     })
+  }, { global: true })
+
+  // Periodic whole-store consolidation sweep (write-path rework Step 1.4):
+  // the fallback pass that re-judges usage-ranked pairs of stored entries —
+  // the net under the per-round lexical pre-screen, seeing reworded
+  // duplicates no word-face signal proposes. Rides the curator's per-N-
+  // sessions gate shape (its own counter, so the two layers' cadences stay
+  // independent), gated by `sweepEnabled`, a meta-table cooldown
+  // (`consolidation:lastRun`, persisted across restarts), and a startup
+  // pass. Fire-and-forget; never blocks session creation. The extraction
+  // budget deliberately does NOT bound the sweep: it is a store-maintenance
+  // pass, not an extraction drain (its cadence is gated by sessions +
+  // cooldown, not per-session work).
+  let sweepSessionCount = 0
+  const maybeRunSweep = (session: Session, startupPass: boolean): void => {
+    const cfg = resolved()
+    if (!cfg.sweepEnabled) return
+    if (!startupPass && sweepSessionCount % cfg.sweepEveryNSessions !== 0) return
+    const memory = ctx.get('memory') as unknown as SweepStoreFace | undefined
+    if (memory === undefined) return
+    const now = Date.now()
+    if (!startupPass && !sweepCooldownOpen(memory, now)) return
+    void (async () => {
+      await stampSweepLastRun(memory, now)
+      await runSweepPass(ctx, session, cfg.sweepTopN, cfg.extractionModel)
+    })().catch((error: unknown) => {
+      // Best-effort: sweep failures never surface into session creation.
+      ctx.get('memory')?.reportFailure('sweep', error)
+    })
+  }
+  ctx.on('session/created', (session: Session) => {
+    // Startup pass: the first session creation after plugin apply runs the
+    // sweep once (when enabled and the cooldown allows), then every N.
+    sweepSessionCount++
+    maybeRunSweep(session, sweepSessionCount === 1)
   }, { global: true })
 }
 

@@ -296,3 +296,27 @@ export function injectionCost(systemPrompt: string | undefined): InjectionCost |
   const chars = injectedMemoryText(systemPrompt).length
   return { chars, tokens: Math.ceil(chars / 4) }
 }
+
+/**
+ * Mechanical storage item — duplicate fact pairs (write-path rework phase-1
+ * acceptance, parent proposal's 9/2 report baseline): judged verdicts traced
+ * to the SAME planted fact beyond the first — i.e. `Σ over plantedId of
+ * max(0, verdictCount − 1)`. A planted fact judged once contributes 0; the
+ * same fact written twice contributes 1; three times contributes 2. Null
+ * `plantedId` verdicts (untraceable entries) never count. `null` when the
+ * judge was skipped — the metric is judge-derived, not medium-derived.
+ */
+export function duplicatePairCount(verdicts: ReadonlyArray<{ readonly plantedId: string | null }> | null): number | null {
+  if (verdicts === null) return null
+  const counts = new Map<string, number>()
+  for (const verdict of verdicts) {
+    const planted = verdict.plantedId
+    if (planted === null) continue
+    counts.set(planted, (counts.get(planted) ?? 0) + 1)
+  }
+  let pairs = 0
+  for (const count of counts.values()) {
+    if (count > 1) pairs += count - 1
+  }
+  return pairs
+}

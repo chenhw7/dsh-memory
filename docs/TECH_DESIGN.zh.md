@@ -452,6 +452,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 - **Janitor**（全局监听）：实时从 `memory` 命名空间读取 `decayDays`（跨命名空间读取；无 settings 服务时回退 30），`days > 0` 时执行 `memory.janitor(days)`。fire-and-forget。
 - **Curator pass**（全局监听，默认启用）：模块级计数器统计每次会话创建；每逢第 `curatorEveryNSessions` 次（默认 20）创建，选出 `content.length ≥ curatorMinChars`（默认 400）的条目，最长优先、次按创建先后，至多 `curatorMaxEntries`（默认 5）条；当合格条目 ≥ 2 且预算允许时执行 `runCuration`：一次以 id 寻址的 LLM 调用，严格的 `parseCuratedLines`（未知 id、空白内容、畸形行丢弃——喋喋不休的应答无法改写任意行），随后逐行走 store 契约的 `store.update`（含扫描）。人审模式下改写以携带 `targetEntryId` 的提议形式落地，而非就地更新。fire-and-forget。
+- **全库整合扫描**（全局监听，`sweepEnabled`，默认**关闭**）：每轮整合词面预筛之下的兜底层——重新裁决那些任何词面信号都不会在写入路径上配对的既有条目对。插件 apply 后的首次会话创建（启动趟）以及此后每逢第 `sweepEveryNSessions` 次（默认 20）创建，`rankForSweep` 按 `accessCount` 降序、次按 `COALESCE(lastRecalledAt, updatedAt)` 降序选出至多 `sweepTopN`（默认 20）条活跃条目（superseded 与软衰减条目永不入选），`selectSweepPairs` 提出加权重叠超过同一 0.2 阈值的条目对，至多一次整合调用按 `p<N>` 行协议（`SWEEP_SYSTEM_PROMPT`）裁决：`merge` 把一侧折入存活方，`update` 替换之，`conflict` 经同一 `supersedeEntry` seam 弃用目标方、注解指向存活方。被丢弃或无法解析的裁决 fail-closed 到不动作——未裁决的对两侧原样保留。提取预算刻意不约束扫描：它是 store 维护性通道，由会话节奏与 meta 表冷却（`consolidation:lastRun`，经 `setMeta` 持久，两次之间至少一小时）门控，而非提取排水。fire-and-forget；失败记 `sweep-*`。
 
 #### 7.3.6 人审模式（`confirmBeforeWrite`，P1-1/P1-2）
 
@@ -497,7 +498,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
 | `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12) |
-| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false) |
+| `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
 两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
 
@@ -613,7 +614,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | `memory` | `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
 | `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1） |
-| `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars` |
+| `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
 
 机制：
 
@@ -691,6 +692,9 @@ memory-review:
   extractionBudget: 20           # 每会话 LLM 调用记账（0 = 不限）
   judgeEnabled: true             # 仅 legacy-judge 路径：预过滤命中跑 LLM 去重裁决
   consolidation: two-tier        # 写入路径：two-tier（默认）| legacy-judge（kill-switch）
+  sweepEnabled: false            # 全库整合扫描（启动趟 + 每 N 会话，meta 表冷却）
+  sweepEveryNSessions: 20        # 每 N 次会话创建运行一次扫描
+  sweepTopN: 20                  # 每次扫描选中的条目上限（常用优先）
   pitfallStreakThreshold: 2      # 成功前的同签名连续失败次数 → 踩坑候选
   curatorEnabled: true           # 低频超长条目再摘要
   curatorEveryNSessions: 20      # 每 N 次会话创建运行 curator
@@ -773,10 +777,10 @@ memory:
 ```
 dsh-memory/
 ├── cordis.patch.yml        # profile 层（包的本质）：7 行
-├── src/                    # TypeScript 源码（36 个文件，约 12.2 kLOC）
+├── src/                    # TypeScript 源码（37 个文件，约 12.7 kLOC）
 ├── lib/                    # tsc + esbuild 构建产物（发布物）
 ├── scripts/                # build-client.cjs (esbuild)、fix-imports.cjs
-├── tests/                  # vitest specs（43 个文件，887 个用例）
+├── tests/                  # vitest specs（45 个文件，919 个用例）
 └── package.json            # exports map、dsh.bundle.patch manifest、peer deps
 ```
 
@@ -811,9 +815,9 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 ## 11. 测试策略
 
-仓库自带 **43 个 vitest spec 文件、887 个用例**（881 个活跃 + 6 个无真实 API key 时跳过），分五层：
+仓库自带 **45 个 vitest spec 文件、919 个用例**（913 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
-1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
+1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
 2. **契约** —— `store-contract.spec`（40：同一契约体分别对内存版 `TestMemoryStore` 与真实 `DomainMemoryStore` 各跑一遍；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
@@ -827,6 +831,7 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 - **自动召回成本：** 启用时每个 agent step 一次同步 store 搜索——不涉 LLM；1200 字符围栏约束 prompt 影响；`autoRecallMinChars` 避免琐碎查询。
 - **Janitor 成本：** O(n) 扫描，每次会话创建至多一次（`decayDays <= 0` 跳过）。
 - **Curator 成本：** 每 N 次会话创建一次 LLM 调用，≤5 条，受预算门控。
+- **Sweep 成本：** 每次启动 + 每 N 次会话创建至多一次整合调用，受 meta 表冷却（≥1 小时）与 `sweepEnabled`（默认关闭）门控；0.2 词面门把每次调用的候选对上限压在 20 对。
 - **审计日志：** 封顶 200 条；`appendAudit` 尽力而为、绝不阻塞写入；单调 `seq` 保证确定性排序。建议队列同样封顶（200 行，按 hits 感知的淘汰）。
 - **建议队列成本：** `observeSuggestion` 对队列去重（同 target 查找 + 同作用域 Jaccard，至多 200 行）——相对产生该提议的 LLM 调用可忽略；list/adopt/reject 是 O(n)/O(1) 的 KV 操作。
 - **Prompt 预算：** 记忆内容 ≤ `memoryCharLimit`（5000 字符 ≈ 1.2–1.5 k tokens）**且 ≤ `memoryMaxEntries` 条（默认 20）** + policy 块（约 0.4 k tokens）；快照尾注与自动召回围栏尾注都报告 ≈tokens；index 模式把尾部折叠为类别汇总行；project-notes ≤ `notesCharLimit`（4000）；自动召回围栏 ≤ 1200 字符。各模式在 golden 夹具上的常驻成本在 §7.9 实测（policy-only ≈344 tokens，与 store 规模无关的固定值）。
@@ -881,13 +886,15 @@ src/
 │                         #   人审模式入队、memory_list 智能视图 + 时间窗）
 ├── review/
 │   ├── index.ts          # 插件装配：累加器、pre-step drain、压缩/销毁 flush、
-│   │                     #   janitor、curator、预算、confirmBeforeWrite、
+│   │                     #   janitor、curator、sweep 门控、预算、confirmBeforeWrite、
 │   │                     #   consolidation 写入路径选择、memory-review 命名空间
 │   ├── accumulator.ts    # 纯折叠、信号模式、失败序列状态机、
 │   │                     #   签名归一化、投影键 + Zod schema
 │   ├── dedup.ts          # tokenize（停用词过滤）、Jaccard、LLM judge、mergeContent
 │   ├── consolidate.ts    # two-tier 批量整合：候选选择器（BM25 原语）、
 │   │                     #   行协议裁决、裁决应用
+│   ├── sweep.ts          # 全库整合层：按用量排序选拔、p<N> 行协议、
+│   │                     #   meta 表冷却持久化
 │   └── extract.ts        # 4 个 system prompt（含负面准则）、flattenFragment、
 │                         #   行/id 解析 + [summary:…] 标签 + stripModelDatePrefix、
 │                         #   写入路径选择（two-tier / legacy-judge）、curator pass、

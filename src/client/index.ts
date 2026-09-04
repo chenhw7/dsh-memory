@@ -138,6 +138,9 @@ const REVIEW_SPEC: NamespaceCardSpec = {
     { key: 'curatorEveryNSessions', kind: 'number', minValue: 1 },
     { key: 'curatorMaxEntries', kind: 'number', minValue: 1 },
     { key: 'curatorMinChars', kind: 'number', minValue: 1 },
+    { key: 'sweepEnabled', kind: 'checkbox', labelKey: 'sweepEnabled', hintKey: 'sweepEnabledHint' },
+    { key: 'sweepEveryNSessions', kind: 'number', minValue: 1, labelKey: 'sweepEveryNSessions', hintKey: 'sweepEveryNSessionsHint' },
+    { key: 'sweepTopN', kind: 'number', minValue: 2, labelKey: 'sweepTopN', hintKey: 'sweepTopNHint' },
   ],
 }
 

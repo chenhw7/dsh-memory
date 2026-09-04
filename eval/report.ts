@@ -7,7 +7,7 @@
  * @module eval/report
  */
 
-import type { InjectionCost } from './mechanical.ts'
+import { duplicatePairCount, type InjectionCost } from './mechanical.ts'
 
 export type QuestionType = 'single-hop' | 'multi-hop' | 'paraphrase' | 'negative'
 export type ScenarioKind = 'plant' | 'seed'
@@ -119,6 +119,13 @@ export interface StorageSlice {
   readonly total: number | null
   /** Share of written entries tracing to a planted fact (rubric-defined; `null` unscored). */
   readonly precision: number | null
+  /**
+   * Judged verdicts traced to the same planted fact beyond the first — the
+   * duplicate-fact-pair count the write-path rework's phase-1 acceptance
+   * tracks (9/2 report baseline: 10 pairs over the corpus). `null` = judge
+   * skipped.
+   */
+  readonly duplicatePairs: number | null
 }
 
 /** Aggregated metrics for one slice (a domain, kind, language, question type, or the total). */
@@ -220,6 +227,7 @@ function storageSliceOf(result: ScenarioResult): StorageSlice | null {
     mergeBehavior: meanOf(verdict => verdict.mergeBehavior),
     total: meanOf(verdict => verdict.total),
     precision: storagePrecision([...scored], verdicts),
+    duplicatePairs: duplicatePairCount(valid),
   }
 }
 
@@ -236,6 +244,10 @@ function mergeStorageSlices(slices: readonly (StorageSlice | null)[]): StorageSl
     mergeBehavior: mean(valuesOf(scored, slice => slice.mergeBehavior)),
     total: mean(valuesOf(scored, slice => slice.total)),
     precision: mean(valuesOf(present, slice => slice.precision)),
+    // Pairs are counts, not means: a slice's duplicate pairs sum.
+    duplicatePairs: present.some(slice => slice.duplicatePairs === null)
+      ? null
+      : present.reduce((sum, slice) => sum + (slice.duplicatePairs ?? 0), 0),
   }
 }
 

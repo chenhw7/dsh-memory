@@ -46,10 +46,10 @@ Step 1.3 每轮整合层(写路径主改动)
 
 Step 1.4 周期性全库层
 
-- 调度:复用 curator 的 per-N-sessions 门控与账本机制(`src/review/index.ts` 既有 `curatorEveryNSessions` 族),startup 一次 + 每 N sessions 一次;选拔 = accessCount DESC、`COALESCE(lastRecalledAt, updatedAt)` DESC、decay 窗口过滤、top-N 上限;选拔结果分桶后喂与 Step 1.3 相同的整合调用;`lastRunAt`/cooldown 经 Step 1.1 的 meta 表持久。
+- 调度:复用 curator 的 per-N-sessions 门控形态(`src/review/index.ts` 自有计数器),startup 一次 + 每 N sessions 一次;选拔 = accessCount DESC、`COALESCE(lastRecalledAt, updatedAt)` DESC、decay 窗口过滤、top-N 上限;`lastRunAt`/cooldown 经 Step 1.1 的 meta 表持久。已落地(`src/review/sweep.ts`):配对是既有条目互比——每轮选择器的 parsed-vs-stored 形状不可迁移,`selectSweepPairs` 只按共享的 0.2 词面信号重新配对(anchors 在已按用量排序的集合上不增益);裁决走 `p<N>` 命名空间(`SWEEP_SYSTEM_PROMPT`),与每轮的 `c<N>` 区分;被丢弃的裁决 fail-closed 到**不动作**(不存在要落地的新事实——与每轮的 `new` 相反)。冷却 = meta 表 `consolidation:lastRun` + 两次之间至少 1 小时。默认值:`sweepEnabled` **false**(本 release opt-in)、`sweepEveryNSessions` 20、`sweepTopN` 20。提取预算刻意不约束扫描(store 维护通道,非提取排水)。
 - Config:`sweepEnabled`、`sweepEveryNSessions`、`sweepTopN` 进 memory-review 命名空间 + 设置卡(无硬编码可调参数惯例)。
-- 测试:fixture 证明本层能合并一对**零共享锚点**的换述重复(fake-LLM 按桶内容路由作答);cooldown 不重复触发;`sweepEnabled=false` 全静默;meta 表 lastRun 跨重开存续。
-- eval 验收(机械层):重放 prog101/112/201/303 语料(mock 路由 + 确定性断言):落库 52 → ≈40、重复对 10 → 0、矛盾未标注 → 0、prog112 projectName 落位;9/2 报告 10 组重复对场景触发 10/10。计数用既有 `readStoredEntries`(`eval/harness/seed-media.ts:98-121`)与 runner 的 written/updated 口径;重复对计数在 `eval/mechanical.ts` 增补。v2 judged A/B(env-gated 真模型)留给行为门。
+- 测试:fixture 证明本层能合并一对**零共享锚点**的换述重复(fake-LLM 按桶内容路由作答);cooldown 不重复触发;`sweepEnabled=false` 全静默;meta 表 lastRun 跨重开存续。已落地为 `tests/sweep.spec.ts`(25 用例);英文 rate-limit 对(实测重叠 0.24、零锚点)是零共享锚点 fixture。
+- eval 验收(机械层):完整 harness 重放仍是 eval CLI 的职责(`npm run eval -- --filter prog101,prog112,work201,life303`);验收的确定性半边在 vitest 钉死为 `tests/write-path-rework-acceptance.spec.ts`(prog101 矛盾 → superseded + 标注;prog112 projectName + 锚点配对;审计出的 9/2 重复对倍数——计数器按每条多余裁决读出 11,报告「10 组重复对」的行文口径是受追踪事实集;整合后形状读 0;语料契约 lint)。`duplicatePairCount` 增补进 `eval/mechanical.ts`,在 `eval/report.ts` 切片以 `storage.duplicatePairs` 呈现(跨场景求和,非取均值)。v2 judged A/B(env-gated 真模型)留给行为门。
 
 ### 阶段 2:usage 反馈(hitCount)
 
