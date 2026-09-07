@@ -187,6 +187,103 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
     })
   })
 
+  // The runtime enforces the declared output schema on every tool result with
+  // additionalProperties: false — a field the projection emits but the schema
+  // does not declare fails the whole call (a real eval session lost every
+  // memory_search/memory_list/memory_get read to `value.entries[0].summary`
+  // is not a declared property). The projection's optional fields must stay
+  // declared: this drives all three read tools over an entry carrying every
+  // one of them.
+  describe('output schema covers the entry projection', () => {
+    it('search resolves and returns the summary field', async () => {
+      const { ctx, store } = await setup()
+      store.seed({
+        scope: 'user',
+        content: 'full projection entry',
+        summary: 'projection must stay declared',
+        category: 'preference',
+        projectName: 'demo-project',
+        createdAt: 1,
+        updatedAt: 2,
+        staleSince: 3,
+        supersededBy: 'replaced-id' as MemoryId,
+        importance: 3,
+        accessCount: 7,
+      })
+      const result = await callTool(ctx, 'memory_search', { query: 'projection' })
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { entries: { summary?: string }[] }
+      expect(value.entries[0]?.summary).toBe('projection must stay declared')
+    })
+
+    it('list resolves and returns the summary field', async () => {
+      const { ctx, store } = await setup()
+      store.seed({
+        scope: 'user',
+        content: 'full projection entry',
+        summary: 'projection must stay declared',
+        category: 'preference',
+        projectName: 'demo-project',
+        createdAt: 1,
+        updatedAt: 2,
+        staleSince: 3,
+        supersededBy: 'replaced-id' as MemoryId,
+        importance: 3,
+        accessCount: 7,
+      })
+      const result = await callTool(ctx, 'memory_list', {})
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { entries: { summary?: string }[] }
+      expect(value.entries[0]?.summary).toBe('projection must stay declared')
+    })
+
+    it('replace resolves and returns the summary field', async () => {
+      const { ctx, store } = await setup()
+      const seeded = store.seed({
+        scope: 'user',
+        content: 'full projection entry',
+        summary: 'projection must stay declared',
+        category: 'preference',
+        projectName: 'demo-project',
+        createdAt: 1,
+        updatedAt: 2,
+        staleSince: 3,
+        supersededBy: 'replaced-id' as MemoryId,
+        importance: 3,
+        accessCount: 7,
+      })
+      const result = await callTool(ctx, 'memory_replace', { id: seeded.id, content: 'updated entry content' })
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { entry: { summary?: string } }
+      expect(value.entry.summary).toBe('projection must stay declared')
+    })
+
+    it('get resolves and returns the summary field', async () => {
+      const { ctx, store } = await setup()
+      const seeded = store.seed({
+        scope: 'user',
+        content: 'full projection entry',
+        summary: 'projection must stay declared',
+        category: 'preference',
+        projectName: 'demo-project',
+        createdAt: 1,
+        updatedAt: 2,
+        staleSince: 3,
+        supersededBy: 'replaced-id' as MemoryId,
+        importance: 3,
+        accessCount: 7,
+      })
+      const result = await callTool(ctx, 'memory_get', { id: seeded.id })
+      expect(result.isError).toBe(false)
+      if (result.isError) throw new Error('expected success')
+      const value = result.value as { entry: { summary?: string } }
+      expect(value.entry.summary).toBe('projection must stay declared')
+    })
+  })
+
   describe('memory_add', () => {
     it('adds an entry and returns its projection', async () => {
       const { ctx, store } = await setup()
