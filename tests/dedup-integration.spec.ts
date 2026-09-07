@@ -42,6 +42,9 @@ describe('dedup pipeline (§3.4)', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  // 250 durable-write pipeline candidates ride this one case: ~1.7–2.4s on a
+  // dev host, and the 2-core CI runner has measured past the 5s lane default
+  // under full-suite concurrency, so the case carries its own budget.
   it('merges near-duplicates: ≤5% duplicate rate, ≥95% retention', async () => {
     // Feed all seed facts + their rewrites (200 candidates) through storeMemories.
     // The dedup prefilter should merge the 3 rewrites into each seed → ~50 entries,
@@ -87,7 +90,7 @@ describe('dedup pipeline (§3.4)', () => {
       const found = all.some(entry => entry.content === control.content || entry.content.includes(control.content))
       expect(found, `control fact missing: "${control.content}"`).toBe(true)
     }
-  })
+  }, 30_000)
 
   it('model-initiated add is NOT deduped (intent wins)', async () => {
     // Tool writes go through store.add directly, not storeMemories — they
