@@ -88,7 +88,7 @@ P1（选列）：有效独立题量 ≈ 68/128——60 道 paraphrase 与原题�
 
 试点判定规则实测（judge fuyao-data @ fuyao 网关，temperature 0）：**第 3 轮全过**——G1 链路健康、G2 同构建 A/B 逐场景 EQUAL、G3 六场景全部经 review lane 写入条目且非 negative 题锚点全命中、G4 两遍判定无超过 1 档的翻档、G5 校准集 4/4 全命中。时间盒内的两轮 rubric 迭代都用在了同一处发现的标尺歧义上（`calib-contradiction`：同主题矛盾条目）——迭代 1 把「trace 跟主题走、矛盾由 dim 1 记 0」钉进 Step 1（judge 的读法与 rubric 自身 dim-1 tier-0 反例一致，作者初钉与之一致性更差）；迭代 2 把「数值填错不是 token 丢失」钉进 dim 3（矛盾值占据同一槽位，提问仍会命中，错值归 dim 1）。这正是校准集设计要抓的失效形态：judge 温度 0 下「稳定地错」的不是判分而是标尺歧义处的稳定读法——两轮迭代后 judge、作者、rubric 文本三者对齐。
 
-v2 落成判据中的 core-v0 judged A/B（真模型 + judge，env 门控）尚未完成：2026-09-03 首跑在 baseline 半程因网关拥塞中止（120s 通知超时 ×3、单 turn 预算超限 ×3，约 6/13 场景失败，无报告产出），待网关恢复后重跑——其余验收证据见上。
+v2 落成判据中的 core-v0 judged A/B（真模型 + judge，env 门控）尚未完成：2026-09-03 首跑在 baseline 半程因网关拥塞中止（120s 通知超时 ×3、单 turn 预算超限 ×3，约 6/13 场景失败，无报告产出），待网关恢复后重跑。2026-09-07 的真实 judged 切片（7 场景，网关在传输重试修复下全程健康）产出了常设 v2 基线的首批读数，并暴露两条阻塞两个 core 场景的语料发现——可被无沙箱宿主文件系统证伪的反事实前提、埋点对话指示仓库工作导致的不收敛工具循环——证据与读数都记录在 [write-path rework 笔记](../architecture/2026-09-04-write-path-rework-implementation-plan.zh.md)。完整 core-v0 judged A/B 本身仍待跑——其余验收证据见上。
 
 噪声试点验证运行时的真实性证据：mock G1 的 standing hit 为 0/×（mock 不按内容路由、提取不写入）而 G3（fake-LLM 按内容路由驱动真实提取链）全部场景有写入且锚点命中——「锚定禁令保证写入后可匹配」与「mock 下 0 对 0 是空转通过」两条预登记规则都被实测激活。
 
