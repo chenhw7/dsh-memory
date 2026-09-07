@@ -827,7 +827,7 @@ patch 特意**不**插入 `storage-json` / `storage-domain` 行：`dsh-web-app` 
 
 ### 10.4 卸载语义
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在 `$DSH_HOME/storages/memory.json`（有意的数据保全保证）；删除该文件即显式清空。0.6 起插件不向仓库写文件，卸载后仓库无插件产物残留。
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` 从组合配置移除七行。已保存的记忆留在存储后端的数据文件里——`host-medium`（默认）为 `$DSH_HOME/storages/memory.json`，`sqlite` 为插件自有的 `$DSH_HOME/storages/memory.db`（有意的数据保全保证）；删除对应后端的数据文件即显式清空（`sqlite` 下残留的 `-wal`/`-shm` 伴生文件为空、无害）。0.6 起插件不向仓库写文件，卸载后仓库无插件产物残留。
 
 ### 10.5 发布管线
 

@@ -159,17 +159,19 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 （源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，七个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
 
-卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下的一个文件里：
+卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下，具体文件由 `memory-store` 行的 `storage` 配置决定：`host-medium`（默认）全部保存在 `memory.json`；`sqlite` 经一次性迁移把 store 移入插件自有的 `memory.db`（此后 `memory.json` 只保留迁移标记）：
 
 ```sh
 # macOS/Linux
 ~/.dsh/storages/memory.json
+~/.dsh/storages/memory.db
 # Windows
 %USERPROFILE%\.dsh\storages\memory.json
-# 如果设置了 DSH_HOME，则为 $DSH_HOME/storages/memory.json
+%USERPROFILE%\.dsh\storages\memory.db
+# 如果设置了 DSH_HOME，则为 $DSH_HOME/storages/memory.json（或 memory.db）
 ```
 
-先停掉 dsh，再删除该文件即可清空所有已保存的记忆。同一目录下的其他文件属于其他功能，不要删除整个目录。
+先停掉 dsh，再删除你的后端对应的数据文件（`sqlite` 下为 `memory.db`，残留的 `-wal`/`-shm` 伴生文件为空、无害）即可清空所有已保存的记忆。同一目录下的其他文件属于其他功能，不要删除整个目录。
 
 ## 验证
 

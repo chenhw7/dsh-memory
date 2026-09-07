@@ -162,17 +162,19 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 (with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the seven `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
 
-Uninstall does **not** delete your saved memories. They live in one file under dsh's storage area:
+Uninstall does **not** delete your saved memories. They live under dsh's storage area, named by the `memory-store` row's `storage` config: `host-medium` (default) keeps everything in `memory.json`; `sqlite` moves the store into the plugin-owned `memory.db` with a one-time migration (`memory.json` then holds only the migration marker):
 
 ```sh
 # macOS/Linux
 ~/.dsh/storages/memory.json
+~/.dsh/storages/memory.db
 # Windows
 %USERPROFILE%\.dsh\storages\memory.json
-# or $DSH_HOME/storages/memory.json if you set DSH_HOME
+%USERPROFILE%\.dsh\storages\memory.db
+# or $DSH_HOME/storages/memory.json (or memory.db) if you set DSH_HOME
 ```
 
-Stop dsh, then delete that file to wipe all saved memories. Other files in the same directory belong to other features — do not remove the whole directory.
+Stop dsh, then delete the file for your backend (under `sqlite`: `memory.db` — leftover `-wal`/`-shm` sidecars are empty and harmless) to wipe all saved memories. Other files in the same directory belong to other features — do not remove the whole directory.
 
 ## Verify
 

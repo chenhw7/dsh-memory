@@ -830,7 +830,7 @@ The patch deliberately inserts **no** `storage-json` / `storage-domain` rows: th
 
 ### 10.4 Uninstall semantics
 
-`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain in `$DSH_HOME/storages/memory.json` (intentional data-preservation guarantee); users wipe them explicitly by deleting that file. Since 0.6 the plugin writes no repository files, so uninstalling leaves no plugin artifacts in the repo.
+`dsh plugin remove --profile <p> @chenhw7/dsh-memory` removes the seven rows from the composed config. Saved memories remain where the store backend keeps them — `$DSH_HOME/storages/memory.json` under `host-medium` (default), the plugin-owned `$DSH_HOME/storages/memory.db` under `sqlite` (intentional data-preservation guarantee); users wipe them explicitly by deleting the backend's file (under `sqlite`, leftover `-wal`/`-shm` sidecars are empty and harmless). Since 0.6 the plugin writes no repository files, so uninstalling leaves no plugin artifacts in the repo.
 
 ### 10.5 Release pipeline
 
