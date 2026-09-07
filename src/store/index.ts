@@ -326,11 +326,22 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
     if (migrated === undefined && mediumEntries.length > 0) {
       // One-time import: the medium holds data this database has never seen.
       sqlite.importFromDomain(mediumEntries, [...audit.entries()].map(([, record]) => record), [...suggestions.entries()].map(([, row]) => row))
+      // The imported rows are now memory.db's rows, so the medium's data
+      // tables clear before the marker lands. Left in place they would make
+      // the next sqlite boot trip the both-sides guard on its own leftovers
+      // — the clear-first order keeps every crash window benign: a boot
+      // between the two steps sees an empty, unmarked medium (no import to
+      // redo, no guard to refuse), while marker-first would strand data the
+      // guard must reject.
+      for (const key of [...entries.keys()]) await entries.delete(key)
+      for (const key of [...audit.keys()]) await audit.delete(key)
+      for (const key of [...suggestions.keys()]) await suggestions.delete(key)
       await meta.put(SQLITE_MIGRATION_MARKER, { key: 'medium', value: new Date().toISOString(), updatedAt: Date.now() })
-      ctx.logger.warn(`dsh-memory: imported ${String(mediumEntries.length)} entries from memory.json into ${dbPath}`)
+      ctx.logger.warn(`dsh-memory: imported ${String(mediumEntries.length)} entries from memory.json into ${dbPath} and cleared the medium`)
     } else if (migrated !== undefined && mediumEntries.length > 0) {
       // Both sides hold data: the medium was written after the migration —
-      // a second writer. Failing loud is the only safe answer.
+      // a second writer (the migrating boot itself leaves the medium's data
+      // tables empty). Failing loud is the only safe answer.
       throw new Error('dsh-memory: storage: sqlite — the host medium holds entries but carries a migratedToSqlite marker; a host-medium process wrote memory.json after the migration. Reconcile the two stores by hand and remove the stale writes before restarting.')
     }
     ctx.effect(() => async () => { sqlite.close() })

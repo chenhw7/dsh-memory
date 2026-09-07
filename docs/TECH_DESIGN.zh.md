@@ -307,7 +307,7 @@ interface MemoryEntry {
   - **条目表封顶 `entriesCap`（默认 500，store 行 Config 可配）**：`add` 成功后收敛到上限，淘汰序 **pinned 绝不淘汰 → `accessCount` 升序 → `lastRecalledAt ?? createdAt` 升序**（最久未用先走）；全部候选受保护时允许超限（软目标）。淘汰记 `remove`/`janitor` 审计。
 - **读取**同步自域的内存权威状态；**写入**在域写链上串行化，先落 JSON 后端再更新内存。
 - 宿主的 `storage-json` 后端把整个域持久化到 `$DSH_HOME/storages/memory.json`（Windows：`%USERPROFILE%\.dsh\storages\memory.json`）。
-- **SQLite 后端（`memory-store` 行的 `storage: 'sqlite'`，Step 3）**：store 挂载 `SqliteMemoryStore`，基于 `node:sqlite` 的 `DatabaseSync`，落在插件自有的 `$DSH_HOME/storages/memory.db`（WAL 模式、`busy_timeout` 5 秒；`-wal`/`-shm` 伴生文件与主库同属一个单元——见 `docs/HOST_CONTRACT.zh.md` §11）。读取按行同步读出（读语义相同）；写入每记录一条语句，entries + audit 同事务落定——没有全文件重发布。表：`entries`（MemoryEntry 列）、`audit`、`suggestions`、`meta`（`id`/`key` 主键）。一次性迁移：sqlite 首启遇到非空且无标记的介质时逐条导入 entries + audit + suggestions，并把 `medium:migratedToSqlite` 标记写进介质 meta 表；任一后端再启动时介质同时有数据与标记即 fail loud（两个活真源会分叉）。
+- **SQLite 后端（`memory-store` 行的 `storage: 'sqlite'`，Step 3）**：store 挂载 `SqliteMemoryStore`，基于 `node:sqlite` 的 `DatabaseSync`，落在插件自有的 `$DSH_HOME/storages/memory.db`（WAL 模式、`busy_timeout` 5 秒；`-wal`/`-shm` 伴生文件与主库同属一个单元——见 `docs/HOST_CONTRACT.zh.md` §11）。读取按行同步读出（读语义相同）；写入每记录一条语句，entries + audit 同事务落定——没有全文件重发布。表：`entries`（MemoryEntry 列）、`audit`、`suggestions`、`meta`（`id`/`key` 主键）。一次性迁移：sqlite 首启遇到非空且无标记的介质时逐条导入 entries + audit + suggestions，随后清空介质三张数据表，再把 `medium:migratedToSqlite` 标记写进介质 meta 表（先清后写标记，两步之间被中断的下次启动看到的是空且无标记的介质，干净启动）；任一后端再启动时介质同时有数据与标记即 fail loud——有了清空，该状态只可能来自迁移后的 host-medium 写入者（两个活真源会分叉）。
 - 卸载插件**不会**删除记忆；删除该文件即清空数据（SQLite 后端为 `memory.db` 及其 WAL 伴生文件）。
 
 ### 6.4 建议队列记录

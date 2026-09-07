@@ -85,11 +85,23 @@ Status: implemented
 - **完成 5 个场景 / 25 题**：standing hit 91.3%（独立题 92.3%）、噪声 0.60、注入质量 2.92/3、答案 1.60/2、storage 总分 4.92/8、precision 76.7%（16 条入判、1 条 invalid）、重复对 4。逐场景：prog112 干净（standing 4/4、答案全 2、precision 100%）；work201 答案全 2（含 multi-hop 与负例），`f201-channel` 单条、但 `f201-style` 重复 + 2 条无埋点来源条目（precision 60%）；life303 答案全 2，`f303-pace` 本次单条（contentFidelity 1），另有 2 条无埋点条目（一条入判总分 4；一条 invalid 剔除——judge 的 evidence 超长违约，非协议故障）；prog109（seed）standing 5/5、答案 2.00。
 - **prog101，最难的一个：冲突题端到端失守。** factHits `[pnpm=true, legacy=false]`——预写的 legacy-npm 条目不在 q101-cd/cdp 的常驻注入里（standing MISS）；storage 裁决显示纠正事实写了 2 条、种子条目被更新却未取代：3 条条目都溯源到 `f101-pnpm-only`、每条判 `[1,0,2,0]`（scope 错、合并行为错），另有 1 条无埋点条目（precision 80%）。这是[冲突残余](2026-09-01-forget-selfcheck-conflict-residual.md)的真模型实证：重换述的纠正在词法平面上既不整合也不取代。storage 裁决成立；答案读数带下述语料效度保留。
 - **两条发现比分数更重要。** 其一，真模型下[所有对非空 store 的记忆读取全部失败](../bug-fix/2026-09-07-summary-undeclared-in-memory-tool-output-schemas.zh.md)——四个读取工具的输出 schema 漏了投影携带的 `summary`——首轮全部答案读数都是只靠常驻注入产出的；bug 当日修复，prog109 修复后重跑（`/tmp/eval-real-prog109-postfix.json`）是该 seed 场景的有效读数（standing 5/5、答案 2.00、注入质量 2.40）。其二，**eval 的 harness 子进程没有文件系统沙箱**：prog101 追问会话的作答逐字引用了本仓库的真实文件（AGENTS.md 的 `npm ci` 行、package-lock.json、ci.yml）——模型把「这个仓库」解析成了磁盘上的真实仓库，并按注入 fence「先对照当前仓库验证」的指示让文件证据压倒了语料的反事实前提；prog104 的埋点对话逃进宿主机上真实的 harness 检出后不再收敛。结论：prog101 的答案 0 是语料效度失败（前提可被宿主磁盘证伪），不是记忆链失败；prog104/prog116 在任何预算下都精确撞在预算+1（65>64、97>96——不收敛循环，把档案记录的「超 40 次调用」张力收窄为「不会终止」），语料不再把模型引向工作区里不存在的仓库之前，这两个场景对真模型不可跑。
-- **本切片之后的剩余**：常设 v2 judged 基线还有 25/32 场景从未在真模型下判定（prog104/prog116 被语料修复阻塞）；host-medium vs sqlite A/B 与写放大重定基线仍开放。语料侧决策（反事实前提、工作区物化或沙箱）归[eval 审计笔记](../testing/2026-09-03-eval-audit-and-noisy-corpus.zh.md)所有。
+- **本切片之后的剩余**：常设 v2 judged 基线还有 25/32 场景从未在真模型下判定（prog104/prog116 被语料修复阻塞）；语料侧决策（反事实前提、工作区物化或沙箱）归[eval 审计笔记](../testing/2026-09-03-eval-audit-and-noisy-corpus.zh.md)所有。两项机械验收当日收口——见下一节。
+
+## Eval 通道结果（2026-09-07，机械验收）
+
+Step 3.3 的 eval 半场，同日跑在构建 75ce048 + 迁移修复之上（免凭据、mock 通道、逐场景比较用 `diffReports`；sqlite 侧经 profile-template 的 `memory-store` 行 pin 进测量接缝——`RunOptions` 不透传 config patch，且 overlay 行会整份替换被 pin 的配置）。
+
+- **存储 A/B 在通过之前先揪出一个 P1。** sqlite 侧首轮在 4/32 个 core 场景的会话 2 启动处失败（`-32603: cannot create effect on inactive context`）——恰好是四个 plant+seed 行，唯一「有数据的介质」遇上 plant 链双会话重开的语料形态：[迁移把介质数据表留在原地，迁移后的每一次 sqlite 启动都踩上自己残留触发的两侧 guard](../bug-fix/2026-09-07-sqlite-migration-leftovers-brick-reopen.zh.md)——真实部署带存量切 sqlite，第二次会话即砖。当日修复（迁移 boot 在写标记前清空三张数据表；`tests/migration.spec.ts` 补重开用例，未修复树上红）；eval 的介质读取改为后端感知（`readStoredEntries` 在 `memory.db` 存在时读库，否则读 `memory.json`）。
+- **修复后 A/B：逐场景 deterministic EQUAL。** core-v0（32 场景、132 题）与 noise-v0（6 场景）在全部确定性字段上相等——注入成本、standing 命中、噪声比、medium-diff 计数、条目数、审计序号——两侧零场景错误（`/tmp/ab2-host-{core,noise}.json` 对 `/tmp/ab2-sqlite-{core,noise}.json`；唯一的文本差异是逐次运行的 `durationMs`）。stderr 警告检查以 mock 通道为界：全程零条被吞的 sqlite 失败（任何被吞失败都会以确定性差异或场景错误浮出），`node:sqlite` 的 `ExperimentalWarning` 是已记录的预期子进程 stderr 噪声（HOST_CONTRACT §11）；真模型侧的 stderr 检查随待跑的 judged 基线走。
+- **写放大重定基线（driver）**：同一逻辑序列——205 次 add + 20 次 update + `markHits(50)`——对真实 storage-json 组合（host-medium）与 sqlite 后端各跑一遍，`fs.watch` 在同一块 ext4/NVMe 盘上计持久介质写事件。
+  - host-medium：**205 次 add 产生 415 次全文件发布事件**——与档案记录的 CI 标尺数字完全一致——20 次 update 60 次、50 次命中 150 次：226 个逻辑操作共 628 次事件（**每操作 2.78 次**），每次事件整文件重发（对一个终态 149 KB 的 store，累计全文件字节约 62 MB）；序列耗时 2.2 秒。
+  - sqlite：构造上**每逻辑写恰一个事务**（entries + audit 原子落定；`markHits` 每条 id 一个事务），零全文件重发——watch 只看到文件创建与关闭/检查点边界事件（共 8 次）——持久介质终态 139 KB，WAL 关闭时合并；序列耗时 0.79 秒。
+  - 读法：可迁移的数字是放大比而非绝对时长（NVMe 的 fsync 美化了 host 侧；机械盘只会拉大差距）。档案记录的「~205 adds ≈ 415 次发布」代理被确认为每 add 约 2 次发布，且 sqlite 后端把全文件货币整个移除——逐记录语句 + 每逻辑操作一个事务，即写放大目标的落地形态。
+- **剩余 eval 缺口**：完整 32 场景 v2 judged 基线（真模型 + judge）——阶段 4 最后一道未过的门——加上两个被语料阻塞场景的处置，归[eval 审计笔记](../testing/2026-09-03-eval-audit-and-noisy-corpus.zh.md)所有。
 
 ## Consequences
 
 - **对照计划「随实施标定并写回」各项**：每一条都在本 note 落定——整合阈值（0.2 / df≤2，模块常量）、sweep 默认值（`sweepEnabled` false、`sweepEveryNSessions` 20、`sweepTopN` 20、1 小时冷却）、命中阈值（0.25 及其实测带宽）、重复对计数器对 9/2 基线的读数（11 条多余裁决；报告行文「10 组」计的是受追踪事实集）。
-- **顺延至 eval 通道**：SQLite 下写放大重定基线、host-medium vs sqlite A/B 逐场景 EQUAL、完整 32 场景 v2 judged 基线——母提案保留的行为验收门。阶段 4（净索引视图）在这些基线之后保持仅立项。Mock A/B 与首批真实 judged 证据（上）已在库。
+- **顺延至 eval 通道**：SQLite 下写放大重定基线与 host-medium vs sqlite A/B 逐场景 EQUAL 已于 2026-09-07 收口（结果见上，途中发现并修复一个 P1）；完整 32 场景 v2 judged 基线仍是母提案保留的行为验收门——阶段 4 的唯一未过阻塞。阶段 4（净索引视图）在其后保持仅立项。Mock A/B 与首批真实 judged 证据（上）已在库。
 - **上线 kill switch**：`consolidation: 'legacy-judge'`（每轮层）、`sweepEnabled: false`（sweep 层）、`hitSignalEnabled: false`（命中信号）、`storage: 'host-medium'`（SQLite 后端）——各自独立回退一层；legacy judge 保留一个 release，其删除随变更更新母 note。
 - **交叉链接**：决策记录在 [sqlite-backend-and-batch-consolidation](2026-09-04-sqlite-backend-and-batch-consolidation.zh.md)；HOST_CONTRACT §11 持有本地介质契约；TECH_DESIGN §6.1/§6.3/§7.1/§7.3/§8 持有现状散文。

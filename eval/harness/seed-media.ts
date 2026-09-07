@@ -1,15 +1,18 @@
 /**
- * The v0 memory-storage medium for eval runs: pre-writing a seeded store
- * (`seedMemoryMedium`) and reading the post-run medium back
- * (`readStoredEntries`). Shape reference is the v0 storage-json medium as
- * materialized by `tests/integration/composition.spec.ts` and the M0 smoke;
- * a malformed medium fails loud (never silently read as empty).
+ * The memory-storage medium for eval runs: pre-writing a seeded store
+ * (`seedMemoryMedium`, always the v0 storage-json medium — the backend's
+ * migration consumes it) and reading the post-run durable state back
+ * (`readStoredEntries`, whichever file the run's storage backend owns).
+ * Shape reference is the v0 storage-json medium as materialized by
+ * `tests/integration/composition.spec.ts` and the M0 smoke; a malformed
+ * medium fails loud (never silently read as empty).
  *
  * @module eval/harness/seed-media
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { memoryMediumPath } from './quiesce.ts'
 
 /** Fixed seed timestamp (the same epoch the integration suites use). */
@@ -91,11 +94,25 @@ export interface MediumRead {
 }
 
 /**
- * Read and narrow the stored entries out of `<dshHome>/storages/memory.json`.
+ * Read and narrow the stored entries out of the run's durable medium. The
+ * backend decides which file that is: a `storage: sqlite` run owns
+ * `<dshHome>/storages/memory.db` (the migrating boot clears memory.json's
+ * data tables), so the database file is the medium whenever it exists — its
+ * absence is the host-medium backend, which never creates it. Seeding always
+ * writes memory.json: the store-before read runs before any boot, when the
+ * database cannot exist yet.
+ *
  * A missing file is the empty store; an unparsable or shape-violating medium
  * throws with the path (misconfiguration fails loud).
  */
 export function readStoredEntries(dshHome: string): MediumRead {
+  const dbPath = join(dshHome, 'storages', 'memory.db')
+  if (existsSync(dbPath)) return readSqliteMedium(dbPath)
+  return readJsonMedium(dshHome)
+}
+
+/** The host-medium backend's durable state: the v0 storage-json document. */
+function readJsonMedium(dshHome: string): MediumRead {
   const path = memoryMediumPath(dshHome)
   let raw: string
   try {
@@ -119,6 +136,27 @@ export function readStoredEntries(dshHome: string): MediumRead {
     if (typeof seq === 'number' && seq > maxAuditSeq) maxAuditSeq = seq
   }
   return { entries, entryCount: entries.length, maxAuditSeq }
+}
+
+/**
+ * The sqlite backend's durable state: `memory.db`'s own `entries`/`audit`
+ * tables (the store's documented schema — the same fields the json medium
+ * carries). The connection opens read-write on purpose: a hard-exited child
+ * can leave a `-wal` behind and only a writable connection recovers it; the
+ * child is dead by read time, so the checkpoint on close is post-mortem.
+ */
+function readSqliteMedium(dbPath: string): MediumRead {
+  const db = new DatabaseSync(dbPath)
+  try {
+    const rows = db.prepare(
+      'SELECT id, scope, category, content, summary, projectName, createdAt, updatedAt FROM entries',
+    ).all() as Record<string, unknown>[]
+    const entries = rows.map(row => narrowEntry(dbPath, String(row['id']), row))
+    const audit = db.prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM audit').get() as { maxSeq: number }
+    return { entries, entryCount: entries.length, maxAuditSeq: audit.maxSeq }
+  } finally {
+    db.close()
+  }
 }
 
 function narrowEntry(path: string, key: string, value: unknown): StoredEntry {

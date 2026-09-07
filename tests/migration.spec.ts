@@ -86,12 +86,25 @@ describe('sqlite migration (Step 3.2, real composition)', () => {
       expect(importedSecond.createdAt).toBe(second.entry.createdAt)
       // The audit trail carries over verbatim.
       expect(sqlite.exportAuditLog().length).toBe(beforeAuditCount)
-      // The medium now carries the marker in its meta table.
+      // The medium now carries the marker in its meta table — and its data
+      // tables are cleared: leftover rows would trip the both-sides guard on
+      // the next sqlite boot over its own migration leftovers.
       const medium = JSON.parse(await readFile(`${dir}/storages/memory.json`, 'utf8')) as {
-        tables?: { meta?: Record<string, { key?: string }> }
+        tables?: { entries?: Record<string, unknown>; audit?: Record<string, unknown>; suggestions?: Record<string, unknown>; meta?: Record<string, { key?: string }> }
       }
       expect(medium.tables?.meta?.[SQLITE_MIGRATION_MARKER]?.key).toBe('medium')
+      expect(Object.keys(medium.tables?.entries ?? {})).toHaveLength(0)
+      expect(Object.keys(medium.tables?.audit ?? {})).toHaveLength(0)
+      expect(Object.keys(medium.tables?.suggestions ?? {})).toHaveLength(0)
       await root.dispose()
+
+      // The migrating home re-opens clean (the eval's two-session flow is
+      // exactly this: session 1 migrates, session 2 re-opens the same home).
+      const reopened = await sqliteComposition(dir)
+      const reopenedStore = reopened.ctx.get('memory') as unknown as SqliteMemoryStore
+      expect(reopenedStore.list()).toHaveLength(2)
+      expect(reopenedStore.list().find(entry => entry.id === first.entry.id)?.content).toBe('迁移前的第一条')
+      await reopened.root.dispose()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
