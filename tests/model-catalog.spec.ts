@@ -7,7 +7,7 @@
  * @module tests/model-catalog
  */
 import { describe, expect, it } from 'vitest'
-import { modelOptions, providerOptions } from '../src/client/model-catalog.ts'
+import { modelOptions, providerOptions, type ModelCatalogView } from '../src/client/model-catalog.ts'
 
 const catalog = {
   groups: [
@@ -25,9 +25,12 @@ describe('providerOptions', () => {
   })
 
   it('tolerates an absent or malformed catalog', () => {
-    expect(providerOptions({ draft: {} })).toEqual([])
+    expect(providerOptions({ catalog: undefined, draft: {} })).toEqual([])
     expect(providerOptions({ catalog: {}, draft: {} })).toEqual([])
-    expect(providerOptions({ catalog: { groups: [undefined, { id: 'x' }] }, draft: {} })).toEqual([
+    // An absent group member is wire junk beyond the declared view — the
+    // resolvers must still not crash on it (the render-crash regression).
+    const malformed = { groups: [undefined, { id: 'x' }] } as unknown as ModelCatalogView
+    expect(providerOptions({ catalog: malformed, draft: {} })).toEqual([
       { value: 'x', label: 'x' },
     ])
   })

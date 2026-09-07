@@ -11,10 +11,15 @@
   // this package. JSX (react-jsx = automatic runtime) and the DOM lib mirror
   // build-client.cjs and vitest.config.ts. `types: []` drops the Node globals
   // the host program pulls in — client code runs in the browser.
+  //
+  // The pure-data client spec rides this gate too: vitest strips types, so
+  // without a tsc program the spec drifts unchecked (the same arrangement
+  // tsconfig.check.json gives the eval specs).
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "composite": false,
+    "rootDir": ".",
     "jsx": "react-jsx",
     "lib": ["es2023", "dom", "dom.iterable"],
     "types": [],
@@ -30,6 +35,6 @@
       "@deepseek-ai/dsh-api-remotes/client": ["./node_modules/@deepseek-ai/dsh-api-remotes/lib/types/client/index.d.ts"]
     }
   },
-  "include": ["src/client"],
+  "include": ["src/client", "tests/model-catalog.spec.ts"],
   "exclude": []
 }
