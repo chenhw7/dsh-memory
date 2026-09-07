@@ -221,6 +221,8 @@ describe('suggestion queue (P1-1)', () => {
       override async update(): Promise<undefined> { return undefined }
       override async remove(): Promise<boolean> { return false }
       override search(): { entries: readonly MemoryEntry[]; total: number } { return { entries: [], total: 0 } }
+      override async pin(): Promise<undefined> { return undefined }
+      override async unpin(): Promise<undefined> { return undefined }
       override async janitor(): Promise<number> { return 0 }
       override health(): import('../src/types.ts').MemoryHealth {
         return { totalEntries: 0, byScope: { global: 0, project: 0, user: 0 }, pinned: 0, auditRecords: 0 }
