@@ -98,6 +98,13 @@ export interface StartHarnessOptions {
   buildDir: string
   /** Throwaway harness home; materialized in place and owned by the handle. */
   dshHome: string
+  /**
+   * The child session's working directory (default: the throwaway home). A
+   * workspace-fixture scenario passes its materialized repo path, so the
+   * session's cwd — and the project name the memory plugin infers from it —
+   * is a stable, premise-consistent repository rather than the home root.
+   */
+  cwd?: string
   /** Profile directory name (default `eval`). */
   profileName?: string
   /** Model route (default mock mode). */
@@ -248,6 +255,7 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
   const model = options.model?.model ?? 'deepseek-v4-flash'
   const profileName = options.profileName ?? 'eval'
   const dshHome = options.dshHome
+  const childCwd = options.cwd ?? dshHome
   const turnTimeoutMs = options.turnTimeoutMs ?? 120_000
 
   let mock: LlmMock | undefined
@@ -351,17 +359,18 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
       profile: profileName,
       patches,
       env,
-      // The child runs with the throwaway home as cwd so the harness
+      // The child's cwd defaults to the throwaway home so the harness
       // credentials chain's project-.env fallback cannot read the eval
-      // repository's own `.env` (the credentials row's documented fallback).
-      cwd: dshHome,
+      // repository's own `.env` (the credentials row's documented fallback);
+      // a workspace-fixture run points it at the materialized repo instead.
+      cwd: childCwd,
       description: `dsh profile ${JSON.stringify(profileName)} (eval)`,
     })
     client.start()
     const effort = options.model?.reasoningEffort
     await client.request(
       'initialize',
-      { cwd: dshHome, provider, model, ...(effort !== undefined && effort.length > 0 ? { reasoningEffort: effort } : {}) },
+      { cwd: childCwd, provider, model, ...(effort !== undefined && effort.length > 0 ? { reasoningEffort: effort } : {}) },
       options.initializeTimeoutMs ?? 30_000,
     )
   } catch (error) {

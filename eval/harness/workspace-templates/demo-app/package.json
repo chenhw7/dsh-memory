@@ -1,0 +1,11 @@
+{
+  "name": "demo-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test tests/smoke.test.mjs tests/integration/flaky.spec.mjs"
+  }
+}

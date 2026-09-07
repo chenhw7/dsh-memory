@@ -144,6 +144,7 @@ core-v0 的 turn 都是一句一意的短消息（中位 25 字符），测不�
 
 - 场景级 `register: 'clean' | 'noisy'`——报告仅在语料携带该字段时增加 `register=` 分片轴与逐场景 register 列（core-v0 无此字段，报告形状不变）。
 - 场景级 `patterns`——该场景覆盖的长难模式声明（spec 校验切片并集）。
+- 场景级 `workspace: 'demo-app' | 'monorepo'`——工作区 fixture 轴：runner 把被钉模板物化成 `<home>/workspace/<模板>` 的单次提交 git 仓库（附一份未跟踪的 `docs/next-steps.md` 作为「待提交改动」），子会话 cwd 随之指向该仓库——埋点对话里的「这个仓库」落到一个有界、与前提一致的仓库上，而不是宿主磁盘（core-v0 的 8 个仓库工作型 plant 行已声明；缺省不物化，cwd 保持 home 根）。
 - 埋点级 `plantFacts[]` 表——按埋点 id 携带可选元数据：
   - `factText`：规范化干净摘录，**同时**是 judge 地面真值与机械层 fact 文本（埋点埋在中段意味着整段 150–600 字 dump 会成为地面真值，同时破坏保真判读与假阳性控制）；无该字段的埋点维持现状物化（整段 home turn）。
   - `anchors`：锚定 token 数组，供 anchors lint。

@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { startHarness, type HarnessHandle, type HarnessModelOptions, type TurnBudget, type TurnResult } from './boot.ts'
 import { waitForQuiesce } from './harness/quiesce.ts'
 import { readStoredEntries, seedMemoryMedium, type SeedEntryInput, type StoredEntry } from './harness/seed-media.ts'
+import { materializeWorkspace } from './harness/workspace.ts'
 import {
   factStandingHit,
   injectedMemoryText,
@@ -205,6 +206,12 @@ interface ScenarioContext {
 async function runScenario(scenario: EvalScenario, options: RunOptions): Promise<ScenarioResult> {
   const startedAt = Date.now()
   const dshHome = mkdtempSync(join(tmpdir(), 'dsh-eval-run-'))
+  // A workspace-pinned scenario gets its fixture repo materialized into the
+  // home and runs both sessions with it as cwd, so the planting dialogue's
+  // "this repository" resolves to a bounded, premise-consistent repo
+  // (corpus decision 2026-09-07; the second handle reuses the same tree,
+  // first-session edits included).
+  const workspaceCwd = scenario.workspace !== undefined ? materializeWorkspace(dshHome, scenario.workspace) : undefined
   const memoryMode = effectiveMemoryMode(options)
   const base = {
     scenarioId: scenario.id,
@@ -234,6 +241,7 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
       const handle = await startHarness({
         buildDir: options.buildDir,
         dshHome,
+        ...(workspaceCwd !== undefined ? { cwd: workspaceCwd } : {}),
         model: modelOptions(options),
         configPatches: [
           memoryModePatch(memoryMode),

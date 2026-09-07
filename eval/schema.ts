@@ -105,6 +105,19 @@ export const noisePatternSchema = z.enum([
 ])
 export type EvalNoisePattern = z.infer<typeof noisePatternSchema>
 
+/**
+ * The workspace-fixture axis: a scenario may pin a fixture repository that
+ * the runner materializes into the throwaway home, with the child session's
+ * cwd becoming `<home>/workspace/<template>` — so planting dialogues that
+ * address "this repository" resolve to a bounded, premise-consistent repo
+ * instead of the host disk (the 2026-09-07 corpus findings). Absent means
+ * the child keeps the home root as cwd (memory-recall scenarios). A template
+ * is premise-shaped: `demo-app` is a single-package pnpm service, `monorepo`
+ * a pnpm workspace with packages/core + packages/web and a turbo.json.
+ */
+export const workspaceSchema = z.enum(['demo-app', 'monorepo'])
+export type WorkspaceTemplate = z.infer<typeof workspaceSchema>
+
 export const scenarioSchema = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(['plant', 'seed']),
@@ -114,6 +127,8 @@ export const scenarioSchema = z.strictObject({
   register: registerSchema.optional(),
   /** Declared noise patterns (noise slice authoring contract); the spec lint checks slice coverage. */
   patterns: z.array(noisePatternSchema).optional(),
+  /** Fixture repository materialized as the child's cwd; see {@link workspaceSchema}. */
+  workspace: workspaceSchema.optional(),
   turns: z.array(turnSchema).optional(),
   seedEntries: z.array(seedEntrySchema).optional(),
   /** Per-planted-fact metadata (noise slice); see {@link plantFactSchema}. */
