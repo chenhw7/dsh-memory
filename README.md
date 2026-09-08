@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-512-dark.webp">
+    <img src="assets/logo-512.webp" width="104" alt="Cairn — four stacked stones rising like a trail marker, the top stone blue">
+  </picture>
+</p>
+
 # Cairn
 
 **Cairn** is long-term memory for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), packaged as the `@chenhw7/dsh-memory` profile bundle — facts, preferences, corrections, and lessons survive across sessions and restarts.

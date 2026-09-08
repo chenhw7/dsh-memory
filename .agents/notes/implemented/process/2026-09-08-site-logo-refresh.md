@@ -15,6 +15,7 @@ The site mark is now **a four-step stairway of rounded stones rising left-to-rig
 - **Inline SVG in all four pages** (nav brand at 26px, landing hero at clamp(84–128px)): three ink bars with `fill="currentColor"` plus the blue top bar with `fill="var(--accent)"`. The mark follows the theme toggle through the page's own CSS variables with zero extra requests and no raster fallback; `assets/site.css` selects `.brand>svg` instead of `.brand img`.
 - **`assets/favicon.png` regenerated at 64×64** as a light tile (`#F0F5FF`, hairline `#D8E2F5`) carrying a favicon-tuned three-step variant with enlarged gaps — at 16px the four-step gaps would alias away, and the tile keeps the mark visible on dark tab strips. One file serves both color schemes; the `sizes="64x64"` link is unchanged.
 - **`assets/logo.png` (512×512, transparent) and `assets/logo-512.webp` regenerated** with the new mark as distributable rasters for places that cannot inline SVG. No site page references them anymore.
+- **README adoption:** both READMEs open with the mark via a `<picture>` block (light `assets/logo-512.webp`, dark `assets/logo-512-dark.webp`), and the deep-dive hero screenshots (`assets/memory-architecture-hero.png` / `assets/memory-architecture-hero-zh-CN.png`, also the pages' `og:image`) were regenerated as 2880-px-wide viewport captures of the new light design — the old ones still showed the amber pre-redesign pages with stale figures.
 - The design exploration (12 SVG variants, two showcase pages, render/verify tooling) was kept as untracked scratch in `.logo-design/` and deleted when the change landed; the canonical geometry is the inline SVG in the four HTML pages.
 
 ## Alternatives considered
@@ -27,6 +28,6 @@ The site mark is now **a four-step stairway of rounded stones rising left-to-rig
 ## Consequences
 
 - The mark is theme-adaptive with zero JavaScript: light theme renders ink `#0B1526` + `#4D6BFE`, dark renders `#E8EDFF` + `#6C87FF`, entirely via the existing token system.
-- `assets/logo.png` and `assets/logo-512.webp` are no longer referenced by any page; they are kept as distributable brand rasters (README/npm/social candidates) and are candidates for deletion if nothing adopts them.
+- `assets/logo.png` is no longer referenced by any page or README; it is kept as a distributable brand raster and is a candidate for deletion if nothing adopts it. `assets/logo-512.webp` is referenced by both READMEs (light `<picture>` source).
 - The favicon intentionally diverges from the site mark (three steps on a light tile vs. four bare steps) for 16px legibility and dark-tab visibility — a known, accepted dual form.
 - The design-process scratch `.logo-design/` was deleted with the change; the rejected variants' geometry survives only in the Alternatives section above, and nothing shipped depended on the directory.

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-512-dark.webp">
+    <img src="assets/logo-512.webp" width="104" alt="Cairn — 四级石阶叠成路标,顶石为蓝色">
+  </picture>
+</p>
+
 # Cairn
 
 [English](README.md) | **简体中文**

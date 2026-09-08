@@ -15,6 +15,7 @@ Status: implemented
 - **四个页面全部内联 SVG**(导航 brand 26px,落地页 hero clamp(84–128px)):三块墨色石块 `fill="currentColor"`,顶石 `fill="var(--accent)"`。标志通过页面自身的 CSS 变量跟随主题切换,零额外请求、无位图回退;`assets/site.css` 的选择器从 `.brand img` 改为 `.brand>svg`。
 - **`assets/favicon.png` 以 64×64 重新生成**:浅色瓷底(`#F0F5FF`,发丝描边 `#D8E2F5`)承载一个 favicon 专调的三阶变体(间隙加大)——16px 下四阶的间隙会被抗锯齿吞掉,瓷底则保证暗色标签页上依然可见。一个文件同时服务两种配色;`sizes="64x64"` 的引用不变。
 - **`assets/logo.png`(512×512,透明底)与 `assets/logo-512.webp` 同步重制**为新标志的分发用位图,供无法内联 SVG 的场合使用。站点页面已不再引用它们。
+- **README 采用:** 两份 README 以 `<picture>` 块开篇承载标志(浅色 `assets/logo-512.webp`,深色 `assets/logo-512-dark.webp`);技术深潜的 hero 截图(`assets/memory-architecture-hero.png` / `assets/memory-architecture-hero-zh-CN.png`,亦即页面的 `og:image`)已按新设计浅色主题重拍(2880px 宽)。
 - 设计探索过程(12 个 SVG 变体、两个 showcase 页、渲染/验收脚本)曾保留在未跟踪目录 `.logo-design/`,随本次变更一并删除;权威几何即四个 HTML 页面里的内联 SVG。
 
 ## Alternatives considered
@@ -27,6 +28,6 @@ Status: implemented
 ## Consequences
 
 - 标志零 JavaScript 即可随主题切换:浅色渲染墨色 `#0B1526` + `#4D6BFE`,深色渲染 `#E8EDFF` + `#6C87FF`,完全走既有 token 体系。
-- `assets/logo.png` 与 `assets/logo-512.webp` 已无页面引用;作为可分发品牌位图保留(README / npm / 社交卡片候选),若始终无人采用可删除。
+- `assets/logo.png` 已无页面或 README 引用;作为可分发品牌位图保留,若始终无人采用可删除。`assets/logo-512.webp` 被两份 README 引用。
 - favicon 刻意与站点标志双形并存(瓷底三阶 vs 裸四阶),换取 16px 可读性与暗色标签页可见性——已知且接受。
 - 设计过程草稿 `.logo-design/` 已随本次变更删除;落选变体的几何仅存于上方 Alternatives 一节,没有任何已交付产物依赖该目录。
