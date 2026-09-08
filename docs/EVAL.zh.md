@@ -50,6 +50,10 @@ npm run eval -- --dataset eval/datasets/core-v0.jsonl --build .
 # 噪声切片：6 个长难场景，独立语料（register 轴见「噪声切片与试点门禁」）
 npm run eval -- --dataset eval/datasets/noise-v0.jsonl --build .
 
+# 身份切片：3 个场景（人格声调/画像/防回声前提），--identity 轴开关注入面
+npm run eval -- --dataset eval/datasets/identity-v0.jsonl --build . --identity
+npm run eval -- --dataset eval/datasets/identity-v0.jsonl --build .   # 对照（identity 关）
+
 # 缩小范围（子串匹配场景 id）
 npm run eval -- --dataset eval/datasets/core-v0.jsonl --build . --filter prog105-e2e-port
 
@@ -157,6 +161,14 @@ clean plant 场景靠 dispose 触发提取落盘；noisy 场景改走**周期 re
 ### 试点门禁（预登记判定规则）
 
 `npm run eval:pilot -- --build <dir>` 按序跑五道门（规则在首判之前定死，防门槛退化为走过场；`eval/pilot.ts` 编排，`eval/pilot-gate.ts` 纯函数由 vitest 覆盖）。参数：`--build`（被测构建，缺省仓库根）、`--dataset`（缺省 noise-v0.jsonl）、`--fixture`（缺省 noise-v0.pilot.json，含路由脚本与校准集）、`--concurrency`（缺省 2）。退出码非 0 = 有门未过，逐条打印失败。
+
+## 身份切片（identity-v0）与 `--identity` 轴
+
+`eval/datasets/identity-v0.jsonl`：3 个 zh 场景（`ident101-persona-voice` 人格声调 + 显式指令让位、`ident102-profile-recall` 画像召回、`ident201-identity-echo` 防回声前提，noisy register 走周期 review 钉）。场景携带 `identitySeed`（soul/user 文档），runner 把它们**轴无关地**预写进介质 `identity` 表；`--identity` CLI 轴只控制 `memory-context` 的 `identityEnabled` 注入开关——同一介质、开/关两跑，注入是唯一变量。
+
+- **mock 巷道的确定性度量：**identity 开——fenceTags 出现 `soul`/`user-profile`、注入字符数（实测 ident101 877 / ident102 1349 / ident201 896）；identity 关——fenceTags 空、注入 0。A/B 同构建自差不受影响（轴是运行级开关，`eval:ab` 两侧同开）。
+- **判分层（带 API key 的真实模型跑）：**身份问题的作答由 recall-v2 判分（gold 描述人格声调/画像事实/让位语义），无独立身份 rubric。
+- **防回声预筛的端到端对照是已知缺口：**mock 巷道的提取回复未按场景脚本化（identity 关时回声轮也写 0 条），活体对照需要 noise-pilot 式的路由脚本或真实模型判分跑；预筛本身由 `tests/extract.spec.ts` 夹具钉住。语料与机械面规格：`tests/eval-identity-dataset.spec.ts`。
 
 | 门 | 内容 | 判据 |
 |---|---|---|

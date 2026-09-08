@@ -1,6 +1,7 @@
 # @chenhw7/dsh-memory — long-term memory bundle patch for the DeepSeek Harness.
 #
-# Installs the memory store provider, six model-facing memory tools, automatic
+# Installs the memory store provider, nine model-facing memory tools plus the
+# identity_update agent tool, automatic
 # review + flush extraction, the project-notes prompt projection, the identity
 # layer, and system-prompt context injection as ONE layer over dsh-base. The
 # memory rows point at this

@@ -87,7 +87,7 @@ Client UI development lessons — including the esbuild CJS var-hoisting bug tha
 
 ### 5.1 Bundle composition
 
-The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which inserts seven rows over `dsh-base`. Row order carries no load semantics; the grouping is for readability.
+The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which inserts eight rows over `dsh-base`. Row order carries no load semantics; the grouping is for readability.
 
 | Row | Required (`inject`) | Optional (read via `ctx.get`) | Role |
 |---|---|---|---|
@@ -96,6 +96,7 @@ The `dsh.bundle.patch` manifest field points at `cordis.patch.yml`, which insert
 | `tool-memory` | `tools` | `memory`, `settings` | Registers the eight model tools (confirm-mode aware) |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | Accumulator + periodic review + flush + two-tier consolidation + janitor + curator + suggestion queue producer; owns the `memory-review` namespace |
 | `memory-notes` | — | `memory`, `settings` | Registers `ctx.projectNotes`; renders the `project-notes` prompt snapshot (pure in-memory); cleans up ≤0.5.x file-export artifacts |
+| `memory-identity` | — | `memory`, `settings` | Registers `ctx.identity`; seeds and reads the two self-documents (SOUL.md / USER.md) from the store's identity tables (§7.10) |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | Prompt sections + auto-recall middleware; owns the `memory` namespace |
 | `memory-remote` | `memory` | — | `@Remote` service for the memory management UI |
 
@@ -106,11 +107,12 @@ flowchart TB
     subgraph bundle["@chenhw7/dsh-memory — one layer, seven rows"]
       root["memory-root<br/>no-op scanner entry"]
       store["memory-store · /store<br/>ctx.memory provider + BM25 search<br/>entries + audit + suggestions + meta tables"]
-      tool["tool-memory · /tool<br/>eight model tools (confirm-mode aware)"]
+      tool["tool-memory · /tool<br/>ten model tools (confirm-mode aware)"]
       review["memory-review · /review<br/>accumulator + LLM extraction + two-tier consolidation<br/>+ janitor + curator + review queue · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt projection · ctx.projectNotes<br/>≤0.5.x artifact cleanup"]
+      identity["memory-identity · /identity<br/>self-document service · ctx.identity<br/>seed-once + read snapshot (§7.10)"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 sections<br/>auto-recall middleware · memory ns"]
-      remote["memory-remote · /remote-service<br/>@Remote service for UI (14 methods)"]
+      remote["memory-remote · /remote-service<br/>@Remote service for UI (18 methods)"]
     end
   end
   base ==> bundle
@@ -121,6 +123,7 @@ flowchart TB
   store -- "ctx.get('memory')" --> remote
   review -- "ctx.llm.stream (session route or override)" --> llm["LLM provider / model"]
   notes -- "snapshotFor(cwd)" --> context
+  identity -- "snapshotFor()" --> context
   store -- "serialized writes" --> json["$DSH_HOME/storages/memory.json"]
 ```
 
@@ -296,11 +299,13 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
 
 ### 6.3 Persistence layout
 
-- The store provider opens a storage-domain named **`memory`** (version 0) with **four tables**:
+- The store provider opens a storage-domain named **`memory`** (version 0) with **six tables**:
   - `entries` — a KV table keyed by `MemoryId`. Records are validated against a Zod schema on load.
   - `audit` — a KV table keyed by `AuditId`. Forward-compatible addition: storage-json initializes absent tables empty, so existing v0 media reopen without migration.
   - `suggestions` — a KV table keyed by `SuggestionId` holding the pending human-review queue (§7.3.6). Same forward-compatible story: pre-P1 media reopen with the table initialized empty.
   - `meta` — a KV table keyed by plain string holding subsystem state rows that are not memories, audit records, or suggestions: consolidation progress (`consolidation:*` keys, e.g. last-run/cooldown timestamps), medium-level migration markers (`medium:*`, e.g. `migratedToSqlite`), and schema markers (`schema:*`). A record is a permissive carrier `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }` (loose zod schema): unknown keys and unknown fields re-read without error, and pre-meta media reopen with the table initialized empty. The store exposes `getMeta(key)`/`setMeta(key, record)`; a failed write is reported as a swallowed background failure (`meta-write`), never thrown into the caller.
+  - `identity` — a KV table keyed by kind (`'soul'` | `'user'`) holding the current record of each identity document (§7.10): `{ kind, content, version, updatedAt, seedVersion }`. Forward-compatible addition like `audit`: pre-identity media reopen with the table initialized empty.
+  - `identity_history` — a KV table keyed `` `${kind}#${version}` `` holding full-content version snapshots; the identity layer's audit surface (the entry-keyed `audit` table cannot carry identity writes). Capped at **20 snapshots per kind**, oldest evicted first — reverts can therefore restore within that window only.
 - The **audit table** records every `add`/`update`/`remove` (pin/unpin mutate without audit records) with an `AuditEntry`:
   - `source`: `'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` — who triggered the write. A supersession through the batch-consolidation `supersedeEntry` seam reuses `'janitor'`: the `AuditSource` enum has no consolidation member, and extending the durable enum shape is not that seam's business (the same rationale as `trimEntries`' eviction records).
   - `op`: `'add'` | `'update'` | `'remove'`.
@@ -311,7 +316,7 @@ Categories double as the routing key for the project-notes matrix (§7.4): `conv
   - **The entries table caps at `entriesCap` (default 500, configurable on the store row's Config)**: `add` trims back after each successful write, evicting **pinned never → ascending `accessCount` → ascending `lastRecalledAt` ?? `createdAt`** (longest-unrecalled first); when every remaining candidate is protected the table is allowed over the cap (soft target). Eviction audits as `remove`/`janitor`.
 - **Reads** are synchronous from the domain's authoritative in-memory state; **writes** serialize on the domain's write chain and reach the JSON backend before in-memory state updates.
 - The host's `storage-json` backend persists the whole domain to `$DSH_HOME/storages/memory.json` (Windows: `%USERPROFILE%\.dsh\storages\memory.json`).
-- **The SQLite backend (`storage: 'sqlite'` on the `memory-store` row, Step 3)**: the store mounts `SqliteMemoryStore` over `node:sqlite`'s `DatabaseSync` in the plugin-owned `$DSH_HOME/storages/memory.db` (WAL mode, `busy_timeout` 5 s; the `-wal`/`-shm` sidecars are part of the same unit — see `docs/HOST_CONTRACT.zh.md` §11). Reads serve from rows read per call (synchronous, same read semantics); writes are one statement per record with entries + audit in one transaction — no full-file republish. Tables: `entries` (MemoryEntry columns), `audit`, `suggestions`, `meta` (`id`/`key` primary keys). The one-time migration: a sqlite boot over a non-empty, unmarked medium imports entries + audit + suggestions verbatim, clears the medium's three data tables, and writes the `medium:migratedToSqlite` marker into the medium's meta table (the clear lands before the marker, so a boot between the two steps sees an empty, unmarked medium and starts clean); either backend booting over a medium with data AND the marker fails loud — with the clear, that state implies a post-migration host-medium writer (two live sources of truth would diverge).
+- **The SQLite backend (`storage: 'sqlite'` on the `memory-store` row, Step 3)**: the store mounts `SqliteMemoryStore` over `node:sqlite`'s `DatabaseSync` in the plugin-owned `$DSH_HOME/storages/memory.db` (WAL mode, `busy_timeout` 5 s; the `-wal`/`-shm` sidecars are part of the same unit — see `docs/HOST_CONTRACT.zh.md` §11). Reads serve from rows read per call (synchronous, same read semantics); writes are one statement per record with entries + audit in one transaction — no full-file republish. Tables: `entries` (MemoryEntry columns), `audit`, `suggestions`, `meta` (`id`/`key` primary keys), `identity` (`kind` primary key), `identity_history` (`${kind}#${version}` primary key). The one-time migration: a sqlite boot over a non-empty, unmarked medium imports entries + audit + suggestions + identity + identity_history verbatim, clears the medium's five data tables, and writes the `medium:migratedToSqlite` marker into the medium's meta table (the clear lands before the marker, so a boot between the two steps sees an empty, unmarked medium and starts clean); either backend booting over a medium with data AND the marker fails loud — with the clear, that state implies a post-migration host-medium writer (two live sources of truth would diverge).
 - Uninstalling the plugin does **not** delete memories; deleting that one file wipes the data (with the SQLite backend: `memory.db` plus its WAL sidecars).
 
 ### 6.4 Suggestion-queue records
@@ -328,16 +333,17 @@ interface MemorySuggestion {
   readonly firstSeenAt: number     // Unix epoch ms
   readonly lastSeenAt: number
   readonly targetEntryId?: MemoryId // set when the proposal rewrites an existing entry (P1-2)
+  readonly identityKind?: 'soul' | 'user' // set when the proposal targets an identity document (§7.10)
   readonly source: AuditSource     // 'review' | 'flush' | 'tool'
   readonly sessionId?: string
 }
 ```
 
-A suggestion is **not** a memory: it never injects, never searches, and never decays — it waits for a human decision (adopt → the content goes through the full store contract as an add or, when `targetEntryId` is set, an update; reject → the row is deleted). Re-observation dedups same-target proposals outright, or same-scope proposals at Jaccard > 0.15, bumping `hits` and `lastSeenAt`; strictly more informative (superset) content replaces the queued text. The queue is capped at **200 records**; overflow evicts lowest hits, then oldest `lastSeenAt`.
+A suggestion is **not** a memory: it never injects, never searches, and never decays — it waits for a human decision (adopt → the content goes through the full store contract as an add or, when `targetEntryId` is set, an update; reject → the row is deleted). An identity proposal (`identityKind` set, confirm-mode `identity_update`) is the queue's second kind: dedup keys on the document kind instead of scope/content, `scope` is fixed `'global'` for the durable row shape, adoption rewrites the document through the identity write path (`source: 'ui'`) writing no memory entry, and entry proposals never match identity rows — the dedup dimensions stay separate. Re-observation dedups same-target proposals outright, or same-scope proposals at Jaccard > 0.15, bumping `hits` and `lastSeenAt`; strictly more informative (superset) content replaces the queued text. The queue is capped at **200 records**; overflow evicts lowest hits, then oldest `lastSeenAt`.
 
 ### 6.5 Session event vocabulary
 
-`memory/added`, `memory/updated`, `memory/removed` are declared on the session's `SessionEventMap` as **log-only** events (no `surfaceOp`, they contribute nothing to derived history). They keep the seam open for future instrumentation (audit trails, UI timelines) without a breaking change.
+`memory/added`, `memory/updated`, `memory/removed` are declared on the session's `SessionEventMap` as **log-only** events (no `surfaceOp`, they contribute nothing to derived history). They keep the seam open for future instrumentation (audit trails, UI timelines) without a breaking change. `identity/updated {kind, version}` follows the same pattern: declared vocabulary, no plugin emitter today (tool executions carry no session handle) — the in-conversation announcement rides the `identity_update` tool-result text, and the durable audit surface is the `identity_history` table.
 
 ---
 
@@ -375,7 +381,7 @@ A suggestion is **not** a memory: it never injects, never searches, and never de
 
 ### 7.2 Model tools — `/tool` (`src/tool/index.ts`)
 
-Eight tools registered through `defineTool` (schemastery-parameter schemas), each with a 5 s timeout, a text `render` for the transcript, `presentationMeta` + `presentCall`/`presentResult` cards for the UI:
+Ten tools registered through `defineTool` (schemastery-parameter schemas), each with a 5 s timeout, a text `render` for the transcript, `presentationMeta` + `presentCall`/`presentResult` cards for the UI:
 
 | Tool | Key parameters | Result | Notable semantics |
 |---|---|---|---|
@@ -388,6 +394,7 @@ Eight tools registered through `defineTool` (schemastery-parameter schemas), eac
 | `memory_pin` | `id` | `{ pinned }` | absent id → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | absent id → `unpinned: false` |
 | `memory_forget` | `topic`, `scope?`, `category?`, `projectName?`, `confirm` | `{ removedCount, removedIds, pinnedSkipped? }` | **DANGEROUS batch delete** — removes every entry lexically related to the topic (BM25 token match over content AND summaries, stale included); refuses without `confirm: true`, never touches pinned entries (reported via `pinnedSkipped`), refuses batches above half the search ceiling, and logs one `remove` audit per entry |
+| `identity_update` | `kind` (`soul`\|`user`), `content` | `{ updated, kind, version }` or `{ pending, suggestionId }` | **The identity layer's only author surface** (§7.10): whole-document replace of one self-document, gated by `identityEnabled`, per-kind character budget (`soulCharLimit`/`userCharLimit`), and the scanner; the description and result text carry the announce discipline (tell the user what changed); in confirm mode the proposal queues with `identityKind` and writes nothing until adopted |
 
 Design notes:
 
@@ -430,7 +437,7 @@ The review plugin is the automatic-sediment layer. One store, five triggers: per
 - **Project auto-detection:** `inferProjectName(session)` takes the basename of `session.header?.cwd`; project-scoped extractions without an explicit projectName inherit it.
 - **Anti-forgery normalization:** `flattenFragment` strips newline runs from every fragment/snapshot line before prompting, so conversation text cannot forge the line-oriented output protocol or corrupt numbering. Snapshot lines additionally pass `redactBlocked`.
 - **Prompts (fixed system prompts):**
-  - `REVIEW_SYSTEM_PROMPT` — scope-routing rules, admission rules (transient/unverified content never persisted; procedures only when verified by tool execution; preference/convention only on explicit demand or a twice-repeated theme; **negative criterion: anything the repository already records — code structure, APIs, file paths, git history, diffs, fixed-bug narratives — does not belong in memory**), category tags, and the current memory snapshot (`renderMemorySnapshot`) so already-stored facts are omitted.
+  - `REVIEW_SYSTEM_PROMPT` — scope-routing rules, admission rules (transient/unverified content never persisted; procedures only when verified by tool execution; preference/convention only on explicit demand or a twice-repeated theme; **negative criterion: anything the repository already records — code structure, APIs, file paths, git history, diffs, fixed-bug narratives — does not belong in memory**; identity-document restatements never persist — see §7.10's anti-echo), category tags, the current memory snapshot (`renderMemorySnapshot`) so already-stored facts are omitted, and the injected identity documents (`renderIdentityDocuments`) as the anti-echo rule's referent.
   - `PITFALL_SYSTEM_PROMPT` — distills `pitfall-resolved` candidates into structured entries `project: [pitfall] 症状：…。根因：…。修复：…。` using only evidence present in the fragment.
   - `FLUSH_SYSTEM_PROMPT` — compaction/dispose variant of the review rules, carrying the same negative criterion.
   - `CURATOR_SYSTEM_PROMPT` — id-addressed rewrite protocol `<id>: <rewritten line>` (§7.3.5).
@@ -507,7 +514,7 @@ Two namespaces, both live:
 
 | Namespace | Owner | Keys (default) |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
+| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25), `identityEnabled` (false), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` ("") |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
 Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored).
@@ -527,7 +534,7 @@ Each resolves in layers: schema defaults → composition `config:` base → user
 
 #### System-prompt sections (`src/context/`)
 
-- Two sections: **`memory`** at order 90 and **`project-notes`** at order 91 (before tool guidance, 100–199).
+- Four sections: **`soul`** at order 80 and **`user-profile`** at order 81 (when the identity layer is enabled — after the host's `deployment:persona` at order 0, before memory), then **`memory`** at order 90 and **`project-notes`** at order 91 (before tool guidance, 100–199).
 - **Frozen snapshots:** on `session/created` (and re-run on a clean `compaction/end` — the sanctioned prefix break), `freezeFor(session)` builds:
   - `content` — `readMemorySnapshot`: per-scope `## <scope>` bullet lists over healthy entries, with `redactBlocked` per line, conflict annotations (below), a trailing stale-count note when soft-decayed entries were folded out, truncation to `memoryCharLimit` **and an entry-count cap `memoryMaxEntries` (default 20, 0 = unlimited)**, closed by a `≈N tokens` estimate so injection cost stays visible (4-chars/token heuristic);
   - `index` — `readMemoryIndex`: `renderMemoryIndex` existence lines (`<scope/category> · <project> · <id> · <summary-or-content[:80]>` — an entry's `summary` is preferred over truncated content), tier-ordered project → user → global, with category roll-up lines when the budget exhausts;
@@ -585,7 +592,7 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 
 ### 7.7 `@Remote` service — `/remote-service` (`src/remote/`)
 
-`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes fifteen `@Remote` methods callable from a browser. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
+`MemoryRemoteService extends TypertRemoteService`, constructed onto `ctx.memoryRemote` by the `memory-remote` row. It wraps the `MemoryStore` and exposes eighteen `@Remote` methods callable from a browser. Writes stay scanner-gated through the store contract; errors return as `{ error }` instead of throwing.
 
 | Method | Wire request | Wire result | Notes |
 |---|---|---|---|
@@ -604,16 +611,19 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 | `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` | synchronous; `stale` passes through the soft-decay count, `backgroundFailures` the per-site background-failure counters |
 | `projects` | — | `{ projects[] }` | aggregates distinct `projectName` from `store.list('project')` (remote-layer aggregation, no store change); feeds the workspace selector |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | newest tail, default 100 |
+| `identityList` | — | `{ soul?, user? }` | both documents' current records; absent fields = never written (identity disabled or unseeded). Read, ungated |
+| `identityHistory` | `MemoryIdentityHistoryRequest` (kind) | `{ history[] }` | the retained version snapshots, newest first (≤20 per kind). Read, ungated |
+| `identityRevert` | `MemoryIdentityRevertRequest` (kind, version) | `{ reverted?, error? }` | async; **the governance valve** — restores one retained version as a NEW version (history never destroyed), gated by its own `identityRevertEnabled` (default **on**), NOT by `remoteWritesEnabled` |
 
-Entry projection `MemoryEntryJson` carries `summary?` and `staleSince?` (soft-decay/archive timestamp); the suggestion projection `MemorySuggestionJson` carries `hits`, `firstSeenAt`/`lastSeenAt`, `targetEntryId?`, and provenance (`source`, `sessionId?`).
+Entry projection `MemoryEntryJson` carries `summary?` and `staleSince?` (soft-decay/archive timestamp); the suggestion projection `MemorySuggestionJson` carries `hits`, `firstSeenAt`/`lastSeenAt`, `targetEntryId?`, `identityKind?`, and provenance (`source`, `sessionId?`); identity adoption surfaces as `{ identity: { kind, version } }` with no `entry` (the row's kind is read before adopting so the store's `undefined` return — success for identity, absent-row for entries — disambiguates on the wire).
 
 Wire types live in `src/remote/index.ts`; client-side mirrors are the hand-written `typert.remote-client.*` artifacts (exported as `./remote`, synced manually on every method change).
 
-**Deployment security (verified against harness sources):** the service carries a deployment-level write switch — `remoteWritesEnabled` (the `memory-remote` row's Config, schemastery default `false`): the seven write methods (`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`) check it before touching the store and refuse in each method's wire shape (`{ error }` where the wire defines one, the no-op form otherwise) while reads are unaffected; the client surfaces the refusal through its `actionError` path. This is not per-request auth — `trustedHosts` is host-side configuration this bundle cannot read, and the gateway passes no request headers into `@Remote` methods — so the transport-level `api-request-trust` fence (loopback / deployment-derived LAN literals / declared `trustedHosts`, defending DNS rebinding and cross-site requests) remains the first gate, and the write switch the second: in a default deployment a non-loopback caller that passes the transport fence still cannot write the store.
+**Deployment security (verified against harness sources):** the service carries a deployment-level write switch — `remoteWritesEnabled` (the `memory-remote` row's Config, schemastery default `false`): the seven write methods (`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`) check it before touching the store and refuse in each method's wire shape. `identityRevert` deliberately sits OUTSIDE that switch under its own `identityRevertEnabled` (default **on**): revert restores content that already existed (every retained version passed the scanner and was once current), and folding it under the default-off switch would leave the human no governance valve at all on the read-only identity surface (§7.10) (`{ error }` where the wire defines one, the no-op form otherwise) while reads are unaffected; the client surfaces the refusal through its `actionError` path. This is not per-request auth — `trustedHosts` is host-side configuration this bundle cannot read, and the gateway passes no request headers into `@Remote` methods — so the transport-level `api-request-trust` fence (loopback / deployment-derived LAN literals / declared `trustedHosts`, defending DNS rebinding and cross-site requests) remains the first gate, and the write switch the second: in a default deployment a non-loopback caller that passes the transport fence still cannot write the store.
 
 ### 7.8 Client UI — `/client` (`src/client/`)
 
-The client ships two kinds of surface: **four configuration cards** inside the Plugins tab, and the **Memory content-management section** as its own Settings nav entry (phase 2: full write path — three tabs covering the health dashboard, the pending-proposal review queue, and entry management with write actions).
+The client ships two kinds of surface: **four configuration cards** inside the Plugins tab, and the **Memory content-management section** as its own Settings nav entry (phase 2: full write path — three tabs covering the health dashboard, the pending-proposal review queue, and entry management with write actions). The **Identity governance section** (id `identity`, order 26, right after Memory) is the identity layer's read-only surface: both documents rendered with their version history, the two-step revert valve, and a markdown export — no editor anywhere; the agent writes the documents through conversation, the human only governs (§7.10).
 
 #### Configuration cards (`settings.plugin.item` slot)
 
@@ -659,6 +669,20 @@ A pure, dependency-free module that turns "the retrieval is strong" from a struc
 
 The module is exported as `@chenhw7/dsh-memory/benchmark` (types included) so the fixture and metrics can be reused outside the spec.
 
+### 7.10 Identity layer — `/identity` (`src/identity/`)
+
+The agent's self-documents: **SOUL.md** (its character) and **USER.md** (its working profile of the human user), grown **by the agent in conversation** through the `identity_update` tool — the human holds no editor, only governance. The documents live in the store's `identity`/`identity_history` tables (§6.3); `SOUL.md`/`USER.md` are display names, not files.
+
+- **Layer split (declared vs learned):** the soul/user-profile prompt sections (orders 80/81, §7.4) carry the *self-authored* identity — never decayed, never consolidated, never conflict-annotated, never indexed/searched/auto-recalled (always-on by definition); the memory section keeps the *learned* facts. Precedence on the prompt: conversation instructions > the host's `deployment:persona` > the identity sections > learned memories.
+- **Service (`src/identity/`):** `IdentityService.snapshotFor()` returns both documents' raw content (budgets apply at section assembly, the notes precedent). **Seed-once:** a missing document is served from the builtin Chinese seed for THAT session while the durable write lands fire-and-forget; the plugin never overwrites an existing document. Seeds carry no personal information and no anti-staleness clause (the profile grows naturally, per the 2026-09-08 ruling).
+- **Settings:** `identityEnabled` (default **false**), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` (optional override directory holding `SOUL.md`/`USER.md`; partial override keeps the builtin for the missing kind). The load-time loud gate lives in **`memory-context`'s apply** — the `memory` namespace's owner validates its composition-layer config (a wrong directory or a scanner-rejected seed file fails the mount); settings-overlay changes degrade observably instead (reported failure + builtin fallback, surfaced through `health()`), because cordis swallows throws from `ctx.inject` callbacks (verified against the installed runtime).
+- **Cross-namespace reads ride `ctx.inject`:** cordis service properties throw `cannot get property "settings" without inject` on a fiber that has not injected the service — the identity plugin reads the `memory` namespace through a settings-injected fiber with a stable per-call indirection (the tool plugin's `defaultLimit` pattern). A plain `ctx.settings` access on the plugin's own fiber silently degrades to the disabled default; the notes module's direct read carries this same latent defect (a named coverage gap — its budgets silently fall back to defaults in settings-provided deployments).
+- **Write path (`identity_update`, §7.2):** whole-document replace through three gates — `identityEnabled`, the per-kind character budget, the scanner — then the store's atomic version write (version+1 via the table's read-modify-write so racing rewrites never mint one version) plus a full history snapshot per version. In confirm mode the proposal queues as an identity suggestion (`identityKind`, §6.4) and writes nothing until a human adopts. The announce discipline — "when you rewrite this file, tell the user" — lives in the tool description and result text.
+- **Anti-echo:** extraction never persists identity restatements — the review/flush prompts carry the rule plus the rendered identity documents as referent, and both extraction write seams run a mechanical prefilter (IDF-weighted overlap > 0.6 against the injected documents; a memory ABOUT the persona stays far below). Without the identity layer the prefilter is inert (no injected documents, nothing to echo).
+- **Governance surface (§7.8):** the read-only Identity settings section — documents + version history + the revert valve (`identityRevert` under `identityRevertEnabled`, §7.7) + export; no content editor, no import.
+- **Events:** `identity/updated {kind, version}` is declared vocabulary only (§6.5) — no emitter; the announcement rides the tool result, the durable audit is `identity_history`.
+- **Eval:** the identity-v0 slice (`eval/datasets/identity-v0.jsonl`) + the `--identity` CLI axis measure the injection surface deterministically in the mock lane (soul/user-profile fences + chars, on vs off); the anti-echo prefilter's end-to-end contrast needs a scripted extraction reply (the noise-pilot lane) or a real-model judged run — the prefilter itself is pinned by `tests/extract.spec.ts` fixtures, and the pilot-lane evidence is a recorded gap. Decisions and alternatives: [Agent Note](../.agents/notes/implemented/feature/2026-09-08-identity-layer-soul-and-user-profile.md).
+
 ---
 
 ## 8. Configuration
@@ -688,6 +712,13 @@ memory:
                                  #   feeds the sweep's selection, never deletion
   hitSignalThreshold: 0.25       # IDF-weighted coverage of the entry's tokens
                                  #   above which the answer counts as a hit
+  identityEnabled: false          # identity layer (soul + user-profile sections,
+                                 #   identity_update tool surface); opt-in
+  soulCharLimit: 2000             # injected soul-section budget (0 = disabled)
+  userCharLimit: 3000             # injected user-profile-section budget (0 = disabled)
+  identitySeedDir: ""             # optional seed-override directory (SOUL.md / USER.md);
+                                 #   empty uses the builtin Chinese seeds; a missing file
+                                 #   keeps that kind's builtin seed (partial override)
 ```
 
 ### `memory-store` row config (owned by the store plugin)
@@ -769,6 +800,7 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | Conversation content leaving for a third-party provider | `extractionModelProvider`/`extractionModelModel` route extraction, consolidation, and curator calls — and therefore conversation excerpts and stored entries — to whatever provider they name. Both default to `""`, which reuses the session's own route, so an override is the only way this data path appears; treat naming a provider as granting it conversation content |
 | Another host on the network reading or writing the store | Two gates (§7.7): the host's transport trust fence (`trustedHosts`) stays first, and behind it `remoteWritesEnabled` (default `false`) makes the remote **write** methods deny by default — with a wide `trustedHosts`, the write channel is closed unless the deployment explicitly enables it, while reads pass (browser management requires opting in). The persistent injection channel — writes reaching later sessions' system prompts — therefore needs both conditions at once: fence admission and an explicit write-enable |
 | Retrieval quality regressing unnoticed | Golden-set CI floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) — a tokenizer/weight/budget regression fails the build |
+| An induced `identity_update` rewrite persists into every later session's system prompt (SEC-04 class, an intentionally bounded channel) | Scanner gate on every identity write; the character budgets bound the blast radius; version history makes every rewrite revertible (`identityRevertEnabled`, default on) and visible in the read-only UI; the announce discipline surfaces changes in-conversation; the optional confirm mode routes proposals through the human queue; eval scenarios pin the injection surface |
 
 ### 9.2 Failure matrix
 

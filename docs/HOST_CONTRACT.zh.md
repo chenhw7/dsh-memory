@@ -37,11 +37,15 @@
 | `SystemPrompt.section({name, order, text})` 注册有序段 | `packages/core/system-prompt/src/index.ts:381` |
 | `assemble(context)` 组装（变量插值、排序、waterfall） | `packages/core/system-prompt/src/index.ts:467` |
 | `AssembleContext`（含可选 `agent` 字段，段渲染函数借此拿 session） | `packages/core/system-prompt/src/index.ts:42` |
+| `SECTION_ORDERS` 段序全景常量表（harness 自有段的名字→序号） | `packages/core/system-prompt/src/index.ts:121` |
+| `PERSONA_SECTION`（`'deployment:persona'`，部署所有的人格槽位名） | `packages/core/system-prompt/src/index.ts:172` |
 
 **契约要点**：
 - section `text` 可以是 `(context) => string` 函数，**每次组装时求值**——KV-cache 冻结靠我们自己把快照存进 per-session WeakMap，而不是宿主保证。
 - 同名 section 靠 scope shadowing；重复注册同名全局段会抛错，effect disposer 必须交给 `ctx.effect()` 管理。
 - 渲染期 `{{var}}` 引用未知变量直接 throw——我们的段文案不含变量引用，若将来加，需同时注册 variable。
+- **段序全景（2026-09-08 核实，身份层落位依据）：**`HARNESS_IDENTITY(-1000) → DEPLOYMENT_PERSONA(0) → PLAN_POLICY(500) → PTC_ONLY(800) → FILE_REFERENCE(900) → TOOL_*（1000+，工具段） → TOOLS_SDK(5000) → STRUCTURED_OUTPUT(9900)`。我们的段序：`soul`(80) / `user-profile`(81) 落在 deployment persona 之后、policy 之前的 0–500 带；`memory`(90) / `project-notes`(91) 同带；插件自有工具指引在 100–199。
+- **`deployment:persona` 是部署所有的静态人格槽位**（`PERSONA_SECTION`，order 0；`dsh-persona` preset 行只能按 agent scope 同名遮蔽，全局同名注册在注册表处撞车 fail loud）。我们的 `soul` 段与它是**共存而非替代**关系；位阶链（会话显式指令 > 部署任命 > 身份段 > 学到的记忆）写进段文案并由测试钉住。
 
 ## 4. 会话事件面
 
@@ -116,7 +120,7 @@
 
 1. §1 KvTable 接口形状 / 域 version 语义是否变化；
 2. §2 installSettingsSection hooks 形状（setSource/onChange）是否变化；
-3. §3 AssembleContext.agent 是否仍透传给 section text 函数；
+3. §3 AssembleContext.agent 是否仍透传给 section text 函数；`SECTION_ORDERS` 表是否有新增/改序条目落在我们的 0–500 带内（soul 80 / user-profile 81 / memory 90 / project-notes 91），`PERSONA_SECTION` 名称是否变化；
 4. §4 compaction/end 的 `error` 字段类型与 shadowedSeqs 回放路径；
 5. §4 agent/pre-step 的 payload/决策形状；
 6. §6 finish reason 枚举与 BlockAssembler API；
