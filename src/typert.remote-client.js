@@ -38,6 +38,11 @@ const _health_result = z.object({}).passthrough()
 const _projects_result = z.object({}).passthrough()
 const _auditLog_param = z.object({}).passthrough()
 const _auditLog_result = z.object({}).passthrough()
+const _identityHistory_param = z.object({}).passthrough()
+const _identityHistory_result = z.object({}).passthrough()
+const _identityRevert_param = z.object({}).passthrough()
+const _identityRevert_result = z.object({}).passthrough()
+// identityList() takes no request parameter — same empty-parameters shape as health().
 
 const pkg = '@chenhw7/dsh-memory'
 const ns = 'memoryRemote'
@@ -90,6 +95,20 @@ const descriptors = [
   { id: `${pkg}#${ns}/auditLog`, service: ns, namespace: ns, method: 'auditLog', invocation: { kind: 'direct' },
     parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryAuditRequest`, schema: _auditLog_param } }],
     result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryAuditResult`, schema: _auditLog_result },
+    sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
+  { id: `${pkg}#${ns}/identityList`, service: ns, namespace: ns, method: 'identityList', invocation: { kind: 'direct' },
+    // identityList() declares no request parameter — empty parameters array
+    // matches the host method signature (the health()/projects() shape).
+    parameters: [],
+    result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryIdentityListResult`, schema: z.object({}).passthrough() },
+    sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
+  { id: `${pkg}#${ns}/identityHistory`, service: ns, namespace: ns, method: 'identityHistory', invocation: { kind: 'direct' },
+    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryIdentityHistoryRequest`, schema: _identityHistory_param } }],
+    result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryIdentityHistoryResult`, schema: _identityHistory_result },
+    sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
+  { id: `${pkg}#${ns}/identityRevert`, service: ns, namespace: ns, method: 'identityRevert', invocation: { kind: 'direct' },
+    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryIdentityRevertRequest`, schema: _identityRevert_param } }],
+    result: { mode: 'strict', typeSymbol: `${pkg}/remote/types#MemoryIdentityRevertResult`, schema: _identityRevert_result },
     sourceLocation: { file: 'src/remote/index.ts', line: 0, column: 0 } },
 ]
 

@@ -174,6 +174,22 @@ export const en = {
   noCategory: '(no category)',
   editSummary: 'Summary',
   editSummaryPlaceholder: 'Short summary for index views (optional)',
+  // ── Identity governance section (Settings → Identity) ──
+  identityNav: 'Identity',
+  identitySectionIntro: 'These two documents are maintained by the assistant itself, through conversation: SOUL.md is its character, USER.md is its understanding of you. This page is read-only — you can review the version history, revert to any retained version, or export the text. The content itself is written by the assistant through the identity_update tool.',
+  identitySoulTitle: "SOUL.md — the assistant's character",
+  identitySoulEmpty: 'Not written yet. Once the identity layer is enabled (identityEnabled in the Memory settings), the assistant seeds and grows this document through conversation.',
+  identityUserTitle: "USER.md — the assistant's understanding of you",
+  identityUserEmpty: 'Not written yet. Once the identity layer is enabled (identityEnabled in the Memory settings), the assistant accumulates its understanding of you here, naturally, without interrogating.',
+  identityCurrentVersion: 'Current: v{version}',
+  identityHistoryTitle: 'Version history (newest first; revert restores a version as a NEW one)',
+  identityEmptyHistory: 'No retained history yet.',
+  identityRevertBtn: 'Revert to this version',
+  identityRevertConfirm: 'Confirm revert?',
+  identityExport: 'Export',
+  identitySourceSeed: 'seeded',
+  identitySourceTool: 'assistant write',
+  identitySourceUi: 'revert',
 }
 
 export const zh = {
@@ -350,4 +366,20 @@ export const zh = {
   noCategory: '（无类别）',
   editSummary: '摘要',
   editSummaryPlaceholder: '索引视图用的短摘要（可选）',
+  // ── 身份治理 section（Settings → Identity）──
+  identityNav: '身份',
+  identitySectionIntro: '这两份文档由 AI 在对话中自己维护：SOUL.md 是它的人格，USER.md 是它对你的了解。本页只读——你可以查看版本历史、回滚到任意保留版本、或导出文本；内容本身由 AI 通过 identity_update 工具书写。',
+  identitySoulTitle: 'SOUL.md — AI 的人格',
+  identitySoulEmpty: '尚未生成。在 Memory 设置中开启身份层（identityEnabled）后，AI 会在对话中播种并生长这份文档。',
+  identityUserTitle: 'USER.md — AI 对你的了解',
+  identityUserEmpty: '尚未生成。在 Memory 设置中开启身份层（identityEnabled）后，AI 会在这里自然地积累对你的了解，不刻意追问。',
+  identityCurrentVersion: '当前版本：v{version}',
+  identityHistoryTitle: '版本历史（新版本在前；回滚会把所选版本恢复为一个新版本）',
+  identityEmptyHistory: '暂无保留的历史版本。',
+  identityRevertBtn: '回滚到此版本',
+  identityRevertConfirm: '确认回滚？',
+  identityExport: '导出',
+  identitySourceSeed: '初始种子',
+  identitySourceTool: 'AI 写入',
+  identitySourceUi: '回滚',
 }

@@ -39,6 +39,8 @@ import type {
   AddMemoryInput,
   AuditEntry,
   AuditSource,
+  IdentityHistoryRecord,
+  IdentityRecord,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
@@ -69,11 +71,23 @@ export interface RemoteConfig {
    * (the management UI's browsing surfaces) stay open.
    */
   remoteWritesEnabled: boolean
+  /**
+   * Whether the identity governance valve — `identityRevert`, the read-only
+   * identity surface's only write — may run. Default `true`, deliberately
+   * apart from `remoteWritesEnabled`: revert restores content that already
+   * existed (every retained version passed the scanner and was once current),
+   * while `remoteWritesEnabled` guards arbitrary new content; and folding it
+   * under the default-off knob would leave the human no governance path at
+   * all on a default deployment. Set `false` to make the identity surface
+   * fully read-only.
+   */
+  identityRevertEnabled: boolean
 }
 
 /** Schemastery configuration for the `memory-remote` composition row. */
 export const Config = z.object({
   remoteWritesEnabled: z.boolean().default(false),
+  identityRevertEnabled: z.boolean().default(true),
 })
 
 declare module '@deepseek-ai/cordis' {
@@ -139,6 +153,29 @@ export interface MemoryListRequest {
   readonly offset?: number
 }
 
+/** Project one identity record to the wire shape (branded kinds serialize as plain strings). */
+function toIdentityRecordJson(record: IdentityRecord): IdentityRecordJson {
+  return {
+    kind: record.kind,
+    content: record.content,
+    version: record.version,
+    updatedAt: record.updatedAt,
+    seedVersion: record.seedVersion,
+  }
+}
+
+/** Project one identity-history snapshot to the wire shape. */
+function toIdentityHistoryJson(record: IdentityHistoryRecord): IdentityHistoryJson {
+  return {
+    kind: record.kind,
+    version: record.version,
+    content: record.content,
+    ts: record.ts,
+    source: record.source,
+    ...record.sessionId !== undefined ? { sessionId: record.sessionId } : {},
+  }
+}
+
 /** Project one {@link MemorySuggestion} to the wire shape. */
 function toSuggestionJson(suggestion: MemorySuggestion): MemorySuggestionJson {
   return {
@@ -153,6 +190,7 @@ function toSuggestionJson(suggestion: MemorySuggestion): MemorySuggestionJson {
     ...suggestion.summary !== undefined ? { summary: suggestion.summary } : {},
     ...suggestion.projectName !== undefined ? { projectName: suggestion.projectName } : {},
     ...suggestion.targetEntryId !== undefined ? { targetEntryId: suggestion.targetEntryId } : {},
+    ...suggestion.identityKind !== undefined ? { identityKind: suggestion.identityKind } : {},
     ...suggestion.sessionId !== undefined ? { sessionId: suggestion.sessionId } : {},
   }
 }
@@ -273,6 +311,12 @@ export interface MemorySuggestionJson {
   readonly lastSeenAt: number
   /** When set, adoption rewrites this entry instead of creating a new one. */
   readonly targetEntryId?: string
+  /**
+   * When set, the proposal targets an identity document (confirm-mode
+   * `identity_update`): adoption rewrites the document instead of any entry,
+   * and `scope` is ignored (always `'global'` — the durable row shape).
+   */
+  readonly identityKind?: 'soul' | 'user'
   readonly source: AuditSource
   readonly sessionId?: string
 }
@@ -291,6 +335,12 @@ export interface MemorySuggestAdoptRequest {
 
 export interface MemorySuggestAdoptResult {
   readonly entry?: MemoryEntryJson
+  /**
+   * Set when the adopted proposal was an identity proposal: the rewritten
+   * document's kind and new version. `entry` stays absent — identity
+   * adoption writes no memory entry.
+   */
+  readonly identity?: { kind: 'soul' | 'user'; version: number }
   readonly found: boolean
   readonly error?: string
 }
@@ -314,6 +364,55 @@ export interface MemoryArchiveRequest {
   readonly archived: boolean
 }
 
+// ─── Identity wire types (the identity layer's governance surface) ──────────
+
+/** Wire-safe projection of one identity document's current record. */
+export interface IdentityRecordJson {
+  readonly kind: 'soul' | 'user'
+  readonly content: string
+  readonly version: number
+  readonly updatedAt: number
+  readonly seedVersion: number
+}
+
+/** Wire-safe projection of one identity-history version snapshot. */
+export interface IdentityHistoryJson {
+  readonly kind: 'soul' | 'user'
+  readonly version: number
+  readonly content: string
+  readonly ts: number
+  readonly source: 'seed' | 'tool' | 'ui'
+  readonly sessionId?: string
+}
+
+/** Result of `identityList`: both documents' current records (absent when never written). */
+export interface MemoryIdentityListResult {
+  readonly soul?: IdentityRecordJson
+  readonly user?: IdentityRecordJson
+}
+
+/** Request for one document's version history. */
+export interface MemoryIdentityHistoryRequest {
+  readonly kind: 'soul' | 'user'
+}
+
+/** Result of `identityHistory`: the retained snapshots, newest first. */
+export interface MemoryIdentityHistoryResult {
+  readonly history: readonly IdentityHistoryJson[]
+}
+
+/** Request for the governance valve: restore one historical version as the newest. */
+export interface MemoryIdentityRevertRequest {
+  readonly kind: 'soul' | 'user'
+  readonly version: number
+}
+
+/** Result of `identityRevert`. */
+export interface MemoryIdentityRevertResult {
+  readonly reverted?: IdentityRecordJson
+  readonly error?: string
+}
+
 // ─── Service class ──────────────────────────────────────────────────────────
 
 /**
@@ -335,10 +434,14 @@ export class MemoryRemoteService extends TypertRemoteService {
   /** Deployment write policy (Config), read at construction. */
   private readonly _remoteWritesEnabled: boolean
 
-  constructor(ctx: Context, config: RemoteConfig = { remoteWritesEnabled: false }) {
+  /** The identity governance valve (Config), read at construction. */
+  private readonly _identityRevertEnabled: boolean
+
+  constructor(ctx: Context, config: RemoteConfig = { remoteWritesEnabled: false, identityRevertEnabled: true }) {
     super(ctx, 'memoryRemote')
     this._ctx = ctx
     this._remoteWritesEnabled = config.remoteWritesEnabled
+    this._identityRevertEnabled = config.identityRevertEnabled ?? true
   }
 
   private memory() {
@@ -511,12 +614,22 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (!this.writesAllowed()) return { found: false, error: REMOTE_WRITES_DISABLED }
     const store = this.memory()
     if (store === undefined) return { found: false, error: 'memory service not available' }
+    // Read the row's kind BEFORE adopting: identity proposals adopt through
+    // the identity write path and write no memory entry, so the store's
+    // `undefined` return means success there but "row gone" for entries —
+    // the kind is the discriminator the wire answer needs.
+    const suggestion = store.getSuggestion(request.id as never)
+    if (suggestion === undefined) return { found: false }
     try {
       const entry = await store.adoptSuggestion(request.id as never, {
         ...(request.content !== undefined ? { content: request.content } : {}),
         ...(request.category !== undefined ? { category: request.category as MemoryEntry['category'] } : {}),
         ...(request.summary !== undefined ? { summary: request.summary } : {}),
       })
+      if (suggestion.identityKind !== undefined) {
+        const record = store.getIdentity(suggestion.identityKind)
+        return { identity: { kind: suggestion.identityKind, version: record?.version ?? 0 }, found: true }
+      }
       if (entry === undefined) return { found: false }
       return { entry: toEntryJson(entry), found: true }
     } catch (e) {
@@ -532,6 +645,52 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (store === undefined) return { rejected: false }
     const rejected = await store.rejectSuggestion(request.id as never)
     return { rejected }
+  }
+
+  // ─── Identity governance surface (the identity layer) ──────────────────────
+
+  /**
+   * Read both identity documents' current records. Open like every other
+   * management read: the identity surface is content-read-only, and an
+   * absent document (identity never enabled, never seeded) reads as an
+   * absent field, not an error.
+   */
+  @Remote('identityList')
+  identityList(): MemoryIdentityListResult {
+    const store = this.memory()
+    if (store === undefined) return {}
+    const soul = store.getIdentity('soul')
+    const user = store.getIdentity('user')
+    return {
+      ...soul !== undefined ? { soul: toIdentityRecordJson(soul) } : {},
+      ...user !== undefined ? { user: toIdentityRecordJson(user) } : {},
+    }
+  }
+
+  /** Read one document's retained version history, newest first. */
+  @Remote('identityHistory')
+  identityHistory(request: MemoryIdentityHistoryRequest): MemoryIdentityHistoryResult {
+    const store = this.memory()
+    if (store === undefined) return { history: [] }
+    return { history: store.listIdentityHistory(request.kind).map(toIdentityHistoryJson) }
+  }
+
+  /**
+   * The governance valve: restore one historical version as the newest
+   * version (history is never destroyed). Gated by its own flag —
+   * `identityRevertEnabled`, default ON; see {@link RemoteConfig}.
+   */
+  @Remote('identityRevert')
+  async identityRevert(request: MemoryIdentityRevertRequest): Promise<MemoryIdentityRevertResult> {
+    if (!this._identityRevertEnabled) return { error: 'identity revert is disabled on this deployment' }
+    const store = this.memory()
+    if (store === undefined) return { error: 'memory service not available' }
+    try {
+      const record = await store.revertIdentity(request.kind, request.version)
+      return { reverted: toIdentityRecordJson(record) }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'revert failed' }
+    }
   }
 
   /**

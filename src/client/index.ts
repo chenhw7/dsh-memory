@@ -14,6 +14,13 @@
  *    read-only lazily loaded list with soft-decay markers.
  *    Configuration and content are different dimensions: the cards stay where
  *    they are, the section says so in its intro line.
+ * 3. **Identity governance** (the identity layer): a read-only "Identity"
+ *    settings section (id `identity`, order 26) rendering the agent's two
+ *    self-documents — SOUL.md (its character) and USER.md (its understanding
+ *    of the human) — with their retained version history, the revert valve,
+ *    and a plain export. The documents are written by the agent through
+ *    conversation (`identity_update`); the human holds no editor here, only
+ *    governance.
  *
  * The content surface calls the host's `memoryRemote` Typert namespace through
  * the generic `/api` RPC channel (`memoryRemote/<method>`, `{ args }` payload).
@@ -53,12 +60,15 @@ import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryConfig, MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
 import { MemorySection } from './MemorySection.tsx'
 import type { MemorySectionInjected } from './MemorySection.tsx'
+import { IdentitySection } from './IdentitySection.tsx'
+import type { IdentitySectionInjected } from './IdentitySection.tsx'
 import { namespaceCard } from './NamespaceCard.tsx'
 import type {
   ModelCatalogView, NamespaceCardInjected, NamespaceCardSpec,
 } from './NamespaceCard.tsx'
 import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
+import { IdentitySectionController } from './identity-section-store.ts'
 import { modelOptions, providerOptions, consolidationOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
@@ -77,6 +87,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
 export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
+export type { IdentitySectionInjected, IdentitySectionProps } from './IdentitySection.tsx'
 
 /** The project-notes card: `notesEnabled` + its knobs, from the `memory` namespace. */
 const NOTES_SPEC: NamespaceCardSpec = {
@@ -154,6 +165,9 @@ const NS = 'settings.memory'
 
 /** Settings-section nav order — after Plugins (15) and Agent presets (20). */
 const SECTION_ORDER = 25
+
+/** The identity section's nav order — right after the Memory section. */
+const IDENTITY_SECTION_ORDER = 26
 
 /**
  * One `settings.plugin.item` registration. `namespace` is the settings
@@ -246,6 +260,9 @@ function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRe
     suggestList: () => invoke('suggestList'),
     suggestAdopt: request => invoke('suggestAdopt', request),
     suggestReject: request => invoke('suggestReject', request),
+    identityList: () => invoke('identityList'),
+    identityHistory: request => invoke('identityHistory', request),
+    identityRevert: request => invoke('identityRevert', request),
   }
 }
 
@@ -284,11 +301,18 @@ export function apply(ctx: ClientContext): void {
   // The content-management controller rides the generic /api RPC channel to
   // the host's memoryRemote namespace; a deployment without the channel
   // degrades the section to its error state instead of breaking settings.
-  const controller = new MemorySectionController(createMemoryRemoteApi(connection))
+  const remoteApi = createMemoryRemoteApi(connection)
+  const controller = new MemorySectionController(remoteApi)
+
+  // The identity governance controller rides the same channel; it takes the
+  // same face (the identity RPCs are optional on it) so one adapter serves
+  // both sections and old deployments degrade to the empty state.
+  const identityController = new IdentitySectionController(remoteApi)
 
   ctx.effect(() => {
     return ctx.on('connection/reset', () => {
       void controller.load()
+      void identityController.load()
     })
   }, 'dsh-memory: memory section reload on reconnect')
 
@@ -354,4 +378,22 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: sectionInjected,
   }, MemorySection))
+
+  // The identity governance section: a separate nav entry after Memory —
+  // the identity documents are the agent's own surface, not memory entries,
+  // and the settings-section contract keeps them addressable apart.
+  const identityInjected = (): IdentitySectionInjected => ({
+    hooks: { identitySection: identityController.store },
+    load: () => identityController.load(),
+    revert: (kind, version) => identityController.revert(kind, version),
+  })
+
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'identity',
+    order: IDENTITY_SECTION_ORDER,
+    label: () => ctx.locale.bind(NS)('identityNav'),
+    locale: NS,
+    inject: identityInjected,
+  }, IdentitySection))
 }
