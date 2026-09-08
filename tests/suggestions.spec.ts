@@ -7,7 +7,11 @@
 import { describe, it, expect } from 'vitest'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { DomainMemoryStore } from '../src/store/index.ts'
-import type { MemoryEntry, MemorySuggestion, MemoryId, SuggestionId } from '../src/types.ts'
+import { SqliteMemoryStore } from '../src/store/sqlite.ts'
+import type { IdentityHistoryRecord, IdentityRecord, MemoryEntry, MemorySuggestion, MemoryId, SuggestionId } from '../src/types.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 /** In-memory stand-in for a storage-domain KV table (same snapshot semantics). */
 function memTable<K extends string, V>(): KvTable<K, V> {
@@ -236,5 +240,88 @@ describe('suggestion queue (P1-1)', () => {
     await expect(bare.adoptSuggestion('whatever' as SuggestionId)).resolves.toBeUndefined()
     await expect(bare.rejectSuggestion('whatever' as SuggestionId)).resolves.toBe(false)
     await expect(bare.observeSuggestion({ scope: 'global', content: 'x', source: 'tool' })).rejects.toThrow(/no suggestion queue/)
+  })
+})
+
+// Identity proposals in the queue (the identity layer's confirm-mode path):
+// dedup by document kind, adoption through the identity write path, and the
+// dedup-dimension separation from entry proposals.
+describe('identity proposals in the queue (DomainMemoryStore)', () => {
+  function makeIdentityStore(): DomainMemoryStore {
+    return new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, 200, undefined, 500, {
+      identity: memTable<'soul' | 'user', IdentityRecord>(),
+      identityHistory: memTable<string, IdentityHistoryRecord>(),
+    })
+  }
+
+  it('observes an identity proposal; a repeat of the same kind bumps hits instead of adding a row', async () => {
+    const store = makeIdentityStore()
+    const first = await store.observeSuggestion({ scope: 'global', content: '第一版人格提案', source: 'tool', identityKind: 'soul' })
+    const repeat = await store.observeSuggestion({ scope: 'global', content: '第一版人格提案（补充）', source: 'tool', identityKind: 'soul' })
+    expect(repeat.id).toBe(first.id)
+    expect(repeat.hits).toBe(2)
+    expect(store.listSuggestions()).toHaveLength(1)
+    // The other document is an independent row.
+    const user = await store.observeSuggestion({ scope: 'global', content: '用户画像提案', source: 'tool', identityKind: 'user' })
+    expect(user.id).not.toBe(first.id)
+  })
+
+  it('entry proposals never match identity rows — the dedup dimensions stay separate', async () => {
+    const store = makeIdentityStore()
+    await store.observeSuggestion({ scope: 'global', content: 'user likes tab indentation', source: 'tool', identityKind: 'soul' })
+    const entry = await store.observeSuggestion({ scope: 'global', content: 'user likes tab indentation', source: 'review' })
+    expect(entry.identityKind).toBeUndefined()
+    expect(store.listSuggestions()).toHaveLength(2)
+  })
+
+  it('adoption rewrites the document (source ui) and clears the row', async () => {
+    const store = makeIdentityStore()
+    const proposal = await store.observeSuggestion({ scope: 'global', content: '采纳后的人格文档', source: 'tool', identityKind: 'soul' })
+    const entry = await store.adoptSuggestion(proposal.id)
+    // Identity adoption writes no memory entry — undefined is the success shape.
+    expect(entry).toBeUndefined()
+    expect(store.getIdentity('soul')?.content).toBe('采纳后的人格文档')
+    expect(store.listIdentityHistory('soul')[0]?.source).toBe('ui')
+    expect(store.listSuggestions()).toHaveLength(0)
+  })
+
+  it('rejection removes the identity row without writing', async () => {
+    const store = makeIdentityStore()
+    const proposal = await store.observeSuggestion({ scope: 'global', content: '将被拒绝的提案', source: 'tool', identityKind: 'user' })
+    expect(await store.rejectSuggestion(proposal.id)).toBe(true)
+    expect(store.getIdentity('user')).toBeUndefined()
+    expect(store.listSuggestions()).toHaveLength(0)
+  })
+})
+
+describe('identity proposals in the queue (sqlite backend)', () => {
+  it('observe dedups by kind; adoption rewrites the document; rejection removes the row', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sqlite-suggestions-'))
+    try {
+      const store = new SqliteMemoryStore({ dbPath: join(dir, 'storages', 'memory.db') })
+      const first = await store.observeSuggestion({ scope: 'global', content: 'sqlite 身份提案', source: 'tool', identityKind: 'soul' })
+      const repeat = await store.observeSuggestion({ scope: 'global', content: 'sqlite 身份提案（补充）', source: 'tool', identityKind: 'soul' })
+      expect(repeat.id).toBe(first.id)
+      expect(repeat.hits).toBe(2)
+      // Adoption rewrites the document through the identity write path.
+      const adopted = await store.adoptSuggestion(first.id)
+      expect(adopted).toBeUndefined()
+      expect(store.getIdentity('soul')?.content).toBe('sqlite 身份提案（补充）')
+      expect(store.listIdentityHistory('soul')[0]?.source).toBe('ui')
+      expect(store.listSuggestions()).toHaveLength(0)
+      // Identity rejection removes the row without writing.
+      const rejected = await store.observeSuggestion({ scope: 'global', content: 'sqlite 拒绝提案', source: 'tool', identityKind: 'user' })
+      expect(await store.rejectSuggestion(rejected.id)).toBe(true)
+      expect(store.getSuggestion(rejected.id)).toBeUndefined()
+      expect(store.getIdentity('user')).toBeUndefined()
+      // Entry proposals keep the pre-existing base no-op (the recorded gap):
+      // adopt returns undefined AND the row stays.
+      const entryProposal = await store.observeSuggestion({ scope: 'global', content: 'sqlite entry proposal', source: 'review' })
+      expect(await store.adoptSuggestion(entryProposal.id)).toBeUndefined()
+      expect(store.getSuggestion(entryProposal.id)).toBeDefined()
+      store.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

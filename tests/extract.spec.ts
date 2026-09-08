@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AddMemoryInput, MemoryEntry, MemoryStore } from '../src/types.ts'
+import type { AddMemoryInput, AddSuggestionInput, MemoryEntry, MemoryStore } from '../src/types.ts'
 import {
   REVIEW_SYSTEM_PROMPT,
   FLUSH_SYSTEM_PROMPT,
@@ -11,6 +11,8 @@ import {
   CURATOR_SYSTEM_PROMPT,
   parseExtractedMemories,
   renderMemorySnapshot,
+  renderIdentityDocuments,
+  suggestMemories,
   buildReviewMessages,
   buildPitfallMessages,
   buildFlushMessages,
@@ -800,5 +802,87 @@ describe('LLM dedup judge (§3.4)', () => {
     expect(updated).toHaveLength(1)
     expect(added).toHaveLength(0)
     expect(failures).toEqual(['judge'])
+  })
+})
+
+// Anti-echo (the identity layer): extraction never persists identity-document
+// restatements — the prompt rule (judge-side) plus the mechanical prefilter
+// (write-seam). The prefilter compares against the identity service's raw
+// snapshot, so seeds are protected exactly like grown records.
+describe('identity anti-echo (identity layer)', () => {
+  const SOUL_DOC = '帮到实处，无需缛节。一个交付胜过十句漂亮话。要有主见。先想，再问。以能力取信。珍视所托。'
+  type IdentityLike = { snapshotFor(): { soul: string; user: string } }
+
+  /** The fakeCtx pattern extended with an optional fake identity service. */
+  function fakeIdentityCtx(streamFn: (opts: unknown) => AsyncIterable<StreamChunk>, memory?: MemoryStore, identity?: IdentityLike): Context {
+    return {
+      llm: { stream: streamFn },
+      get: (name: string) => (name === 'memory' ? memory : name === 'identity' ? identity : undefined),
+    } as unknown as Context
+  }
+
+  /** Extract the text of the single user message. */
+  function messageText(messages: readonly unknown[]): string {
+    const content = (messages[0] as { content: { type: string; text?: string }[] }).content
+    return content.find(block => block.type === 'text')!.text!
+  }
+
+  it('the review and flush prompts carry the identity-restatement rule', () => {
+    expect(REVIEW_SYSTEM_PROMPT).toContain('identity documents')
+    expect(REVIEW_SYSTEM_PROMPT).toContain('never persisted')
+    expect(FLUSH_SYSTEM_PROMPT).toContain('identity documents')
+    expect(FLUSH_SYSTEM_PROMPT).toContain('never persisted')
+  })
+
+  it('renderIdentityDocuments renders the injected documents; absent or empty renders nothing', () => {
+    const rendered = renderIdentityDocuments({ snapshotFor: () => ({ soul: SOUL_DOC, user: '' }) } as never)
+    expect(rendered).toContain('SOUL.md')
+    expect(rendered).toContain(SOUL_DOC)
+    expect(rendered).toContain('omit anything that merely restates')
+    expect(renderIdentityDocuments(undefined)).toBe('')
+    expect(renderIdentityDocuments({ snapshotFor: () => ({ soul: '', user: '' }) } as never)).toBe('')
+  })
+
+  it('buildReviewMessages carries the identity block only when provided', () => {
+    const withDocs = buildReviewMessages('Current memory snapshot:\n- [global] x', [], renderIdentityDocuments({ snapshotFor: () => ({ soul: SOUL_DOC, user: '' }) } as never))
+    expect(messageText(withDocs)).toContain('Identity documents')
+    expect(messageText(buildReviewMessages('snapshot', []))).not.toContain('Identity documents')
+  })
+
+  it('storeMemories drops near-verbatim restatements of an identity document', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeIdentityCtx(() => makeTextStream(''), store, { snapshotFor: () => ({ soul: SOUL_DOC, user: '' }) })
+    await storeMemories(ctx, [
+      { scope: 'user', content: SOUL_DOC, anchors: [] },
+      { scope: 'user', content: 'the user prefers concise answers in Chinese', anchors: [] },
+    ], undefined, 'review', 's1')
+    expect(added).toHaveLength(1)
+    expect(added[0]!.content).toBe('the user prefers concise answers in Chinese')
+  })
+
+  it('suggestMemories drops identity echoes before queueing (confirm mode)', async () => {
+    const queued: AddSuggestionInput[] = []
+    const store = {
+      list: () => [],
+      reportFailure: () => {},
+      observeSuggestion: async (input: AddSuggestionInput) => {
+        queued.push(input)
+        return { id: 'sg-1' as never, scope: input.scope, content: input.content, hits: 1, firstSeenAt: 0, lastSeenAt: 0, source: input.source }
+      },
+    } as unknown as MemoryStore
+    const ctx = fakeIdentityCtx(() => makeTextStream(''), store, { snapshotFor: () => ({ soul: SOUL_DOC, user: '' }) })
+    await suggestMemories(ctx, [
+      { scope: 'user', content: SOUL_DOC },
+      { scope: 'user', content: 'the user prefers concise answers in Chinese' },
+    ], undefined, 'review', 's1')
+    expect(queued).toHaveLength(1)
+    expect(queued[0]!.content).toBe('the user prefers concise answers in Chinese')
+  })
+
+  it('no identity service: the prefilter is inert and everything stores', async () => {
+    const { store, added } = recordingStore()
+    const ctx = fakeIdentityCtx(() => makeTextStream(''), store)
+    await storeMemories(ctx, [{ scope: 'user', content: SOUL_DOC, anchors: [] }], undefined, 'review', 's1')
+    expect(added).toHaveLength(1)
   })
 })

@@ -257,7 +257,11 @@ export interface AuditEntry {
 export interface MemorySuggestion {
   /** Stable identity of this suggestion. */
   readonly id: SuggestionId
-  /** Which scope the proposed memory belongs to. */
+  /**
+   * Which scope the proposed memory belongs to. For identity proposals
+   * ({@link identityKind} set) this is `'global'` — the identity layer is
+   * per-user global, and the field exists only for the durable row shape.
+   */
   readonly scope: MemoryScope
   /** Proposed category; absent for plain facts. */
   readonly category?: MemoryCategory | undefined
@@ -267,6 +271,13 @@ export interface MemorySuggestion {
   readonly summary?: string | undefined
   /** Project name for `project`-scoped proposals; absent otherwise. */
   readonly projectName?: string | undefined
+  /**
+   * When set, this row is an identity-document proposal (confirm-mode
+   * `identity_update`): `identityKind` names the target document, adoption
+   * rewrites it through the identity write path (source `'ui'`), and the
+   * entry-proposal fields above are ignored.
+   */
+  readonly identityKind?: IdentityKind | undefined
   /**
    * How many times this same proposal has been (re-)observed by extraction.
    * Creation sets 1; each repeat observation bumps it and refreshes
@@ -297,7 +308,9 @@ export interface AddSuggestionInput {
   readonly content: string
   readonly summary?: string | undefined
   readonly projectName?: string | undefined
-  /** Set when the proposal is a change to an existing entry (P1-2). */
+  /** Set when the proposal targets an identity document instead of an entry. */
+  readonly identityKind?: IdentityKind | undefined
+  /** Set when the proposal is a change to an already-confirmed entry (P1-2). */
   readonly targetEntryId?: MemoryId | undefined
   readonly source: AuditSource
   readonly sessionId?: string | undefined

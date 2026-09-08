@@ -113,6 +113,7 @@ const suggestionSchema = zod.object({
   content: zod.string(),
   summary: zod.string().optional(),
   projectName: zod.string().optional(),
+  identityKind: zod.enum(['soul', 'user']).optional(),
   hits: zod.number(),
   firstSeenAt: zod.number(),
   lastSeenAt: zod.number(),
@@ -915,6 +916,11 @@ export class DomainMemoryStore extends MemoryStore {
    * @throws when the proposed content or summary fails validation or the scanner.
    */
   override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    // Identity proposals (confirm-mode identity_update) take their own queue
+    // path: dedup by document kind, not by scope/content overlap.
+    if (input.identityKind !== undefined) {
+      return this.observeIdentitySuggestion(input)
+    }
     validateProjectScope({ ...input, projectName: input.projectName ?? (input.targetEntryId !== undefined ? this.entries.get(input.targetEntryId)?.projectName : undefined) })
     validateContent(input.content)
     const scan = scanContent(input.content)
@@ -934,6 +940,9 @@ export class DomainMemoryStore extends MemoryStore {
         if (suggestion.targetEntryId === input.targetEntryId) { matched = suggestion; break }
         continue
       }
+      // Identity rows never match entry proposals: their dedup dimension is
+      // the document kind, not scope/content overlap.
+      if (suggestion.identityKind !== undefined) continue
       if (suggestion.scope !== input.scope) continue
       // The live queue is the corpus: at queue scale (≤ cap rows) rebuilding
       // the df table per row would be wasteful, but the queue is tiny — and
@@ -968,6 +977,48 @@ export class DomainMemoryStore extends MemoryStore {
       ...input.summary !== undefined ? { summary: input.summary } : {},
       ...input.projectName !== undefined ? { projectName: input.projectName } : {},
       ...input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {},
+      ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+    }
+    await this.suggestions.put(suggestion.id, suggestion)
+    await this.trimSuggestions()
+    return suggestion
+  }
+
+  /**
+   * The identity-proposal queue path (confirm-mode `identity_update`): the
+   * same scanner gates, dedup by document kind — one row per identity
+   * document, a repeated proposal bumps `hits` — and `scope` fixed at
+   * `'global'` (the identity layer is per-user global; the field exists for
+   * the durable row shape).
+   */
+  private async observeIdentitySuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    validateContent(input.content)
+    const scan = scanContent(input.content)
+    if (!scan.allowed) {
+      throw new Error(`suggestion content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const now = Date.now()
+    for (const [, suggestion] of this.suggestions.entries()) {
+      if (suggestion.identityKind !== input.identityKind) continue
+      const improved = input.content.length > suggestion.content.length && input.content.includes(suggestion.content)
+      const updated: MemorySuggestion = {
+        ...suggestion,
+        content: improved ? input.content : suggestion.content,
+        hits: suggestion.hits + 1,
+        lastSeenAt: now,
+      }
+      await this.suggestions.put(suggestion.id, updated)
+      return updated
+    }
+    const suggestion: MemorySuggestion = {
+      id: SuggestionId(),
+      scope: 'global',
+      content: input.content,
+      hits: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      source: input.source,
+      identityKind: input.identityKind,
       ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
     }
     await this.suggestions.put(suggestion.id, suggestion)
@@ -1016,6 +1067,14 @@ export class DomainMemoryStore extends MemoryStore {
     const summary = override?.summary !== undefined
       ? (override.summary.length > 0 ? override.summary : undefined)
       : suggestion.summary
+    // Identity proposal: the human's yes rewrites the document through the
+    // identity write path (source 'ui' — the governance adoption). No memory
+    // entry is created, so the caller sees `undefined` on success.
+    if (suggestion.identityKind !== undefined) {
+      await this.updateIdentity(suggestion.identityKind, content, { source: 'ui' })
+      await this.suggestions.delete(id)
+      return undefined
+    }
     let entry: MemoryEntry | undefined
     if (suggestion.targetEntryId !== undefined && this.entries.get(suggestion.targetEntryId) !== undefined) {
       entry = await this.update(suggestion.targetEntryId, {

@@ -36,6 +36,7 @@ import { buildCorpusStatsFromTokens, Bm25Index, tokenizeForSearch } from './bm25
 import type {
   AddMemoryInput,
   AddMemoryResult,
+  AdoptSuggestionOverride,
   AuditEntry,
   IdentityHistoryRecord,
   IdentityKind,
@@ -75,7 +76,7 @@ const AUDIT_COLUMNS = [
 
 /** The suggestions table's columns (MemorySuggestion fields). */
 const SUGGESTION_COLUMNS = [
-  'id', 'scope', 'category', 'content', 'summary', 'projectName', 'hits',
+  'id', 'scope', 'category', 'content', 'summary', 'projectName', 'identityKind', 'hits',
   'firstSeenAt', 'lastSeenAt', 'targetEntryId', 'source', 'sessionId',
 ] as const
 
@@ -462,13 +463,50 @@ export class SqliteMemoryStore extends MemoryStore {
   // ─── Suggestions (P1-1 queue shape) ─────────────────────────────────────────
 
   override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    // Identity proposals (confirm-mode identity_update) take their own queue
+    // path, deduped by document kind — the DomainMemoryStore twin.
+    if (input.identityKind !== undefined) {
+      const identityScan = scanContent(input.content)
+      if (!identityScan.allowed) {
+        throw new Error(`suggestion content rejected by scanner: ${identityScan.reasons.join('; ')}`)
+      }
+      const now = Date.now()
+      const existing = this.listSuggestions().find(suggestion => suggestion.identityKind === input.identityKind)
+      if (existing !== undefined) {
+        const updated: Row = {
+          ...existing,
+          hits: existing.hits + 1,
+          lastSeenAt: now,
+          ...(input.content.length > existing.content.length ? { content: input.content } : {}),
+        }
+        this.transaction(() => { this.insertSuggestion(updated) })
+        return asEntry(updated) as unknown as MemorySuggestion
+      }
+      const identityRow: Row = {
+        id: crypto.randomUUID(),
+        scope: 'global',
+        content: input.content,
+        hits: 1,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        identityKind: input.identityKind,
+        ...(input.source !== undefined ? { source: input.source } : {}),
+        ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      }
+      this.transaction(() => {
+        this.insertSuggestion(identityRow)
+        this.trimSuggestions()
+      })
+      return asEntry(identityRow) as unknown as MemorySuggestion
+    }
     const scan = scanContent(input.content)
     if (!scan.allowed) {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
     }
     const now = Date.now()
     const existing = this.listSuggestions().find(suggestion =>
-      suggestion.scope === input.scope
+      suggestion.identityKind === undefined
+      && suggestion.scope === input.scope
       && (input.targetEntryId !== undefined
         ? suggestion.targetEntryId === input.targetEntryId
         : jaccardish(suggestion.content, input.content) > 0.6))
@@ -520,6 +558,35 @@ export class SqliteMemoryStore extends MemoryStore {
   override getSuggestion(id: string): MemorySuggestion | undefined {
     const row = this.db.prepare('SELECT * FROM suggestions WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return row === undefined ? undefined : asEntry(rowToRecord(row)) as unknown as MemorySuggestion
+  }
+
+  /**
+   * Identity-proposal adoption (confirm-mode `identity_update` on sqlite):
+   * the human's yes rewrites the document through the identity write path and
+   * removes the queue row. Entry proposals delegate to the base no-op — the
+   * pre-existing sqlite suggestions-adopt gap for entries is recorded in the
+   * identity-layer Agent Note and stays out of this feature's scope.
+   */
+  override async adoptSuggestion(id: string, override?: AdoptSuggestionOverride): Promise<MemoryEntry | undefined> {
+    const suggestion = this.getSuggestion(id)
+    if (suggestion === undefined || suggestion.identityKind === undefined) {
+      return super.adoptSuggestion(id as never, override)
+    }
+    const content = override?.content ?? suggestion.content
+    validateContent(content)
+    await this.updateIdentity(suggestion.identityKind, content, { source: 'ui' })
+    this.db.prepare('DELETE FROM suggestions WHERE id = ?').run(id)
+    return undefined
+  }
+
+  /** Identity-proposal rejection removes the row; entry proposals keep the base no-op. */
+  override async rejectSuggestion(id: string): Promise<boolean> {
+    const suggestion = this.getSuggestion(id)
+    if (suggestion === undefined || suggestion.identityKind === undefined) {
+      return super.rejectSuggestion(id as never)
+    }
+    this.db.prepare('DELETE FROM suggestions WHERE id = ?').run(id)
+    return true
   }
 
   // ─── Identity documents (the identity layer) ────────────────────────────────
