@@ -166,12 +166,25 @@ class IdentityServiceImpl extends IdentityService {
  * @param ctx - Cordis context.
  */
 export function apply(ctx: Context): void {
-  const settings = (): IdentitySettings => {
-    try {
-      return resolveIdentitySettings(ctx.settings.get(MEMORY_NS))
-    } catch {
-      return resolveIdentitySettings(undefined)
+  // Cross-namespace live reads MUST ride ctx.inject: cordis service
+  // properties throw `cannot get property "settings" without inject` on a
+  // fiber that has not injected the service (the tool plugin's precedent),
+  // and a plain try/catch would swallow that into the disabled default.
+  let readSettings = (): IdentitySettings => resolveIdentitySettings(undefined)
+  ctx.inject(['settings'], (sctx) => {
+    readSettings = (): IdentitySettings => {
+      try {
+        return resolveIdentitySettings(sctx.settings.get(MEMORY_NS))
+      } catch {
+        // Namespace not registered yet (or the provider tore down) — the
+        // disabled default stands until it registers.
+        return resolveIdentitySettings(undefined)
+      }
     }
-  }
-  ctx.provide('identity', new IdentityServiceImpl(ctx, settings))
+  })
+  // The stable indirection re-reads the variable per call — the inject
+  // callback reassigns it after the settings service attaches (the tool
+  // plugin's `defaultLimit` pattern); passing `readSettings` directly would
+  // freeze the pre-attach fallback into the service forever.
+  ctx.provide('identity', new IdentityServiceImpl(ctx, () => readSettings()))
 }
