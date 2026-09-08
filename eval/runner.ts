@@ -83,6 +83,8 @@ export interface RunOptions {
   readonly memoryMode: 'index' | 'full'
   /** Control group: memory injection `off`; overrides `memoryMode`. */
   readonly noMemory: boolean
+  /** Identity-layer axis (default off): the `soul`/`user-profile` sections + identity_update gate. */
+  readonly identity: boolean
   /** Rubric judge; `null` records every judged metric as skipped. */
   readonly judge: JudgeConfig | null
   /** Max scenarios in flight (default 4); each gets its own mkdtemp home. */
@@ -117,8 +119,12 @@ export function effectiveMemoryMode(options: Pick<RunOptions, 'memoryMode' | 'no
  * pinned row's config, so the pins that keep the measurement clean are
  * restated here — without them the omitted knobs would fall back to factory
  * defaults (decay 30d would soft-decay seeded entries mid-run) and blur runs.
+ * The identity axis rides the same row: `identityEnabled` turns the
+ * `soul`/`user-profile` sections (and the identity_update gate) on; an
+ * identity-seeded medium is axis-independent, so the injection is the only
+ * variable between an on/off pair.
  */
-export function memoryModePatch(mode: EffectiveMemoryMode): Record<string, unknown> {
+export function memoryModePatch(mode: EffectiveMemoryMode, identityOn: boolean): Record<string, unknown> {
   return {
     id: 'memory-context',
     config: {
@@ -126,6 +132,7 @@ export function memoryModePatch(mode: EffectiveMemoryMode): Record<string, unkno
       decayDays: 0,
       notesEnabled: false,
       autoRecallEnabled: false,
+      identityEnabled: identityOn,
     },
   }
 }
@@ -244,7 +251,7 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
         ...(workspaceCwd !== undefined ? { cwd: workspaceCwd } : {}),
         model: modelOptions(options),
         configPatches: [
-          memoryModePatch(memoryMode),
+          memoryModePatch(memoryMode, options.identity === true),
           // The noise lane pins the review threshold to 1 so its
           // keyword-triggered extraction fires mid-session (see
           // noisyReviewPatch for the dispose-flush race it works around).
@@ -265,8 +272,8 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
   try {
     let storeBefore: StoredEntry[] = []
     const seeds: SeedEntryInput[] = scenario.seedEntries ?? []
-    if (seeds.length > 0) {
-      seedMemoryMedium(dshHome, seeds)
+    if (seeds.length > 0 || scenario.identitySeed !== undefined) {
+      seedMemoryMedium(dshHome, seeds, scenario.identitySeed)
       storeBefore = readStoredEntries(dshHome).entries
     }
 

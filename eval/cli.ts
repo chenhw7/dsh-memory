@@ -46,6 +46,9 @@ flags:
   --judge               enable the rubric judge when the judge environment is present
   --memory-mode index|full       injection-mode axis (default index)
   --no-memory           memory injection off — the control group
+  --identity            identity-layer axis on: the soul/user-profile sections
+                        inject (over an identity-seeded medium; off is the default
+                        and the control group of an identity A/B pair)
   --filter <ids>        comma-separated id substrings selecting scenarios
   --concurrency N       scenarios in flight (default 4)
   --turn-wall-seconds N per-turn wall-clock budget, 0 = off (default 180; eval.yaml
@@ -67,6 +70,7 @@ interface CliArgs {
   readonly judge: boolean
   readonly memoryMode: 'index' | 'full'
   readonly noMemory: boolean
+  readonly identity: boolean
   readonly filter?: string
   readonly concurrency: number
   readonly turnWallSeconds?: number
@@ -74,7 +78,7 @@ interface CliArgs {
   readonly out?: string
 }
 
-const BOOLEAN_FLAGS = new Set(['judge', 'no-memory'])
+const BOOLEAN_FLAGS = new Set(['judge', 'no-memory', 'identity'])
 const VALUE_FLAGS = new Set([
   'dataset', 'build', 'baseline', 'candidate', 'mode', 'provider', 'model', 'base-url', 'api-key',
   'memory-mode', 'filter', 'concurrency', 'turn-wall-seconds', 'turn-tool-calls', 'out',
@@ -195,6 +199,7 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
       judge: values.get('judge') === true,
       memoryMode,
       noMemory: values.get('no-memory') === true,
+      identity: values.get('identity') === true,
       ...(filter !== undefined ? { filter } : {}),
       concurrency,
       ...(turnWallSeconds !== undefined ? { turnWallSeconds } : {}),
@@ -235,6 +240,7 @@ function runOptionsOf(
     ...(args.apiKey !== undefined ? { apiKey: args.apiKey } : {}),
     memoryMode: args.memoryMode,
     noMemory: args.noMemory,
+    identity: args.identity,
     judge,
     concurrency: args.concurrency,
     turnBudget,
