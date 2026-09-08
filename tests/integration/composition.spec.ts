@@ -728,5 +728,53 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       expect(republished.tables.meta['consolidation:lastRun']).toBeDefined()
       expect(republished.tables.meta['unknown:reserved']?.marker).toBe('future-payload')
     })
+
+    it('opens a pre-identity memory.json (no identity tables) with zero migration and identity starts empty', async () => {
+      await root.dispose()
+
+      // A medium written before the identity layer existed: the four original
+      // tables only. The spec's two new tables must initialize as empty maps
+      // — no error, no migration — and identity writes then work on top.
+      const file = join(dir, 'memory.json')
+      writeFileSync(file, JSON.stringify({
+        unit: { name: 'memory', version: 0 },
+        global: null,
+        tables: {
+          entries: {
+            'legacy-id': {
+              id: 'legacy-id',
+              scope: 'global',
+              content: 'legacy fact before the identity layer',
+              createdAt: 1755500000000,
+              updatedAt: 1755500000000,
+            },
+          },
+          audit: {},
+          suggestions: {},
+        },
+      }, null, 2) + '\n')
+
+      const ctx2 = new Context()
+      const root2 = await ctx2.plugin(Storage)
+      await ctx2.plugin(storageJson, { root: dir })
+      await ctx2.plugin(storageDomain, { backend: 'json' })
+      await ctx2.plugin(memoryStore)
+      const store2 = ctx2.get('memory') as DomainMemoryStore
+
+      // Legacy entry intact; identity reads degrade to "absent".
+      expect(store2.list()).toHaveLength(1)
+      expect(store2.getIdentity('soul')).toBeUndefined()
+      expect(store2.listIdentityHistory('user')).toEqual([])
+      // The first identity write lands as version 1 and republishes cleanly.
+      const seeded = await store2.updateIdentity('soul', '人格文档初稿', { source: 'seed' })
+      expect(seeded.version).toBe(1)
+      await root2.dispose()
+
+      const republished = JSON.parse(readFileSync(file, 'utf-8')) as {
+        tables: Record<string, Record<string, Record<string, unknown>>>
+      }
+      expect(republished.tables.identity?.soul?.version).toBe(1)
+      expect(republished.tables.identity_history?.['soul#1']?.source).toBe('seed')
+    })
   })
 })

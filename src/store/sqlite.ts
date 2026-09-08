@@ -14,7 +14,9 @@
  * (plus the transaction helper); everything else about the driver hides
  * behind this class (HOST_CONTRACT §11). Schema: `entries` (MemoryEntry
  * fields as columns), `audit` (the audit trail), `suggestions` (the P1-1
- * queue shape), `meta` (schemaVersion + consolidation progress). Zero-
+ * queue shape), `meta` (schemaVersion + consolidation progress),
+ * `identity` / `identity_history` (the identity layer's self-documents and
+ * their version snapshots). Zero-
  * migration on read: absent columns/tables only matter at their write
  * boundaries, and every column is nullable.
  *
@@ -35,12 +37,16 @@ import type {
   AddMemoryInput,
   AddMemoryResult,
   AuditEntry,
+  IdentityHistoryRecord,
+  IdentityKind,
+  IdentityRecord,
   MemoryEntry,
   MemoryHealth,
   MemoryId,
   MemorySearchQuery,
   MemorySuggestion,
   SearchMemoryResult,
+  UpdateIdentityInput,
   UpdateMemoryInput,
   AddSuggestionInput,
 } from '../types.ts'
@@ -72,6 +78,20 @@ const SUGGESTION_COLUMNS = [
   'id', 'scope', 'category', 'content', 'summary', 'projectName', 'hits',
   'firstSeenAt', 'lastSeenAt', 'targetEntryId', 'source', 'sessionId',
 ] as const
+
+/** The identity table's columns (IdentityRecord fields, keyed by kind). */
+const IDENTITY_COLUMNS = ['kind', 'content', 'version', 'updatedAt', 'seedVersion'] as const
+
+/** The identity-history table's columns (IdentityHistoryRecord fields, keyed `${kind}#${version}`). */
+const IDENTITY_HISTORY_COLUMNS = ['id', 'kind', 'version', 'content', 'ts', 'source', 'sessionId'] as const
+
+/**
+ * Version snapshots retained per identity document, oldest evicted first —
+ * keep in lockstep with DomainMemoryStore's cap (the value is a protocol
+ * invariant, duplicated here like `entryIndexTokens` rather than entangling
+ * the two provider modules in an import cycle).
+ */
+const IDENTITY_HISTORY_CAP = 20
 
 /**
  * Bind one record's optional fields to a statement: every column gets a
@@ -162,6 +182,8 @@ export class SqliteMemoryStore extends MemoryStore {
       CREATE TABLE IF NOT EXISTS audit (${AUDIT_COLUMNS.map(column => column).join(', ')});
       CREATE TABLE IF NOT EXISTS suggestions (id TEXT PRIMARY KEY, ${SUGGESTION_COLUMNS.filter(column => column !== 'id').map(column => column).join(', ')});
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT, updatedAt INTEGER);
+      CREATE TABLE IF NOT EXISTS identity (kind TEXT PRIMARY KEY, ${IDENTITY_COLUMNS.filter(column => column !== 'kind').join(', ')});
+      CREATE TABLE IF NOT EXISTS identity_history (id TEXT PRIMARY KEY, ${IDENTITY_HISTORY_COLUMNS.filter(column => column !== 'id').join(', ')});
     `)
   }
 
@@ -500,6 +522,64 @@ export class SqliteMemoryStore extends MemoryStore {
     return row === undefined ? undefined : asEntry(rowToRecord(row)) as unknown as MemorySuggestion
   }
 
+  // ─── Identity documents (the identity layer) ────────────────────────────────
+
+  override getIdentity(kind: IdentityKind): IdentityRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM identity WHERE kind = ?').get(kind) as Record<string, unknown> | undefined
+    return row === undefined ? undefined : rowToRecord(row) as unknown as IdentityRecord
+  }
+
+  override async updateIdentity(kind: IdentityKind, content: string, input: UpdateIdentityInput): Promise<IdentityRecord> {
+    validateContent(content)
+    const scan = scanContent(content)
+    if (!scan.allowed) {
+      throw new Error(`identity content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const now = Date.now()
+    let written: IdentityRecord | undefined
+    // One transaction: version computation, the record write, the history
+    // snapshot, and the history trim land atomically — the SQL row IS the
+    // current record, so the version cannot race.
+    this.transaction(() => {
+      const record = nextIdentityRecord(this.getIdentity(kind), kind, content, input, now)
+      written = record
+      this.insertIdentity(record as unknown as Row)
+      this.insertIdentityHistory({
+        id: `${kind}#${record.version}`,
+        kind,
+        version: record.version,
+        content,
+        ts: now,
+        source: input.source,
+        ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+      })
+      this.trimIdentityHistory(kind)
+    })
+    return written!
+  }
+
+  override listIdentityHistory(kind: IdentityKind): readonly IdentityHistoryRecord[] {
+    const rows = this.db.prepare('SELECT * FROM identity_history WHERE kind = ? ORDER BY version DESC').all(kind) as Record<string, unknown>[]
+    return rows.map(row => rowToRecord(row) as unknown as IdentityHistoryRecord)
+  }
+
+  override async revertIdentity(kind: IdentityKind, version: number): Promise<IdentityRecord> {
+    const row = this.db.prepare('SELECT * FROM identity_history WHERE id = ?').get(`${kind}#${version}`) as Record<string, unknown> | undefined
+    if (row === undefined) {
+      throw new Error(`identity history has no version ${String(version)} for '${kind}'`)
+    }
+    const snapshot = rowToRecord(row) as unknown as IdentityHistoryRecord
+    return this.updateIdentity(kind, snapshot.content, { source: 'ui' })
+  }
+
+  /** Trim one document's history to the cap, deleting the oldest versions. */
+  private trimIdentityHistory(kind: string): void {
+    const count = (this.db.prepare('SELECT COUNT(*) AS n FROM identity_history WHERE kind = ?').get(kind) as { n: number }).n
+    if (count <= IDENTITY_HISTORY_CAP) return
+    this.db.prepare('DELETE FROM identity_history WHERE id IN (SELECT id FROM identity_history WHERE kind = ? ORDER BY version ASC LIMIT ?)')
+      .run(kind, count - IDENTITY_HISTORY_CAP)
+  }
+
   // ─── Health / audit / raw / meta ────────────────────────────────────────────
 
   override health(): MemoryHealth {
@@ -562,16 +642,26 @@ export class SqliteMemoryStore extends MemoryStore {
 
   /**
    * One-time bulk import from the host medium (Step 3.2's migration): every
-   * entry, audit record, and suggestion row lands verbatim in one
-   * transaction. Fidelity is row-for-row — ids, timestamps, and optional
+   * entry, audit record, suggestion row, and identity document lands verbatim
+   * in one transaction. Fidelity is row-for-row — ids, timestamps, and optional
    * fields carry over; the caller owns the migration marker on the medium
    * side.
    */
-  importFromDomain(entries: readonly MemoryEntry[], audit: readonly AuditEntry[], suggestions: readonly MemorySuggestion[]): void {
+  importFromDomain(
+    entries: readonly MemoryEntry[],
+    audit: readonly AuditEntry[],
+    suggestions: readonly MemorySuggestion[],
+    identity: readonly IdentityRecord[] = [],
+    identityHistory: readonly IdentityHistoryRecord[] = [],
+  ): void {
     this.transaction(() => {
       for (const entry of entries) this.insertEntry(entry as unknown as Row)
       for (const record of audit) this.insertAudit(record as unknown as Row)
       for (const row of suggestions) this.insertSuggestion(row as unknown as Row)
+      for (const record of identity) this.insertIdentity(record as unknown as Row)
+      for (const record of identityHistory) {
+        this.insertIdentityHistory({ ...(record as unknown as Row), id: `${record.kind}#${record.version}` })
+      }
     })
     this.auditSeq = this.maxAuditSeq()
   }
@@ -612,6 +702,19 @@ export class SqliteMemoryStore extends MemoryStore {
     const columns = [...new Set([...SUGGESTION_COLUMNS.filter(column => row[column] !== undefined), 'id', 'scope', 'content', 'hits', 'firstSeenAt', 'lastSeenAt'])]
     const sql = `INSERT OR REPLACE INTO suggestions (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`
     bindRecord(this.db.prepare(sql), columns, row)
+  }
+
+  /** Insert or replace the current record of one identity document (keyed by kind). */
+  private insertIdentity(record: Row): void {
+    const sql = `INSERT OR REPLACE INTO identity (${IDENTITY_COLUMNS.join(', ')}) VALUES (${IDENTITY_COLUMNS.map(() => '?').join(', ')})`
+    bindRecord(this.db.prepare(sql), [...IDENTITY_COLUMNS], record)
+  }
+
+  /** Insert one identity-history snapshot (keyed `${kind}#${version}`). */
+  private insertIdentityHistory(record: Row): void {
+    const columns = [...new Set([...IDENTITY_HISTORY_COLUMNS.filter(column => record[column] !== undefined), 'id', 'kind', 'version', 'content', 'ts', 'source'])]
+    const sql = `INSERT OR REPLACE INTO identity_history (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`
+    bindRecord(this.db.prepare(sql), columns, record)
   }
 
   /** Append one audit record (fire-and-forget semantics at the caller; best-effort here). */
@@ -686,4 +789,26 @@ function keyPrefix(key: string): string {
 /** Merged content+summary token bag per entry (the search index's unit). */
 function entryIndexTokens(entry: MemoryEntry): string[] {
   return [...tokenizeForSearch(`${entry.content}\n${entry.summary ?? ''}`)]
+}
+
+/**
+ * Compute the next identity record (the DomainMemoryStore twin — duplicated
+ * per this file's self-containment precedent instead of importing the sibling
+ * provider module): version = current + 1 (or 1 on the first write);
+ * `seedVersion` sticky after creation.
+ */
+function nextIdentityRecord(
+  current: IdentityRecord | undefined,
+  kind: IdentityKind,
+  content: string,
+  input: UpdateIdentityInput,
+  now: number,
+): IdentityRecord {
+  return {
+    kind,
+    content,
+    version: (current?.version ?? 0) + 1,
+    updatedAt: now,
+    seedVersion: current?.seedVersion ?? input.seedVersion ?? 1,
+  }
 }

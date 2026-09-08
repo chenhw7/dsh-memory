@@ -22,11 +22,15 @@ import type {
   AuditEntry,
   AuditOp,
   AuditSource,
+  IdentityHistoryRecord,
+  IdentityKind,
+  IdentityRecord,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
   MemorySuggestion,
   SearchMemoryResult,
+  UpdateIdentityInput,
   UpdateMemoryInput,
 } from './types.ts'
 
@@ -38,6 +42,10 @@ export type {
   AuditEntry,
   AuditOp,
   AuditSource,
+  IdentityHistoryRecord,
+  IdentityKind,
+  IdentityRecord,
+  IdentityWriteSource,
   MemoryCategory,
   MemoryEntry,
   MemoryHealth,
@@ -46,6 +54,7 @@ export type {
   MemorySuggestion,
   ScanResult,
   SearchMemoryResult,
+  UpdateIdentityInput,
   UpdateMemoryInput,
 } from './types.ts'
 export type { MemoryMetaRecord } from './store/index.ts'
@@ -271,6 +280,62 @@ export abstract class MemoryStore {
    * @param _ids - The ids of the entries the answer echoed.
    */
   async markHits(_ids: readonly MemoryId[]): Promise<void> { /* default no-op: providers without usage tracking stay contract-conformant */ }
+
+  // ─── Identity documents (the identity layer) ──────────────────────────────
+  //
+  // Unlike the optional lifecycle surfaces above, a provider without the
+  // identity layer cannot silently serve an identity deployment: reads
+  // degrade (absent document, empty history) but every WRITE fails loud —
+  // a silent no-op would let `identityEnabled` appear to work while the
+  // documents never persist.
+
+  /**
+   * Read the current record of one identity document.
+   * @param kind - which self-document to read.
+   * @returns the record, or `undefined` when the document was never written
+   *   (or this provider has no identity layer).
+   */
+  getIdentity(_kind: IdentityKind): IdentityRecord | undefined { return undefined }
+
+  /**
+   * Rewrite one identity document (whole-document replace; the caller owns
+   * character budgets — they are settings, not store concerns). Implementations
+   * MUST run the content through {@link scanContent} before persisting, stamp
+   * the next monotonic version, append the prior snapshot's successor to the
+   * identity history, and trim the history to its cap.
+   * @param kind - which self-document to rewrite.
+   * @param content - the full new document text.
+   * @param input - provenance for the write.
+   * @returns the new record.
+   * @throws when the content fails validation or the scanner, or this
+   *   provider has no identity layer.
+   */
+  updateIdentity(_kind: IdentityKind, _content: string, _input: UpdateIdentityInput): Promise<IdentityRecord> {
+    return Promise.reject(new Error('this memory provider has no identity layer'))
+  }
+
+  /**
+   * List the version history of one identity document, newest first, bounded
+   * by the history cap.
+   * @returns the history records; empty when the document has none (or this
+   *   provider has no identity layer).
+   */
+  listIdentityHistory(_kind: IdentityKind): readonly IdentityHistoryRecord[] { return [] }
+
+  /**
+   * Restore one historical version as the newest version (reverts never
+   * destroy history — the restored content lands as a fresh version with
+   * source `'ui'`). The human's one governance write on the read-only
+   * identity surface.
+   * @param kind - which self-document to revert.
+   * @param version - the history version whose content is restored.
+   * @returns the new record.
+   * @throws when the version is not in the retained history, or this
+   *   provider has no identity layer.
+   */
+  revertIdentity(_kind: IdentityKind, _version: number): Promise<IdentityRecord> {
+    return Promise.reject(new Error('this memory provider has no identity layer'))
+  }
 }
 
 /**

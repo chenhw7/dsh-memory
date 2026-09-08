@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
-import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
+import type { AddMemoryInput, AuditEntry, IdentityHistoryRecord, IdentityRecord, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 import { DomainMemoryStore } from '../src/store/index.ts'
 import { SqliteMemoryStore } from '../src/store/sqlite.ts'
@@ -312,6 +312,139 @@ runStoreContractSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 }
+
+/** A DomainMemoryStore with the identity tables wired into the trailing slot. */
+function makeDomainIdentityStore(): DomainMemoryStore {
+  return new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, 200, undefined, 500, {
+    identity: memTable<'soul' | 'user', IdentityRecord>(),
+    identityHistory: memTable<string, IdentityHistoryRecord>(),
+  })
+}
+
+/**
+ * The shared identity-document contract (the identity layer): seeding,
+ * monotonic versioning, history ordering and provenance, revert-without-
+ * destruction, scanner gating, and the per-kind history cap. Any provider
+ * that implements the identity layer MUST pass these tests.
+ */
+export function runIdentityContractSuite(name: string, makeStore: () => MemoryStore) {
+  describe(`${name} — identity contract`, () => {
+    it('seeds the first write as version 1 and versions monotonically', async () => {
+      const store = makeStore()
+      expect(store.getIdentity('soul')).toBeUndefined()
+      const seeded = await store.updateIdentity('soul', '第一版人格文档', { source: 'seed', seedVersion: 3 })
+      expect(seeded.version).toBe(1)
+      expect(seeded.seedVersion).toBe(3)
+      expect(store.getIdentity('soul')?.content).toBe('第一版人格文档')
+      const second = await store.updateIdentity('soul', '第二版人格文档', { source: 'tool' })
+      expect(second.version).toBe(2)
+      // seedVersion is sticky: the founding write's generation survives later rewrites.
+      expect(second.seedVersion).toBe(3)
+      const history = store.listIdentityHistory('soul')
+      expect(history.map(record => record.version)).toEqual([2, 1])
+    })
+
+    it('rejects scanner-violating and empty content', async () => {
+      const store = makeStore()
+      await expect(
+        store.updateIdentity('soul', 'sk-abcdef0123456789abcdef0123456789ab', { source: 'tool' }),
+      ).rejects.toThrow('rejected by scanner')
+      await expect(store.updateIdentity('user', '   ', { source: 'tool' })).rejects.toThrow('non-empty')
+    })
+
+    it('records provenance on the history snapshot', async () => {
+      const store = makeStore()
+      await store.updateIdentity('soul', '人格初稿', { source: 'tool', sessionId: 'sess-1' })
+      const first = store.listIdentityHistory('soul')[0]!
+      expect(first.source).toBe('tool')
+      expect(first.sessionId).toBe('sess-1')
+      const reverted = await store.revertIdentity('soul', 1)
+      expect(reverted.version).toBe(2)
+      expect(store.listIdentityHistory('soul')[0]!.source).toBe('ui')
+    })
+
+    it('revert restores content as a NEW version and never destroys history', async () => {
+      const store = makeStore()
+      await store.updateIdentity('user', '用户画像 v1', { source: 'seed' })
+      await store.updateIdentity('user', '用户画像 v2', { source: 'tool' })
+      const reverted = await store.revertIdentity('user', 1)
+      expect(reverted.content).toBe('用户画像 v1')
+      expect(reverted.version).toBe(3)
+      expect(store.getIdentity('user')?.content).toBe('用户画像 v1')
+      expect(store.listIdentityHistory('user').map(record => record.version)).toEqual([3, 2, 1])
+    })
+
+    it('revert of a version outside the retained history fails loud', async () => {
+      const store = makeStore()
+      await expect(store.revertIdentity('soul', 42)).rejects.toThrow('no version')
+    })
+
+    it('trims the history to the cap, oldest versions first', async () => {
+      const store = makeStore()
+      for (let i = 1; i <= 22; i++) await store.updateIdentity('soul', `第 ${String(i)} 版`, { source: 'tool' })
+      const history = store.listIdentityHistory('soul')
+      expect(history).toHaveLength(20)
+      expect(history[0]!.version).toBe(22)
+      expect(history[history.length - 1]!.version).toBe(3)
+      // Versions 1–2 evicted: reverting to them is now impossible, loudly.
+      await expect(store.revertIdentity('soul', 1)).rejects.toThrow('no version')
+    })
+
+    it('concurrent writes mint distinct versions (atomic read-modify-write)', async () => {
+      const store = makeStore()
+      await store.updateIdentity('soul', 'v1', { source: 'seed' })
+      const [a, b] = await Promise.all([
+        store.updateIdentity('soul', 'write A', { source: 'tool' }),
+        store.updateIdentity('soul', 'write B', { source: 'tool' }),
+      ])
+      expect(new Set([a.version, b.version])).toEqual(new Set([2, 3]))
+      expect(store.listIdentityHistory('soul')).toHaveLength(3)
+    })
+
+    it('document kinds are independent', async () => {
+      const store = makeStore()
+      await store.updateIdentity('soul', '人格', { source: 'seed' })
+      expect(store.getIdentity('user')).toBeUndefined()
+      expect(store.listIdentityHistory('user')).toEqual([])
+    })
+  })
+}
+
+// Both real providers pass the SAME identity contract (the double-backend
+// discipline; the sqlite path exercises the transactional variant).
+{
+  const dirs: string[] = []
+  runIdentityContractSuite('DomainMemoryStore', makeDomainIdentityStore)
+  runIdentityContractSuite('SqliteMemoryStore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sqlite-identity-'))
+    dirs.push(dir)
+    return new SqliteMemoryStore({ dbPath: join(dir, 'storages', 'memory.db') })
+  })
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+}
+
+// A provider (or a DomainMemoryStore composition) without the identity layer
+// must degrade on reads and fail LOUD on writes — a silent no-op would let an
+// identityEnabled deployment appear to work while nothing persists.
+describe('identity defaults (loud without the layer)', () => {
+  it('abstract base: reads degrade, writes reject', async () => {
+    const store = new TestMemoryStore()
+    expect(store.getIdentity('soul')).toBeUndefined()
+    expect(store.listIdentityHistory('soul')).toEqual([])
+    await expect(store.updateIdentity('soul', 'text', { source: 'tool' })).rejects.toThrow('no identity layer')
+    await expect(store.revertIdentity('soul', 1)).rejects.toThrow('no identity layer')
+  })
+
+  it('DomainMemoryStore without identity tables: writes fail loud', async () => {
+    const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
+    expect(store.getIdentity('soul')).toBeUndefined()
+    expect(store.listIdentityHistory('soul')).toEqual([])
+    await expect(store.updateIdentity('soul', 'text', { source: 'tool' })).rejects.toThrow('without identity tables')
+    await expect(store.revertIdentity('soul', 1)).rejects.toThrow('without identity tables')
+  })
+})
 
 // The anchors/status/supersededBy consolidation fields are a domain-store
 // write-plane behavior, tested against the real implementation like the

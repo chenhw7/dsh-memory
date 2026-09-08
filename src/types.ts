@@ -310,6 +310,67 @@ export interface AdoptSuggestionOverride {
   readonly summary?: string | undefined
 }
 
+// ─── Identity documents (the identity layer) ────────────────────────────────
+
+/** Which self-document an identity write targets (`SOUL.md` / `USER.md` are display names). */
+export type IdentityKind = 'soul' | 'user'
+
+/** Provenance of one identity-document write. */
+export type IdentityWriteSource = 'seed' | 'tool' | 'ui'
+
+/**
+ * The current record of one identity document. The document is the agent's
+ * self-description (`soul`) or its understanding of the human user (`user`),
+ * grown through conversation writes — never a memory entry, never subject to
+ * decay, consolidation, or conflict annotation.
+ */
+export interface IdentityRecord {
+  /** Which document this is. */
+  readonly kind: IdentityKind
+  /** The full document text (whole-document replace semantics). */
+  readonly content: string
+  /**
+   * Monotonic version: starts at 1, +1 on every write including reverts.
+   * Paired with `kind` it forms the history-table key `${kind}#${version}`.
+   */
+  readonly version: number
+  /** Unix epoch ms of the last write. */
+  readonly updatedAt: number
+  /** Which shipped seed generation first seeded this document (diagnostic; the seed never re-lands once a record exists). */
+  readonly seedVersion: number
+}
+
+/**
+ * One full-content version snapshot. Appended on every identity write
+ * (seed, tool, revert); trimmed to the newest {@link IDENTITY_HISTORY_CAP}
+ * per kind. The table IS the identity audit surface — the entry-keyed audit
+ * table cannot carry identity writes.
+ */
+export interface IdentityHistoryRecord {
+  readonly kind: IdentityKind
+  /** The version this snapshot wrote. */
+  readonly version: number
+  /** Full content of this version. */
+  readonly content: string
+  /** Unix epoch ms of the write. */
+  readonly ts: number
+  readonly source: IdentityWriteSource
+  /** Session id when the write came from an in-conversation tool call. */
+  readonly sessionId?: string | undefined
+}
+
+/** Provenance for one identity-document write. */
+export interface UpdateIdentityInput {
+  readonly source: IdentityWriteSource
+  /** Session id for tool writes that carry one. */
+  readonly sessionId?: string | undefined
+  /**
+   * Seed generation applied when this write CREATES the record (diagnostic
+   * only); ignored once the record exists.
+   */
+  readonly seedVersion?: number | undefined
+}
+
 /** Health snapshot of the memory store (§3.7 observability). */
 export interface MemoryHealth {
   /** Total entry count. */
@@ -370,6 +431,19 @@ declare module '@deepseek-ai/dsh-session/types' {
     'memory/removed': {
       /** The id of the removed entry. */
       readonly id: MemoryId
+    }
+    /**
+     * Log-only: records that an identity document (SOUL.md / USER.md) was
+     * rewritten. Declared vocabulary only — like `memory/added`, no plugin
+     * surface emits it today (tool executions carry no session handle); the
+     * in-conversation announcement rides the tool result text, and the durable
+     * audit surface is the identity history table. Not a SurfaceEventType.
+     */
+    'identity/updated': {
+      /** Which document was rewritten. */
+      readonly kind: IdentityKind
+      /** The version the write produced. */
+      readonly version: number
     }
   }
 }
