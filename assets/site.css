@@ -80,7 +80,7 @@ nav.topnav{position:sticky;top:0;z-index:95;background:var(--nav-bg);backdrop-fi
 .topnav-in{display:flex;align-items:center;justify-content:space-between;gap:12px;height:58px}
 .brand{font-family:var(--font-display);font-weight:700;font-size:19px;color:var(--ink);letter-spacing:.01em;flex:none;display:flex;align-items:center;gap:10px}
 .brand i{font-style:normal;color:var(--accent)}
-.brand img{width:26px;height:26px;flex:none}
+.brand>svg{width:26px;height:26px;flex:none}
 .tn-links{display:flex;align-items:center;gap:2px}
 .tn-links a{font-family:var(--font-mono);font-weight:600;font-size:13.5px;color:var(--muted);padding:7px 12px;border-radius:99px;white-space:nowrap;transition:color .2s,background .2s}
 .tn-links a:hover{color:var(--accent-hi);background:var(--accent-dim)}
