@@ -113,3 +113,75 @@ describe('compaction-boundary snapshot refresh', () => {
     expect(sectionText()).not.toContain('post-failure fact')
   })
 })
+
+describe('identity sections (soul / user-profile) — freeze, refreeze, gate', () => {
+  /** Boot memory-context with a controllable fake identity service (the real service is covered in identity.spec). */
+  async function setupIdentity(overrides: Record<string, unknown> = {}) {
+    const ctx = new Context()
+    const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
+    const fakeSystemPrompt = {
+      section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
+        sections.set(def.name, def)
+        return () => {}
+      },
+    }
+    ctx.provide('systemPrompt', fakeSystemPrompt)
+    let soul = ''
+    let user = ''
+    ctx.provide('identity', { snapshotFor: () => ({ soul, user }) })
+    ctx.provide('memory', new MutableStore())
+    await ctx.plugin(context, {
+      ...CONFIG,
+      identityEnabled: true,
+      soulCharLimit: 2000,
+      userCharLimit: 3000,
+      ...overrides,
+    } as never)
+    const session = { header: { cwd: '' } } as unknown as Session
+    const assembleCtx = { agent: { session } }
+    return {
+      ctx,
+      sections,
+      session,
+      setDocuments: (nextSoul: string, nextUser: string) => { soul = nextSoul; user = nextUser },
+      soulText: (): string => sections.get('soul')!.text(assembleCtx),
+      profileText: (): string => sections.get('user-profile')!.text(assembleCtx),
+    }
+  }
+
+  it('registers soul at order 80 and user-profile at order 81', async () => {
+    const { sections } = await setupIdentity()
+    expect(sections.get('soul')?.order).toBe(80)
+    expect(sections.get('user-profile')?.order).toBe(81)
+  })
+
+  it('freezes the identity snapshot at session start; growth waits for the compaction boundary', async () => {
+    const { ctx, session, setDocuments, soulText, profileText } = await setupIdentity()
+    setDocuments('初版人格', '初版画像')
+    ctx.emit('session/created', session)
+    expect(soulText()).toContain('初版人格')
+    expect(profileText()).toContain('初版画像')
+    // Mid-session growth must not perturb the frozen prompt prefix.
+    setDocuments('生长后的人格', '生长后的画像')
+    expect(soulText()).toContain('初版人格')
+    // The compaction boundary re-freezes and surfaces the growth.
+    ctx.emit('session/event', session, { type: 'compaction/end', seq: 101, time: 0, data: { compactionId: 'c3' } })
+    expect(soulText()).toContain('生长后的人格')
+    expect(profileText()).toContain('生长后的画像')
+  })
+
+  it('identity disabled: both sections render empty regardless of the snapshot', async () => {
+    const { ctx, session, setDocuments, soulText, profileText } = await setupIdentity({ identityEnabled: false })
+    setDocuments('人格', '画像')
+    ctx.emit('session/created', session)
+    expect(soulText()).toBe('')
+    expect(profileText()).toBe('')
+  })
+
+  it('live budget: the section applies soulCharLimit at assembly with a truncation footer', async () => {
+    const { ctx, session, setDocuments, soulText } = await setupIdentity({ soulCharLimit: 60 })
+    setDocuments('很长的人格文档，超过六十个字符预算的时候应当被截断并附上注脚说明。'.repeat(4), '画像')
+    ctx.emit('session/created', session)
+    expect(soulText()).toContain('truncated at 60 characters')
+  })
+})

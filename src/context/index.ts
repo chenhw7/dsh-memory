@@ -1,8 +1,10 @@
 /**
  * System-prompt memory context injection and the `memory` settings namespace.
  *
- * This function plugin contributes one `memory` system-prompt section at order
- * 90 (before tool guidance at 100–199). On `session/created` it reads a frozen
+ * This function plugin contributes four system-prompt sections: `memory` at
+ * order 90 and `project-notes` at 91 (before tool guidance at 100–199), and —
+ * when the identity layer is enabled — `soul` at 80 and `user-profile` at 81
+ * (after the host's deployment persona at order 0). On `session/created` it reads a frozen
  * snapshot of recalled memory from the optional `ctx.memory` store (global,
  * project, and user scopes) and freezes it per session so a running session
  * reuses the same recalled content across steps, preserving KV-cache prefix
@@ -34,6 +36,15 @@ import {
   DEFAULT_NOTES_ENABLED,
   DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
 } from '../notes/settings.ts'
+import type { IdentitySnapshot } from '../identity/index.ts'
+import { EMPTY_IDENTITY } from '../identity/index.ts'
+import { validateSeedDir } from '../identity/seeds.ts'
+import {
+  DEFAULT_IDENTITY_ENABLED,
+  DEFAULT_IDENTITY_SEED_DIR,
+  DEFAULT_SOUL_CHAR_LIMIT,
+  DEFAULT_USER_CHAR_LIMIT,
+} from '../identity/settings.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 // Type-only: merges the `compaction/*` SessionEventMap declaration so the
 // refreeze listener can narrow `compaction/end` and read its error field.
@@ -49,10 +60,10 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 // text provider can recover the session whose frozen snapshot it reads.
 import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, type MemoryMode, type IndexEntry } from './policy.ts'
+import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, buildSoulSectionText, buildUserProfileSectionText, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, type MemoryMode, type IndexEntry } from './policy.ts'
 
 export { buildMemorySectionText, buildAutoRecallBlock, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE, MEMORY_INDEX_NOTE, AUTO_RECALL_NOTE } from './policy.ts'
-export { buildNotesSectionText, PROJECT_NOTES_NOTE } from './policy.ts'
+export { buildNotesSectionText, buildSoulSectionText, buildUserProfileSectionText, PROJECT_NOTES_NOTE, SOUL_NOTE, USER_PROFILE_NOTE } from './policy.ts'
 export type { MemoryMode, IndexEntry } from './policy.ts'
 
 /** Cordis plugin name. */
@@ -86,6 +97,7 @@ interface FrozenSnapshot {
   readonly content: string
   readonly index: string
   readonly notes: ProjectNotesSnapshot
+  readonly identity: IdentitySnapshot
 }
 
 /** The empty project-notes snapshot (notes disabled, service absent, or no cwd). */
@@ -99,6 +111,14 @@ const SECTION_ORDER = 90
 const NOTES_SECTION_NAME = 'project-notes'
 /** Notes section order: right after the memory section. */
 const NOTES_SECTION_ORDER = 91
+/** The `soul` system-prompt section name. */
+const SOUL_SECTION_NAME = 'soul'
+/** Soul section order: after the deployment persona (order 0), before memory (90). */
+const SOUL_SECTION_ORDER = 80
+/** The `user-profile` system-prompt section name. */
+const USER_PROFILE_SECTION_NAME = 'user-profile'
+/** User-profile section order: right after the soul section. */
+const USER_PROFILE_SECTION_ORDER = 81
 /** Scopes read into the frozen per-session memory snapshot, in render order. */
 const SNAPSHOT_SCOPES: readonly MemoryScope[] = ['global', 'project', 'user']
 
@@ -131,6 +151,23 @@ export interface MemoryConfig {
   notesCharLimit: number
   /** Max entries rendered into the project-notes section; defaults to `100`. */
   notesMaxEntriesPerFile: number
+  /**
+   * Enable the identity layer: the `soul` and `user-profile` prompt sections
+   * plus the `identity_update` agent tool's write surface. Opt-in; defaults
+   * to `false`.
+   */
+  identityEnabled: boolean
+  /** Character budget for the injected soul section; defaults to `2000`. */
+  soulCharLimit: number
+  /** Character budget for the injected user-profile section; defaults to `3000`. */
+  userCharLimit: number
+  /**
+   * Optional directory holding custom identity seed files (`SOUL.md` /
+   * `USER.md`); empty uses the builtin Chinese seeds. Validated loudly at
+   * load when identity is enabled; a missing file for one kind keeps that
+   * kind's builtin seed (partial override).
+   */
+  identitySeedDir?: string
   /** Append a fenced auto-recall block to each step's messages (BM25 over the store). Defaults to `false`. */
   autoRecallEnabled: boolean
   /** Max entries in one auto-recall fence; defaults to `5`. */
@@ -165,6 +202,10 @@ export const Config: z<MemoryConfig> = z.object({
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
   notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
   notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
+  identityEnabled: z.boolean().default(DEFAULT_IDENTITY_ENABLED),
+  soulCharLimit: z.number().step(1).min(0).default(DEFAULT_SOUL_CHAR_LIMIT),
+  userCharLimit: z.number().step(1).min(0).default(DEFAULT_USER_CHAR_LIMIT),
+  identitySeedDir: z.string(),
   autoRecallEnabled: z.boolean().default(false),
   autoRecallLimit: z.number().step(1).min(1).default(5),
   autoRecallMinChars: z.number().step(1).min(1).default(12),
@@ -329,6 +370,17 @@ export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?
  * @param config - resolved plugin entry config, used as the settings `base`.
  */
 export function apply(ctx: Context, config: MemoryConfig): void {
+  // Load-time loud gate for the composition layer: the owner of the `memory`
+  // namespace validates its own config before mounting. Cordis swallows
+  // throws from `ctx.inject` callbacks (verified against the installed
+  // runtime), so the gate cannot live in the identity plugin; settings-overlay
+  // changes made live through the UI degrade observably instead (reported
+  // failure + builtin-seed fallback, surfaced through health()).
+  const seedDir = config.identitySeedDir ?? ''
+  if (config.identityEnabled && seedDir.trim().length > 0) {
+    validateSeedDir(seedDir)
+  }
+
   // Source thunk for the current resolved settings: the settings scope while
   // one is attached, the composition entry otherwise. Reassigned by
   // `installSection` on attach and detach.
@@ -372,8 +424,14 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     const notes: ProjectNotesSnapshot = settings.notesEnabled
       ? ctx.get('projectNotes')?.snapshotFor(session.header?.cwd) ?? EMPTY_NOTES
       : EMPTY_NOTES
+    // The identity snapshot (raw, unbudgeted — the section builders apply
+    // `soulCharLimit`/`userCharLimit` at assembly, the notes-section
+    // precedent): seeding and scanner-side degradation live in the service.
+    const identity: IdentitySnapshot = settings.identityEnabled
+      ? ctx.get('identity')?.snapshotFor() ?? EMPTY_IDENTITY
+      : EMPTY_IDENTITY
     if (memory === undefined) {
-      sessionMemory.set(session, { content: '', index: '', notes })
+      sessionMemory.set(session, { content: '', index: '', notes, identity })
       hitLedger.set(session, [])
       return
     }
@@ -389,6 +447,7 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       content: readMemorySnapshot(memory, charLimit, exclude, maxEntries),
       index: readMemoryIndex(memory, charLimit, exclude),
       notes,
+      identity,
     })
     // The standing round's ledger: the entries the frozen snapshot injected.
     hitLedger.set(session, settings.hitSignalEnabled ? standingLedger(memory, exclude) : [])
@@ -518,6 +577,30 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       return buildNotesSectionText(snapshot?.notes.conventions ?? '', snapshot?.notes.pitfalls ?? '', settings.notesCharLimit)
     },
   }), 'memory-context.notes-section()')
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: SOUL_SECTION_NAME,
+    order: SOUL_SECTION_ORDER,
+    text: (context: AssembleContext): string => {
+      const settings = current()
+      if (!settings.identityEnabled) return ''
+      const session = context.agent?.session
+      const snapshot = session === undefined ? undefined : sessionMemory.get(session)
+      return buildSoulSectionText(snapshot?.identity.soul ?? '', settings.soulCharLimit)
+    },
+  }), 'memory-context.soul-section()')
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: USER_PROFILE_SECTION_NAME,
+    order: USER_PROFILE_SECTION_ORDER,
+    text: (context: AssembleContext): string => {
+      const settings = current()
+      if (!settings.identityEnabled) return ''
+      const session = context.agent?.session
+      const snapshot = session === undefined ? undefined : sessionMemory.get(session)
+      return buildUserProfileSectionText(snapshot?.identity.user ?? '', settings.userCharLimit)
+    },
+  }), 'memory-context.user-profile-section()')
 }
 
 /** Extract the concatenated text blocks of one incoming user message. */
