@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
+<title>Cairn — DeepSeek Harness 长期记忆插件</title>
+<meta name="description" content="Cairn（@chenhw7/dsh-memory）：给 DeepSeek Harness 的持久化跨会话记忆。一条命令安装，九个模型工具，五种注入模式；自动提取、BM25 检索、全量审计——重启之后，它还记得。">
+<link rel="canonical" href="https://chenhw7.github.io/dsh-memory/index.zh-CN.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cairn">
+<meta property="og:title" content="Cairn — DeepSeek Harness 长期记忆插件">
+<meta property="og:description" content="持久化跨会话记忆：一条命令安装，九个模型工具，五种注入模式；自动提取、BM25 检索、全量审计。">
+<meta property="og:url" content="https://chenhw7.github.io/dsh-memory/index.zh-CN.html">
+<meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Cairn — DeepSeek Harness 长期记忆插件">
+<meta name="twitter:description" content="持久化跨会话记忆：一条命令安装，九个模型工具，五种注入模式。重启之后，它还记得。">
+<meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0e1f" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+<script>
+/* 首屏预载：在第一次绘制前把主题写到 <html> 上，避免明暗闪烁 */
+(function(){var t=null;try{t=localStorage.getItem('cairn-theme')}catch(e){t=null}
+document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Cairn","alternateName":"@chenhw7/dsh-memory","description":"给 DeepSeek Harness 的持久化跨会话记忆插件：自动提取、BM25 检索、上下文注入、全量审计，单包安装。","applicationCategory":"DeveloperApplication","operatingSystem":"Cross-platform","url":"https://chenhw7.github.io/dsh-memory/index.zh-CN.html","downloadUrl":"https://github.com/chenhw7/dsh-memory","author":{"@type":"Person","name":"chenhw7"},"license":"https://github.com/chenhw7/dsh-memory/blob/main/LICENSE","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="topnav" aria-label="主导航">
+  <div class="wrap topnav-in">
+    <a class="brand" href="#hero"><img src="assets/logo-512.webp" alt="" width="512" height="512">Cairn<i>.</i></a>
+    <div class="tn-links">
+      <a class="doc" href="memory-architecture.zh-CN.html">技术解析</a>
+      <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm</a>
+      <a href="index.html" hreflang="en">English<span class="x"> site</span></a>
+      <button class="tbtn" data-theme-toggle aria-label="切换明暗主题" title="切换明暗主题">
+        <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════ HERO ═══════════ -->
+<header class="hero" id="hero">
+  <div class="wrap">
+    <img class="hero-logo" src="assets/logo-512.webp" alt="Cairn 标志" width="512" height="512" decoding="async">
+    <div class="kick">DEEPSEEK HARNESS · 长期记忆插件</div>
+    <h1 class="hero-title">重启之后，<em>它还记得。</em></h1>
+    <p class="hero-sub"><b>Cairn</b> 是给 <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> 的持久化跨会话记忆——<b>一条命令安装 · 九个模型工具 · 五种注入模式</b>。事实、偏好、约定与踩坑跨会话存活：每个新会话一开始，智能体就带着上一次的经验。</p>
+    <div class="install">
+      <div class="install-label">INSTALL · 安装</div>
+      <div class="install-code"><span class="prompt">$</span><code>dsh plugin add --profile web @chenhw7/dsh-memory</code></div>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="memory-architecture.zh-CN.html">交互式技术解析 →</a>
+      <a class="btn" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn" href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm</a>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ 痛点 ═══════════ -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">WHY · 为什么需要它</div>
+      <h2 class="sec-title">会话一结束，<em>一切归零</em></h2>
+      <p class="sec-sub">默认情况下，智能体没有跨会话的记忆——你上周说过的、昨天踩过的，今天全部重来。</p>
+    </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.05s">
+        <div class="ic">WITHOUT MEMORY · 没有记忆</div>
+        <h3>每个会话都从零开始</h3>
+        <p>「以后都用 pnpm」说过就忘；同一个构建坑掉进去第二次；上次会验证过的结论，今天全凭印象复述。上下文越堆越长，真正重要的事反而要反复交代。</p>
+        <div class="tags"><span class="tag warn">偏好反复交代</span><span class="tag warn">踩坑重蹈</span><span class="tag warn">结论靠记忆</span></div>
+      </div>
+      <div class="card rv" style="--d:.15s">
+        <div class="ic">WITH CAIRN · 装上 Cairn</div>
+        <h3>说过一次，就沉淀一次</h3>
+        <p>值得记的信号被自动提取、安全扫描、审计入库；下个会话开场，相关的记忆就以索引形式在场，需要全文时按需召回。使用即保鲜，遗忘有规则。</p>
+        <div class="tags"><span class="tag">自动沉淀</span><span class="tag">按需召回</span><span class="tag">衰减有度</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 四大能力 ═══════════ -->
+<section id="capabilities">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">CAPABILITIES · 它能做什么</div>
+      <h2 class="sec-title">四大能力</h2>
+    </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">01 · 持久存储</div>
+        <h3>双后端 KV 存储，全量审计</h3>
+        <p>JSON（宿主存储域）或 SQLite（<code>node:sqlite</code>，零额外依赖）两种后端，迁移一次完成；跨进程单写者检测防止并发覆盖。entries / audit / suggestions / meta 四张表，每次变更都有来源与审计。卸载插件，记忆不丢。</p>
+        <div class="tags"><span class="tag">survives restarts</span><span class="tag">单写者检测</span></div>
+      </div>
+      <div class="card rv" style="--d:.1s">
+        <div class="ic">02 · 智能检索</div>
+        <h3>零依赖 BM25，中文是一等公民</h3>
+        <p>手写的 Okapi BM25：拉丁词保守词干收敛词形，中文产出单字一元 + 相邻二元——「记忆」不再命中所有含「记」的条目。三层作用域（global / project / user），summary 与正文同入索引，置顶条目优先浮出。</p>
+        <div class="tags"><span class="tag">measured, not vibes</span><span class="tag">CJK 分词</span></div>
+      </div>
+      <div class="card rv" style="--d:.18s">
+        <div class="ic">03 · 自动学习</div>
+        <h3>提取、整合、冲突取代</h3>
+        <p>三类信号（明确意图 / 用户纠正 / 连续踩坑后成功）触发 LLM 提取；新旧条目先经 IDF 加权预筛，再一次批量整合裁决——重复合并、过期冲突直接取代并留下 <code>supersededBy</code> 标注。可选人审队列：模型只提议，裁决权在你。</p>
+        <div class="tags"><span class="tag">提取预算 20 次/会话</span><span class="tag">you stay in control</span></div>
+      </div>
+      <div class="card rv" style="--d:.26s">
+        <div class="ic">04 · 上下文注入</div>
+        <h3>五种模式，KV 前缀稳定</h3>
+        <p>会话创建时冻结记忆快照，整个会话复用——前缀不变，KV-cache 全中。五种注入模式（默认 index 存在性索引）按需渐进披露，常驻成本随时可见（<code>≈N tokens</code> 标注）。步级自动召回（可选）走消息通道，不碰系统提示。</p>
+        <div class="tags"><span class="tag">渐进式披露</span><span class="tag">成本可见</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 数字墙 ═══════════ -->
+<section id="numbers">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">MEASURED · 数字说话</div>
+      <h2 class="sec-title">指标经过 CI 守门，<em>不靠体感</em></h2>
+    </div>
+    <div class="statwall rv" style="--d:.1s">
+      <div class="stat"><b>9</b><span>个模型可用工具</span><div class="src">memory_search → memory_forget</div></div>
+      <div class="stat"><b>100<small>%</small></b><span>success@5 · 检索命中率</span><div class="src">35×35 中英 golden set · CI 下限 85%</div></div>
+      <div class="stat"><b>0.902</b><span>MRR · 排名质量</span><div class="src">同 golden set · CI 下限 0.75</div></div>
+      <div class="stat"><b>≈344</b><span>tokens · policy-only 常驻注入</span><div class="src">与记忆库大小无关</div></div>
+      <div class="stat"><b>967</b><span>个测试用例</span><div class="src">961 通过 + 6 需密钥跳过 · 每次 push 必跑</div></div>
+      <div class="stat"><b>3</b><span>层作用域</span><div class="src">global · project · user</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 工作原理 ═══════════ -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">HOW · 它怎么工作</div>
+      <h2 class="sec-title">三步闭环：<em>沉淀 → 存取 → 注入</em></h2>
+    </div>
+    <div class="steps">
+      <div class="step rv" style="--d:.05s">
+        <h3>会话中 · 沉淀</h3>
+        <p>三类信号流过零 LLM 成本的累加器：明确意图（「记住 / 以后都」）、用户纠正（「不对，其实是」）、连续踩坑后的成功。攒够阈值（默认 10），才触发一次 LLM 提取。</p>
+      </div>
+      <div class="step rv" style="--d:.15s">
+        <h3>落库 · 存取</h3>
+        <p>每条写入先过 37 条安全扫描规则，再追加审计；与既有条目去重整合，重复的合并、过时的取代。BM25 索引随写随就绪，命中即刷新保鲜时间戳。</p>
+      </div>
+      <div class="step rv" style="--d:.25s">
+        <h3>下个会话 · 注入</h3>
+        <p>会话创建时冻结快照（默认 index 索引模式），模型看见「存了什么」，用 memory_get 按需取全文；步级还可自动召回相关记忆，全部带 token 成本标注。</p>
+      </div>
+    </div>
+
+    <div class="cta rv" style="justify-content:flex-start">
+      <a class="btn primary" href="memory-architecture.zh-CN.html">跟着一条记忆走完它的一生 →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 安全与控制 ═══════════ -->
+<section id="trust">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">TRUST · 安全与控制</div>
+      <h2 class="sec-title">每一条记忆，<em>都过闸、都留痕</em></h2>
+      <p class="sec-sub">记忆会在未来被重新读进上下文——它本身就是攻击面，所以必须双面设防。</p>
+    </div>
+    <div class="grid3">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">WRITE + READ · 双防线</div>
+        <h3>写入扫描，读取脱敏</h3>
+        <p>写入时 37 条规则拦截（密钥 16 · 提示词注入 17 含 8 条中文 · 外泄 4），永不落库；读取时每个注入面重新脱敏，漏网内容渲染为 <code>[BLOCKED: …]</code>。原文保留，静默删除只会掩盖攻击。</p>
+      </div>
+      <div class="card rv" style="--d:.1s">
+        <div class="ic">AUDIT · 全量审计</div>
+        <h3>谁写的、何时写的，永远可查</h3>
+        <p>每次变更追加一条审计：操作、来源（tool / review / flush / ui / janitor）、内容预览，200 条滚动、单调 seq。</p>
+      </div>
+      <div class="card rv" style="--d:.18s">
+        <div class="ic">GUARD · 危险操作有闸</div>
+        <h3>批量遗忘不会失控</h3>
+        <p><code>memory_forget</code> 需要显式 <code>confirm: true</code>；批量删除有上限、置顶条目豁免并报告、每条删除独立审计。</p>
+      </div>
+      <div class="card rv" style="--d:.26s">
+        <div class="ic">HUMAN · 人审一票否决</div>
+        <h3>模型提议，人裁决</h3>
+        <p>打开写入前人工确认：所有提取与工具写入降级为提议，被反复观察的提议自动置顶；对既有条目的修改，采纳前绝不触碰原文。</p>
+      </div>
+      <div class="card rv" style="--d:.34s">
+        <div class="ic">REMOTE · 远程写默认拒绝</div>
+        <h3>宽信任域不放大权限</h3>
+        <p>浏览器端管理默认只读，写操作需部署级显式开启——信任的是传输面，不是存储面。</p>
+      </div>
+      <div class="card rv" style="--d:.42s">
+        <div class="ic">PROMPT · 提示词防御</div>
+        <h3>记忆是上下文，不是指令</h3>
+        <p>存储内容里的伪造围栏闭合符在渲染时被中和；每个注入面都声明：当前用户请求、仓库文件与工具输出永远优先于记忆。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 管理中心 ═══════════ -->
+<section id="console">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">CONSOLE · 管理中心</div>
+      <h2 class="sec-title">不用命令行，也能管理一切</h2>
+    </div>
+    <div class="mg rv" style="--d:.1s">
+      <div class="mg-tabs">
+        <span class="on">概览</span>
+        <span>待确认<span class="badge">3</span></span>
+        <span>管理</span>
+      </div>
+      <div class="mg-body">
+        <div class="mg-col">
+          <h4>概览 · 健康仪表盘</h4>
+          <p>整个记忆库的状态一览，后台任务的失败遥测也在这里。</p>
+          <ul>
+            <li>总量 <b>128</b> · 置顶 <b>7</b> · 衰减中 <b>3</b></li>
+            <li>global <b>41</b> / project <b>62</b> / user <b>25</b></li>
+            <li>审计 <b>200</b> 条滚动 · 最近提取 <b>昨天 22:41</b></li>
+          </ul>
+        </div>
+        <div class="mg-col">
+          <h4>待确认 · 提议队列</h4>
+          <p>人审模式的裁决台：按 hits 降序，被反复提议的排最前。</p>
+          <ul>
+            <li><b>采纳</b> 前可编辑 · <b>拒绝</b> 一键丢弃</li>
+            <li>角标实时提示待处理数量</li>
+            <li>对既有条目的修改 <b>绝不自动生效</b></li>
+          </ul>
+        </div>
+        <div class="mg-col">
+          <h4>管理 · 全量操作</h4>
+          <p>作用域 + 工作区过滤，BM25 搜索，类别筛选，懒加载列表。</p>
+          <ul>
+            <li>编辑 · 置顶 / 取消置顶</li>
+            <li>归档 / 取消归档 · 删除</li>
+            <li>衰减标记一目了然</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="small rv" style="margin-top:16px">上表为界面示意（数据非真实）。设置中的四张卡——记忆、项目笔记、自动召回、自动提取——改完实时生效，无需重启；界面中英双语。插件不向你的仓库写入任何文件。</p>
+  </div>
+</section>
+
+<!-- ═══════════ 适用与限制 ═══════════ -->
+<section id="honesty">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">HONESTY · 适用与边界</div>
+      <h2 class="sec-title">它适合什么，<em>不适合什么</em></h2>
+    </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.05s">
+        <div class="ic">FIT · 适合这样用</div>
+        <h3>个人与团队的长期资产</h3>
+        <p>跨会话的个人偏好与工作习惯；项目的团队约定与提交规范；调试中验证过的踩坑与解法；长期迭代中沉淀的工程判断。它面向「帮智能体积累经验」，不是通用知识库。</p>
+      </div>
+      <div class="card rv" style="--d:.15s">
+        <div class="ic">LIMITS · 已知限制</div>
+        <h3>诚实说在前面</h3>
+        <p>检索是纯词法的：BM25 不做语义向量，换一种说法的查询不会命中（同义改写靠 summary 入索引兜底）；提取质量跟随会话模型，不引入额外按键；宿主 DeepSeek Harness 处于 alpha 渠道（0.1.2-alpha），插件随之演进；远程管理面仅受信任主机保护，写操作默认关闭。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ 项目状态 ═══════════ -->
+<section id="status">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">STATUS · 项目状态</div>
+      <h2 class="sec-title">仓库现在怎么样</h2>
+    </div>
+    <div class="statusgrid rv" style="--d:.1s">
+      <div class="st-cell">
+        <div class="sl">当前版本</div>
+        <b id="stVer">v0.9.1</b>
+        <div class="ss" id="stVerSrc">npm registry · 静态快照</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">累计提交</div>
+        <b id="stCommits">207</b>
+        <div class="ss" id="stCommitsSrc">stats.json · 静态快照</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">最近更新</div>
+        <b id="stUpdated">2026-09-07</b>
+        <div class="ss" id="stUpdatedSrc">stats.json · 静态快照</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">测试用例</div>
+        <b>967</b>
+        <div class="ss">961 通过 + 6 需密钥跳过</div>
+      </div>
+    </div>
+    <p class="small rv" style="margin-top:16px">版本与提交数在页面打开时直接读取 npm registry 与仓库 stats.json（CI 每日刷新）；离线时显示上述烘焙的静态快照。</p>
+  </div>
+</section>
+
+<!-- ═══════════ 入口 ═══════════ -->
+<section id="explore">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">EXPLORE · 去哪深入</div>
+      <h2 class="sec-title">四条路径</h2>
+    </div>
+    <div class="links">
+      <a class="rv" style="--d:.02s" href="memory-architecture.zh-CN.html">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
+        <span class="lt"><b>交互式技术解析（中文）</b><span>一条记忆的一生：捕获、写闸、BM25 演练场、衰减模拟器，在浏览器实时运行</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a class="rv" style="--d:.1s" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
+        <span class="lt"><b>GitHub 仓库</b><span>源码、议题、发布记录与完整 README（安装、配置、宿主契约）</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a class="rv" style="--d:.18s" href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 17l4 4M22 17l-4 4M12 7v6M8 10l4-3 4 3"/></svg></span>
+        <span class="lt"><b>npm 包</b><span>@chenhw7/dsh-memory · 版本历史 · OIDC 可信发布 · SLSA 溯源</span></span>
+        <span class="ar">→</span>
+      </a>
+      <a class="rv" style="--d:.26s" href="https://github.com/chenhw7/dsh-memory/tree/main/docs" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M9 13h6M9 17h4"/></svg></span>
+        <span class="lt"><b>仓库文档</b><span>TECH_DESIGN · 时序图 · 评估手册（EVAL）· 宿主契约 · 发布手册</span></span>
+        <span class="ar">→</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ FOOTER ═══════════ -->
+<footer>
+  <div class="wrap">
+    <div>
+      <div class="f-brand">Cairn <span>·</span> @chenhw7/dsh-memory</div>
+      <p>为 DeepSeek Harness 打造的长期记忆 profile bundle。MIT 许可；OIDC 可信发布。</p>
+    </div>
+    <div class="f-links">
+      <a href="memory-architecture.zh-CN.html">技术解析（中文）→</a>
+      <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub →</a>
+      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm →</a>
+      <a href="index.html" hreflang="en">English site →</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+<script>
+/* ═══════ 项目状态：npm registry + stats.json 两条轻量通道；失败即保留烘焙快照 ═══════ */
+(function(){
+const $=id=>document.getElementById(id);
+if(new URLSearchParams(location.search).has('offline'))return; /* ?offline=1：强制纯静态演示 */
+function fetchJson(url){
+  const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),6000);
+  return fetch(url,{signal:ctl.signal,cache:'no-store'})
+    .then(r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+    .catch(e=>{clearTimeout(t);throw e});
+}
+fetchJson('https://registry.npmjs.org/@chenhw7%2fdsh-memory/latest')
+  .then(j=>{if(!j||!j.version)return;
+    $('stVer').textContent='v'+j.version;
+    $('stVerSrc').innerHTML='<span class="live-dot">●</span> npm registry · 实时';
+  })
+  .catch(_=>{/* npm 不可达：保留烘焙版本号与「静态快照」标注 */});
+fetchJson('stats.json')
+  .then(j=>{
+    if(!j||!Array.isArray(j.days))return;
+    const days=j.days.filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(String(d.d||'')));
+    if(!days.length)return;
+    const total=days.reduce((s,d)=>s+(+d.c||0),0);
+    if(total>0)$('stCommits').textContent=total;
+    const gen=String(j.generated||'').slice(0,10);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(gen))$('stUpdated').textContent=gen;
+    $('stCommitsSrc').innerHTML='<span class="live-dot">●</span> stats.json · 每日构建';
+    $('stUpdatedSrc').innerHTML='<span class="live-dot">●</span> stats.json · 每日构建';
+  })
+  .catch(_=>{/* stats.json 不可达：保留烘焙数字与「静态快照」标注 */});
+})();
+</script>
+
+</body>
+</html>

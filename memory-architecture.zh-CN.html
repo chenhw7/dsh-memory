@@ -4,527 +4,207 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
-<title>Cairn · 记忆的工程 — dsh-memory 技术解析</title>
-<meta name="description" content="Cairn（dsh-memory）交互式技术解析。提取循环、写入安全闸、BM25 内核、衰减模拟器全部在浏览器实时运行。">
+<title>一条记忆的一生 — Cairn 技术解析</title>
+<meta name="description" content="Cairn（@chenhw7/dsh-memory）交互式技术解析：跟着一条记忆走完它的一生。捕获、写入安全闸、BM25 检索演练场、注入模式与衰减模拟器，在浏览器实时运行。">
 <link rel="canonical" href="https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Cairn">
-<meta property="og:title" content="Cairn · 记忆的工程 — dsh-memory 技术解析">
-<meta property="og:description" content="Cairn（dsh-memory）交互式技术解析。提取循环、写入安全闸、BM25 内核、衰减模拟器全部在浏览器实时运行。">
+<meta property="og:title" content="一条记忆的一生 — Cairn 技术解析">
+<meta property="og:description" content="跟着一条记忆走完它的一生：捕获、写闸、BM25 演练场、注入与衰减，在浏览器实时运行。">
 <meta property="og:url" content="https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html">
 <meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
 <meta property="og:locale" content="zh_CN">
 <meta property="og:locale:alternate" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Cairn · 记忆的工程 — dsh-memory 技术解析">
-<meta name="twitter:description" content="Cairn（dsh-memory）交互式技术解析。提取循环、写入安全闸、BM25 内核、衰减模拟器全部在浏览器实时运行。">
+<meta name="twitter:title" content="一条记忆的一生 — Cairn 技术解析">
+<meta name="twitter:description" content="跟着一条记忆走完它的一生：捕获、写闸、BM25 演练场、注入与衰减，在浏览器实时运行。">
 <meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0e1f" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<script type="application/ld+json">
-{"@context":"https://schema.org","@type":"TechArticle","headline":"Cairn · 记忆的工程","description":"Cairn（dsh-memory）交互式技术解析。提取循环、写入安全闸、BM25 内核、衰减模拟器全部在浏览器实时运行。","author":{"@type":"Person","name":"chenhw7"},"publisher":{"@type":"Person","name":"chenhw7"},"url":"https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html","image":"https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png","inLanguage":"zh-CN"}
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+<script>
+/* 首屏预载：在第一次绘制前把主题写到 <html> 上，避免明暗闪烁 */
+(function(){var t=null;try{t=localStorage.getItem('cairn-theme')}catch(e){t=null}
+document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();
 </script>
-<style>
-:root{
-  --bg:#0e0d0b; --bg2:#14120e; --panel:#191612; --panel2:#1f1b15;
-  --ink:#ece5d5; --muted:#9c937f; --faint:#6b6355;
-  --line:#2b261d; --line2:#3a3325;
-  --amber:#e8a83e; --amber-hi:#ffce73; --amber-dim:rgba(232,168,62,.14);
-  --teal:#4ec9b0; --teal-dim:rgba(78,201,176,.12);
-  --red:#e0604a; --red-dim:rgba(224,96,74,.12);
-  --serif:"Noto Serif SC",serif; --sans:"Noto Sans SC",sans-serif; --mono:"IBM Plex Mono",monospace;
-}
-*{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16.5px;line-height:1.85;overflow-x:hidden}
-::selection{background:var(--amber);color:#14110a}
-a{color:var(--amber);text-decoration:none}
-
-/* ── 滚动条（跟随深色主题：滑块 line2，悬停琥珀色） ───────────── */
-*{scrollbar-color:var(--line2) transparent}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--line2);border-radius:99px}
-::-webkit-scrollbar-thumb:hover{background:var(--amber)}
-
-/* ── progress + nav ─────────────────────────── */
-#progress{position:fixed;top:0;left:0;height:2px;width:0%;background:linear-gradient(90deg,var(--amber),var(--amber-hi));z-index:100}
-nav#sidenav{position:fixed;left:26px;top:50%;transform:translateY(-50%);z-index:90;display:flex;flex-direction:column;gap:18px}
-nav#sidenav a{display:flex;align-items:center;gap:10px;color:var(--faint);font-size:12px;letter-spacing:.12em;transition:color .3s}
-nav#sidenav a i{width:7px;height:7px;border-radius:50%;background:var(--line2);transition:all .3s;flex:none}
-nav#sidenav a span{opacity:0;transform:translateX(-6px);transition:all .3s;white-space:nowrap}
-nav#sidenav a:hover span,nav#sidenav a.on span{opacity:1;transform:none}
-nav#sidenav a.on{color:var(--amber)}
-nav#sidenav a.on i{background:var(--amber);box-shadow:0 0 12px var(--amber)}
-@media(max-width:1080px){nav#sidenav{display:none}}
-
-/* ── GitHub 角标（固定右上角，全程可见） ─────────────── */
-a.gh-corner{position:fixed;top:16px;right:20px;z-index:95;width:52px;height:52px;border:1px solid rgba(232,168,62,.4);border-radius:12px;background:var(--panel2);color:var(--amber);display:flex;align-items:center;justify-content:center;transition:all .3s;box-shadow:0 0 14px rgba(232,168,62,.14)}
-a.gh-corner:hover{border-color:var(--amber);color:var(--amber-hi);box-shadow:0 0 20px rgba(232,168,62,.4);transform:translateY(-2px)}
-
-/* ── layout ─────────────────────────────────── */
-.wrap{max-width:1180px;margin:0 auto;padding:0 40px}
-.col{max-width:none}
-.spec{display:grid;gap:30px;margin-top:6px}
-.spec-row{display:grid;grid-template-columns:64px 1fr;gap:20px;align-items:start}
-/* 中文标签用黑体而非等宽：等宽字体无中文字形，小字号回退渲染发虚 */
-.spec-k{font-family:var(--sans);font-size:12.5px;font-weight:700;letter-spacing:.14em;color:var(--amber);border:1px solid var(--line2);background:var(--panel2);border-radius:99px;padding:5px 0 5px 3px;text-align:center;margin-top:2px}
-.spec-row p{color:#cfc7b4;font-size:15.5px;line-height:1.95}
-.spec-row p strong{color:var(--amber-hi)}
-section{padding:130px 0 90px;position:relative}
-.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.28em;color:var(--amber);text-transform:uppercase}
-h1,h2,h3{font-family:var(--serif)}
-.sec-head{display:flex;align-items:baseline;gap:26px;margin-bottom:14px}
-.sec-num{font-family:var(--serif);font-weight:900;font-size:88px;line-height:1;color:transparent;-webkit-text-stroke:1.5px var(--line2);flex:none}
-.sec-title{font-size:clamp(28px,4vw,42px);font-weight:900;line-height:1.3}
-.sec-sub{color:var(--muted);font-size:17px;margin-bottom:44px;max-width:640px}
-p.lede{font-size:18.5px;color:#d9d2c0}
-p+p{margin-top:1.1em}
-.dim{color:var(--muted)} .small{font-size:13.5px}
-code,.mono{font-family:var(--mono);font-size:.86em;background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:.1em .45em;color:var(--amber-hi)}
-strong{color:var(--amber-hi);font-weight:700}
-
-/* ── reveal ─────────────────────────────────── */
-.rv{opacity:0;transform:translateY(34px);transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1);transition-delay:var(--d,0s)}
-.rv.in{opacity:1;transform:none}
-@media (prefers-reduced-motion:reduce){
-  .rv{opacity:1;transform:none;transition:none}
-  .scroll-hint,.def-arrow{animation:none}
-  html{scroll-behavior:auto}
-}
-
-/* ── hero ───────────────────────────────────── */
-#hero{min-height:100vh;display:flex;align-items:center;padding:120px 0 60px;position:relative;overflow:hidden}
-#heroCanvas{position:absolute;inset:0;width:100%;height:100%}
-.hero-inner{position:relative;z-index:2}
-.hero-kick{font-family:var(--mono);font-size:13px;letter-spacing:.34em;color:var(--amber);margin-bottom:28px}
-h1.hero-title{font-size:clamp(46px,7.4vw,104px);font-weight:900;line-height:1.18;letter-spacing:.01em}
-h1.hero-title em{font-style:normal;color:var(--amber);position:relative}
-h1.hero-title em::after{content:"";position:absolute;left:0;right:0;bottom:.08em;height:.1em;background:linear-gradient(90deg,var(--amber),transparent);opacity:.5}
-.hero-sub{margin-top:30px;max-width:600px;color:var(--muted);font-size:18px}
-.hero-lang{margin-top:26px;font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--faint)}
-.hero-stats{display:flex;gap:0;margin-top:64px;border-top:1px solid var(--line);flex-wrap:wrap}
-.hstat{padding:22px 44px 0 0;margin-right:44px;border-right:1px solid var(--line);padding-right:44px}
-.hstat:last-child{border-right:none}
-.hstat b{display:block;font-family:var(--serif);font-size:44px;font-weight:900;color:var(--ink);line-height:1.1}
-.hstat b i{font-style:normal;color:var(--amber);font-size:24px;vertical-align:super}
-.hstat span{font-size:12.5px;color:var(--faint);letter-spacing:.1em}
-.scroll-hint{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);color:var(--faint);font-size:11px;letter-spacing:.3em;font-family:var(--mono);z-index:2;animation:hint 2.4s ease-in-out infinite}
-@keyframes hint{0%,100%{transform:translate(-50%,0);opacity:.5}50%{transform:translate(-50%,8px);opacity:1}}
-
-/* ── figures ────────────────────────────────── */
-figure{margin:56px 0}
-.fig-panel{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:34px;position:relative;overflow:hidden}
-.fig-panel::before{content:"";position:absolute;inset:0;background:radial-gradient(600px 200px at 20% -10%,rgba(232,168,62,.06),transparent 70%);pointer-events:none}
-figcaption{margin-top:14px;font-size:13px;color:var(--faint);letter-spacing:.04em;text-align:center}
-.fig-tag{position:absolute;top:16px;right:18px;font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.1em}
-
-/* ── loop diagram ───────────────────────────── */
-.loop-stage{position:relative;width:min(520px,88vw);height:min(520px,88vw);margin:10px auto}
-.loop-core{position:absolute;inset:34%;border-radius:50%;background:radial-gradient(circle at 38% 32%,#2b2314,#171410 68%);border:1px solid var(--line2);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;box-shadow:0 0 60px rgba(232,168,62,.12) inset;z-index:1}
-.loop-core b{font-family:var(--serif);font-size:19px;color:var(--amber-hi)}
-.loop-core span{font-size:11px;color:var(--faint);letter-spacing:.14em;margin-top:4px}
-.loop-node{position:absolute;width:150px;margin-left:-75px;margin-top:-30px;text-align:center;z-index:2}
-.loop-node .dot{width:13px;height:13px;border-radius:50%;background:#3a3325;margin:0 auto 8px;position:relative}
-.loop-node .lb{font-size:13.5px;font-weight:700}
-.loop-node .sb{font-size:11px;color:var(--faint);font-family:var(--mono);letter-spacing:.06em}
-
-/* ── signal cards ───────────────────────────── */
-.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:44px 0}
-@media(max-width:900px){.cards3{grid-template-columns:1fr}}
-.sig-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 24px;position:relative;transition:transform .5s cubic-bezier(.2,.7,.2,1),border-color .5s}
-.sig-card:hover{transform:translateY(-6px);border-color:var(--line2)}
-.sig-card .no{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.2em}
-.sig-card h3{font-size:19px;margin:10px 0 12px;color:var(--ink)}
-.sig-card h3 i{font-style:normal;color:var(--amber)}
-.sig-card p{font-size:13.5px;color:var(--muted);line-height:1.75}
-.sig-card .eg{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--teal);background:var(--teal-dim);border:1px solid rgba(78,201,176,.25);border-radius:8px;padding:8px 12px;line-height:1.6}
-
-/* ── extraction simulator ───────────────────── */
-.sim{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-@media(max-width:900px){.sim{grid-template-columns:1fr}}
-.sim-col{padding:22px 24px;min-height:290px}
-/* 并排布局下固定列高：两栏内容随动画生长，不固定会持续顶推下方版面 */
-@media(min-width:901px){.sim-col{height:480px;overflow:hidden}}
-.sim-col:first-child{border-right:1px solid var(--line);background:rgba(0,0,0,.18)}
-@media(max-width:900px){.sim-col:first-child{border-right:none;border-bottom:1px solid var(--line)}}
-.sim-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.sim-head b{font-size:13px;font-weight:700;letter-spacing:.05em;color:var(--muted);font-family:var(--sans)}
-.sim-head .cnt{font-family:var(--sans);font-size:12.5px;font-weight:600;color:var(--amber)}
-.sim-line{font-family:var(--mono);font-size:12.5px;line-height:1.7;padding:8px 12px;border-radius:8px;margin-bottom:8px;background:var(--panel2);border:1px solid var(--line);color:#cfc7b4;opacity:0;transform:translateY(10px);transition:all .5s}
-.sim-line.show{opacity:1;transform:none}
-.sim-line .tag{display:inline-block;font-size:10px;padding:1px 8px;border-radius:99px;margin-right:8px;letter-spacing:.08em}
-.tag-kw{background:var(--amber-dim);color:var(--amber)}
-.tag-fix{background:rgba(96,165,250,.14);color:#7db4f8}
-.tag-pit{background:var(--red-dim);color:var(--red)}
-.sim-line.out{border-color:rgba(78,201,176,.3);color:#bfe8dc}
-.sim-line.merge{border-color:rgba(232,168,62,.4)}
-.sim-bar{height:5px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:14px}
-.sim-bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--amber),var(--amber-hi));transition:width .5s;border-radius:99px}
-.sim-note{margin-top:12px;font-size:12.5px;color:var(--faint);font-family:var(--sans);min-height:18px}
-.sim-note.fire{color:var(--amber);animation:blink 1s ease 3}
-@keyframes blink{50%{opacity:.3}}
-.sim-line.ev{display:flex;align-items:baseline;gap:9px}
-.sim-line .res{margin-left:auto;flex:none;font-size:10.5px;letter-spacing:.02em;color:var(--faint)}
-.sim-line .res.hit{color:var(--amber-hi)}
-.sim-line.hdr{background:transparent;border-color:transparent;color:var(--faint);font-size:12px;font-family:var(--sans);padding:6px 12px 2px}
-.sim-line .ref{color:var(--amber-hi)}
-.sim-line .verdict{font-size:11.5px;color:var(--faint);font-family:var(--sans)}
-.sim-line .verdict b{color:var(--amber-hi);font-weight:600}
-.tag-tool{background:rgba(156,147,127,.14);color:var(--muted)}
-
-/* ── write path gates ───────────────────────── */
-.gates{display:flex;align-items:stretch;gap:0;margin:30px 0 8px;position:relative}
-.gate{flex:1;text-align:center;position:relative;padding:20px 8px 16px}
-.gate .ic{width:52px;height:52px;margin:0 auto 12px;border-radius:14px;border:1px solid var(--line2);background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:22px;transition:all .4s;position:relative;z-index:2}
-.gate .gt{font-size:13.5px;font-weight:700}
-.gate .gs{font-size:11px;color:var(--faint);font-family:var(--mono);margin-top:2px}
-.gate::before{content:"";position:absolute;top:46px;left:-50%;width:100%;height:1px;background:var(--line2);z-index:1}
-.gate:first-child::before{display:none}
-.gate.ok .ic{border-color:var(--teal);box-shadow:0 0 18px rgba(78,201,176,.3);background:rgba(78,201,176,.08)}
-.gate.ok .gt{color:var(--teal)}
-.gate.bad .ic{border-color:var(--red);box-shadow:0 0 18px rgba(224,96,74,.4);background:rgba(224,96,74,.08);animation:shake .5s}
-.gate.bad .gt{color:var(--red)}
-@keyframes shake{20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
-.chip{position:absolute;top:33px;left:8%;width:66px;z-index:5;transition:left 1.05s cubic-bezier(.5,0,.3,1),top 1.05s cubic-bezier(.5,0,.3,1)}
-.chip .payload{font-family:var(--mono);font-size:10px;background:#241f15;border:1px solid var(--amber);color:var(--amber-hi);border-radius:8px;padding:6px 8px;text-align:center;box-shadow:0 0 16px rgba(232,168,62,.35);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chip.evil .payload{border-color:var(--red);color:#ffb0a0;box-shadow:0 0 16px rgba(224,96,74,.35)}
-.gate-btns{display:flex;gap:12px;margin:26px 0 6px;flex-wrap:wrap}
-.btn{font-family:var(--mono);font-size:13px;padding:11px 22px;border-radius:99px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink);cursor:pointer;transition:all .3s;letter-spacing:.04em}
-.btn:hover{border-color:var(--amber);color:var(--amber-hi);transform:translateY(-2px)}
-.btn.evil:hover{border-color:var(--red);color:#ffb0a0}
-.btn:disabled{opacity:.35;cursor:wait;transform:none}
-.gate-log{font-family:var(--mono);font-size:12px;margin-top:18px;min-height:24px;color:var(--muted)}
-.gate-log .ok{color:var(--teal)} .gate-log .err{color:var(--red)}
-.mini-store{margin-top:22px;border-top:1px dashed var(--line2);padding-top:18px}
-.mini-store .ms-head{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.18em;margin-bottom:10px}
-.ms-row{font-family:var(--mono);font-size:12px;padding:8px 12px;border-left:2px solid var(--teal);background:rgba(78,201,176,.05);margin-bottom:6px;color:#b8dccf;animation:slidein .6s}
-.ms-row.audit{border-left-color:var(--faint);color:var(--faint);background:transparent}
-@keyframes slidein{from{opacity:0;transform:translateX(-14px)}}
-
-/* ── entry anatomy ──────────────────────────── */
-.anat{display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:start}
-@media(max-width:900px){.anat{grid-template-columns:1fr}}
-.anat-card{font-family:var(--mono);font-size:13px;background:#12100c;border:1px solid var(--line);border-radius:12px;padding:22px 24px;line-height:2.05}
-.anat-card .k{color:#8fa8c9}.anat-card .v{color:#e8dfc9}.anat-card .c{color:var(--faint)}
-.anat-card .hl{background:rgba(232,168,62,.16);border-radius:4px;transition:background .3s}
-.anat-list{display:flex;flex-direction:column;gap:9px}
-.anat-item{font-size:13.5px;color:var(--muted);padding:11px 16px;border:1px solid var(--line);border-radius:10px;cursor:pointer;transition:all .3s;display:flex;gap:12px;align-items:baseline}
-.anat-item b{font-family:var(--mono);font-size:12.5px;color:var(--amber-hi);flex:none}
-.anat-item:hover,.anat-item.hot{border-color:var(--amber);background:var(--amber-dim);color:var(--ink)}
-.tables3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
-@media(max-width:900px){.tables3{grid-template-columns:1fr}}
-.tbl{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--panel)}
-.tbl h4{font-family:var(--mono);font-size:14px;color:var(--amber);margin-bottom:4px}
-.tbl .tb-sub{font-size:11px;color:var(--faint);font-family:var(--mono);margin-bottom:12px}
-.tbl p{font-size:13px;color:var(--muted);line-height:1.7}
-
-/* ── BM25 playground ────────────────────────── */
-.bm-token{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:6px;margin:0 5px 6px 0;background:var(--panel2);border:1px solid var(--line2);color:var(--amber-hi)}
-.bm-token.bigram{border-color:rgba(78,201,176,.45);color:var(--teal)}
-.bm-query{width:100%;font-family:var(--mono);font-size:15px;background:#12100c;border:1px solid var(--line2);border-radius:10px;color:var(--ink);padding:14px 18px;outline:none;transition:border-color .3s}
-.bm-query:focus{border-color:var(--amber)}
-.bm-chips{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0 6px}
-.bm-chip{font-family:var(--mono);font-size:12px;padding:6px 14px;border-radius:99px;border:1px solid var(--line2);background:transparent;color:var(--muted);cursor:pointer;transition:all .25s}
-.bm-chip:hover{border-color:var(--amber);color:var(--amber-hi)}
-.bm-res{margin-top:22px;display:flex;flex-direction:column;gap:8px}
-.bm-row{display:grid;grid-template-columns:30px 1fr 74px;gap:14px;align-items:center;padding:10px 14px;border-radius:10px;border:1px solid transparent;transition:all .5s;opacity:.38}
-.bm-row.hit{opacity:1;border-color:var(--line);background:var(--panel)}
-.bm-row .rk{font-family:var(--mono);font-size:13px;color:var(--faint);text-align:center}
-.bm-row.hit .rk{color:var(--amber)}
-.bm-row .tx{font-size:13.5px;color:#d9d2c0;line-height:1.55}
-.bm-row .tx .mt{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-right:8px;letter-spacing:.06em}
-.bm-row .tx mark{background:transparent;color:var(--amber-hi);font-weight:700}
-.bm-row .bar{height:5px;border-radius:99px;background:var(--line);margin-top:7px;overflow:hidden}
-.bm-row .bar i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--amber),var(--amber-hi));border-radius:99px;transition:width .8s cubic-bezier(.2,.7,.2,1)}
-.bm-row .sc{font-family:var(--mono);font-size:13px;color:var(--amber);text-align:right}
-.bm-stamp{font-family:var(--mono);font-size:10.5px;color:var(--teal);margin-left:8px;opacity:0;transition:opacity .5s}
-.bm-row.stamped .bm-stamp{opacity:1}
-.bm-meta{display:flex;justify-content:space-between;margin-top:16px;font-family:var(--mono);font-size:11.5px;color:var(--faint);flex-wrap:wrap;gap:8px}
-.formula{font-family:var(--mono);font-size:13px;color:#cdbf9e;background:#12100c;border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin-top:26px;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}
-.formula i{color:var(--amber);font-style:normal} .formula b{color:var(--teal)}
-
-/* ── injection modes ────────────────────────── */
-.modes{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:22px}
-.mode-btn{font-family:var(--mono);font-size:13px;padding:9px 20px;border-radius:10px;border:1px solid var(--line2);background:transparent;color:var(--muted);cursor:pointer;transition:all .3s}
-.mode-btn.on{border-color:var(--amber);color:var(--amber-hi);background:var(--amber-dim);box-shadow:0 0 20px rgba(232,168,62,.12)}
-.mode-view{font-family:var(--mono);font-size:12.5px;line-height:1.8;background:#100e0b;border:1px solid var(--line);border-radius:12px;padding:24px 26px;min-height:300px;transition:opacity .25s;color:#c9c0ab}
-.mode-view .fx{color:var(--teal)} .mode-view .cm{color:var(--faint)} .mode-view .hl2{color:var(--amber-hi)}
-.mode-cap{margin-top:14px;font-size:13.5px;color:var(--muted);min-height:48px}
-.mode-cap b{color:var(--amber)}
-
-/* ── lifecycle ──────────────────────────────── */
-.life-slider{width:100%;margin:34px 0 8px;-webkit-appearance:none;appearance:none;height:5px;border-radius:99px;background:linear-gradient(90deg,var(--teal),var(--amber) 66%,var(--red));outline:none}
-.life-slider::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;background:var(--ink);border:3px solid var(--amber);cursor:grab;box-shadow:0 0 16px rgba(232,168,62,.5)}
-.life-days{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--faint)}
-.life-now{font-family:var(--serif);font-size:54px;font-weight:900;color:var(--amber-hi);line-height:1;margin:18px 0 4px}
-.life-now small{font-size:16px;color:var(--faint);font-family:var(--mono);font-weight:400}
-.life-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:30px}
-@media(max-width:900px){.life-cards{grid-template-columns:1fr}}
-.lc{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--panel);position:relative;transition:all .6s;overflow:hidden}
-.lc .lc-tag{font-family:var(--mono);font-size:10.5px;padding:2px 10px;border-radius:99px;letter-spacing:.1em}
-.lc p{font-size:13px;color:var(--muted);margin-top:12px;line-height:1.65}
-.lc .lc-state{margin-top:14px;font-family:var(--mono);font-size:11.5px;min-height:20px}
-.lc.dead{opacity:.35;filter:grayscale(.8)}
-.lc.dead::after{content:"已硬删除";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:900;font-size:20px;color:var(--red);background:rgba(14,13,11,.55);letter-spacing:.2em}
-.lc.stale{border-style:dashed;border-color:rgba(224,150,60,.5)}
-.life-log{font-family:var(--mono);font-size:12px;margin-top:24px;min-height:60px;color:var(--faint)}
-.life-log div{animation:slidein .5s}
-.life-log .jl{color:var(--red)} .life-log .rv2{color:var(--teal)}
-.revive-btn{margin-top:10px;font-family:var(--mono);font-size:11.5px;padding:6px 16px;border-radius:99px;border:1px solid var(--teal);background:transparent;color:var(--teal);cursor:pointer;transition:all .3s;display:none}
-.revive-btn:hover{background:var(--teal-dim)}
-.lc.stale .revive-btn{display:inline-block}
-
-/* ── defense ────────────────────────────────── */
-.defense{display:grid;grid-template-columns:1fr 60px 1fr;gap:0;align-items:center;margin:30px 0}
-@media(max-width:900px){.defense{grid-template-columns:1fr}}
-.def-card{border:1px solid var(--line);border-radius:14px;padding:26px;background:var(--panel)}
-.def-card h4{font-family:var(--serif);font-size:19px;margin-bottom:6px}
-.def-card h4 i{font-style:normal;color:var(--amber)}
-.def-card .dt{font-family:var(--mono);font-size:12px;color:var(--faint);letter-spacing:.1em;margin-bottom:14px}
-.def-card ul{list-style:none}
-.def-card li{font-size:13.5px;color:var(--muted);padding:7px 0;border-bottom:1px dashed var(--line);display:flex;gap:10px}
-.def-card li::before{content:"—";color:var(--amber);flex:none}
-.def-card li:last-child{border-bottom:none}
-.def-arrow{text-align:center;font-size:26px;color:var(--amber);animation:hint2 2s ease-in-out infinite}
-@keyframes hint2{50%{transform:translateX(6px)}}
-.queue-demo{margin-top:26px;border-top:1px dashed var(--line2);padding-top:22px}
-.q-row{display:grid;grid-template-columns:64px 1fr auto;gap:14px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--panel);transition:all .4s}
-.q-row .hits{font-family:var(--mono);font-size:12px;color:var(--amber);text-align:center}
-.q-row .qt{font-size:13px;color:#d9d2c0}
-.q-row .qa{display:flex;gap:8px}
-.q-btn{font-family:var(--mono);font-size:11px;padding:5px 14px;border-radius:99px;cursor:pointer;transition:all .25s;border:1px solid var(--line2);background:transparent;color:var(--muted)}
-.q-btn.adopt:hover{border-color:var(--teal);color:var(--teal)}
-.q-btn.reject:hover{border-color:var(--red);color:var(--red)}
-.q-row.adopted{border-color:var(--teal);background:var(--teal-dim)}
-.q-row.rejected{opacity:.3;text-decoration:line-through}
-
-/* ── creed ──────────────────────────────────── */
-.creed{margin:60px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
-@media(max-width:800px){.creed{grid-template-columns:1fr}}
-.creed div{background:var(--bg2);padding:34px 30px}
-.creed b{display:block;font-family:var(--serif);font-size:21px;margin-bottom:10px;color:var(--amber-hi)}
-.creed p{font-size:13.5px;color:var(--muted)}
-
-footer{border-top:1px solid var(--line);padding:60px 0 80px;margin-top:80px}
-footer .wrap{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap}
-footer .f-t{font-family:var(--serif);font-weight:900;font-size:20px}
-footer p{font-size:12.5px;color:var(--faint);margin-top:8px;max-width:420px;line-height:1.8}
-footer .src{font-family:var(--mono);font-size:11.5px;color:var(--faint);line-height:2.1;text-align:right}
-footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10px;margin-bottom:6px}
-
-/* ── 移动端适配（≤900px 箭头转向 / ≤760px 主断点 / ≤520px 收尾） ── */
-@keyframes hint2v{50%{transform:rotate(90deg) translateX(6px)}}
-/* defense 卡片 ≤900px 已单列：箭头数组旋转为纵向 */
-@media(max-width:900px){.def-arrow{animation-name:hint2v}}
-
-@media(max-width:760px){
-  body{font-size:15.5px}
-  .wrap{padding:0 20px}
-  section{padding:84px 0 56px}
-  .kicker{font-size:11px}
-  .sec-head{flex-wrap:wrap;gap:10px 18px;margin-bottom:10px}
-  .sec-num{font-size:50px}
-  .sec-sub{font-size:15.5px;margin-bottom:34px}
-  p.lede{font-size:17px}
-  /* hero：计数卡两列，canvas 光核随 JS 移回画面中心 */
-  .hero-stats{display:grid;grid-template-columns:1fr 1fr;gap:22px 16px;margin-top:52px}
-  .hstat{padding:0;margin:0;border-right:none}
-  .hstat b{font-size:32px}
-  .hstat b i{font-size:17px}
-  a.gh-corner{width:44px;height:44px;top:12px;right:14px}
-  .fig-panel{padding:22px 16px;border-radius:14px}
-  figcaption{font-size:12px}
-  .formula{font-size:12px;padding:12px 14px}
-  /* FIG.2 写入闸门：竖排流动；连接线改为贯穿图标列的竖线，chip 沿纵轴移动（见 JS setChip） */
-  .gates{position:relative;flex-direction:column;gap:44px;align-items:stretch;margin:30px auto 8px}
-  .gates::before{content:"";position:absolute;left:29px;top:26px;bottom:26px;width:1px;background:var(--line2);z-index:1}
-  .gate{min-height:52px;padding:0 8px 0 72px;text-align:left;display:flex;flex-direction:column;justify-content:center}
-  .gate::before{display:none}
-  .gate .ic{position:absolute;left:8px;top:50%;transform:translateY(-50%);margin:0;width:44px;height:44px;font-size:19px;z-index:2}
-  .gate-btns{margin:22px 0 4px}
-  .gate-btns .btn{flex:1 1 100%;text-align:center}
-  .gate-log{font-size:11px}
-  /* FIG.0 环路图：节点收缩防 390px 视口越界 */
-  .loop-node{width:104px;margin-left:-52px}
-  .loop-node .dot{width:10px;height:10px;margin-bottom:5px}
-  .loop-node .lb{font-size:11.5px}
-  .loop-node .sb{font-size:9px}
-  .loop-core b{font-size:15px}
-  .loop-core span{font-size:9px}
-  /* 代码向内容：内部横向滚动，不顶破版面 */
-  .anat-card{font-size:12px;padding:16px 18px;overflow-x:auto;line-height:1.9}
-  .anat-item{align-items:flex-start;line-height:1.6}
-  .mode-view{font-size:11.5px;padding:16px 14px;min-height:0}
-  /* FIG.1 双栏演示头部允许换行 */
-  .sim-head{flex-wrap:wrap;gap:6px}
-  /* 检索演示：字号保持 16px 防 iOS 聚焦自动缩放 */
-  .bm-query{font-size:16px;padding:12px 14px}
-  .bm-row{grid-template-columns:22px 1fr 58px;gap:10px;padding:10px 12px}
-  .bm-row .tx{font-size:12.5px}
-  .bm-row .sc{font-size:11px}
-  .bm-stamp{display:block;margin-left:0;font-size:9.5px}
-  /* 待确认队列：要点挤到下一行 */
-  .q-row{grid-template-columns:44px 1fr;gap:10px;padding:11px 12px}
-  .q-row .qa{grid-column:1/-1;justify-content:flex-end}
-  .life-now{font-size:40px}
-  .life-days{font-size:10px}
-  footer .src{text-align:left;margin-top:28px}
-}
-
-@media(max-width:520px){
-  .mode-btn{font-size:12px;padding:8px 13px;letter-spacing:0}
-  .sig-card{padding:22px 18px}
-  .tbl{padding:16px}
-  .creed div{padding:26px 20px}
-  .creed b{font-size:19px}
-  .bm-chip{font-size:11px;padding:6px 12px}
-}
-
-</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"一条记忆的一生 — Cairn 技术解析","description":"Cairn（dsh-memory）交互式技术解析：跟着一条记忆走完它的一生。捕获、写入安全闸、BM25 检索演练场、注入模式与衰减模拟器，在浏览器实时运行。","author":{"@type":"Person","name":"chenhw7"},"publisher":{"@type":"Person","name":"chenhw7"},"url":"https://chenhw7.github.io/dsh-memory/memory-architecture.zh-CN.html","image":"https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png","inLanguage":"zh-CN"}
+</script>
 </head>
-<body>
+<body class="deep">
 
 <div id="progress"></div>
 
-<a class="gh-corner" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener" aria-label="在 GitHub 上查看 dsh-memory 仓库" title="在 GitHub 上查看 dsh-memory 仓库">
-<svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-</a>
+<nav class="topnav" aria-label="主导航">
+  <div class="wrap topnav-in">
+    <a class="brand" href="index.zh-CN.html"><img src="assets/logo-512.webp" alt="" width="512" height="512">Cairn<i>.</i></a>
+    <div class="tn-links">
+      <a class="doc" href="index.zh-CN.html">主页</a>
+      <a href="memory-architecture.html" hreflang="en">English<span class="x"> version</span></a>
+      <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
+      <button class="tbtn" data-theme-toggle aria-label="切换明暗主题" title="切换明暗主题">
+        <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
 
-<nav id="sidenav">
-  <a href="#overview"><i></i><span>全景闭环</span></a>
-  <a href="#capture"><i></i><span>捕获与提取</span></a>
-  <a href="#store"><i></i><span>存储</span></a>
-  <a href="#retrieve"><i></i><span>检索</span></a>
-  <a href="#inject"><i></i><span>上下文注入</span></a>
-  <a href="#lifecycle"><i></i><span>生命周期</span></a>
-  <a href="#guard"><i></i><span>安全与人审</span></a>
+<nav id="sidenav" aria-label="站牌导航">
+  <a href="#overview"><i></i><span class="sn">00</span><span>全景</span></a>
+  <a href="#birth"><i></i><span class="sn">01</span><span>诞生</span></a>
+  <a href="#store"><i></i><span class="sn">02</span><span>入库</span></a>
+  <a href="#grow"><i></i><span class="sn">03</span><span>成长</span></a>
+  <a href="#recall"><i></i><span class="sn">04</span><span>召回</span></a>
+  <a href="#inject"><i></i><span class="sn">05</span><span>注入</span></a>
+  <a href="#decay"><i></i><span class="sn">06</span><span>衰减</span></a>
+  <a href="#farewell"><i></i><span class="sn">07</span><span>告别</span></a>
+  <a href="#evidence"><i></i><span class="sn">尾</span><span>基准与评估</span></a>
 </nav>
 
 <!-- ═══════════ HERO ═══════════ -->
-<header id="hero">
-  <canvas id="heroCanvas"></canvas>
+<header class="hero" id="top">
   <div class="wrap hero-inner">
-    <div class="hero-kick">DSH-MEMORY · 技术解析 · TECHNICAL DEEP-DIVE</div>
-    <h1 class="hero-title">让智能体的记忆<br><em>跨越每一次会话</em></h1>
-    <p class="hero-sub">dsh-memory 是一个可安装的记忆 bundle：它观察对话中的信号，把值得留下的经验沉淀入库，并在未来的每一次会话里，把相关的记忆精准地递回给模型。本文拆解它的完整流水线——从捕获、存储、检索到注入与衰亡。</p>
-    <div class="hero-lang"><a href="memory-architecture.html">English version →</a></div>
+    <div class="kick">CAIRN · TECHNICAL DEEP-DIVE · 技术解析</div>
+    <h1 class="hero-title">跟着一条记忆，<br><em>走完它的一生。</em></h1>
+    <p class="hero-sub">从一句「以后都用 pnpm」开始——它如何被捕获、过闸、入库、整合、召回、注入，又如何老去与告别。每一站都是源码里真实运行的机制；其中四个演示，此刻就在你的浏览器里跑。</p>
+    <div class="hero-lang"><a href="memory-architecture.html">English version →</a> · <a href="index.zh-CN.html">返回主页 →</a></div>
     <div class="hero-stats">
-      <div class="hstat"><b>7</b><span>个协作插件</span></div>
-      <div class="hstat"><b>3</b><span>张持久化表</span></div>
-      <div class="hstat"><b>9</b><span>个模型工具</span></div>
-      <div class="hstat"><b>2<i>×</i></b><span>写入 / 读取双防线</span></div>
+      <div class="hstat"><b>9</b><span>个模型可用工具</span></div>
+      <div class="hstat"><b>100<i>%</i></b><span>success@5 · golden set</span></div>
+      <div class="hstat"><b>967</b><span>个测试用例</span></div>
+      <div class="hstat"><b>4</b><span>张持久化表</span></div>
     </div>
   </div>
   <div class="scroll-hint">SCROLL ↓</div>
 </header>
 
-<!-- ═══════════ 00 全景 ═══════════ -->
-<section id="overview">
+<!-- ═══════════ 站 00 · 全景 ═══════════ -->
+<section class="station" id="overview">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">00</div><h2 class="sec-title">全景：记忆是一条流水线</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">记忆不是一张静态的表，而是一个有进、有出、有衰亡的循环系统。</p>
-    <div class="col rv" style="--d:.15s">
-      <p class="lede">每一次会话都会产生信号——一句「记住」、一次纠正、一段连败后终于成功的调试。dsh-memory 把这些信号收集起来，交给 LLM 提炼成条目，过安全闸后写入持久化的 KV 存储；等到下一次会话，检索平面再按相关性把它们送回上下文。被反复使用的记忆保持新鲜，无人问津的则 quietly 退场。</p>
+    <div class="sec-head rv">
+      <div class="st-num">00</div>
+      <h2 class="sec-title">全景：记忆是一条流水线</h2>
     </div>
-    <figure class="rv" style="--d:.2s">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.0 — THE LOOP</span>
-        <div class="loop-stage" id="loopStage">
-          <div class="loop-core"><b>memory.json</b><span>单一事实源</span></div>
-        </div>
-      </div>
-      <figcaption>记忆的闭环：感知 → 提取 → 入库 → 检索 → 注入 → 再回到会话。六个环节分别由独立插件承担，共享同一个存储域。</figcaption>
-    </figure>
-    <div class="col rv">
-      <p>实现上，它是七行 Cordis 编排：六个功能插件各司其职——<code>memory-store</code> 打开存储域并注册 <code>ctx.memory</code> 服务；<code>tool-memory</code> 暴露九个模型工具；<code>memory-review</code> 负责自动提取；<code>memory-context</code> 管理系统提示注入；<code>memory-notes</code> 把约定与踩坑渲染成 <code>project-notes</code> 提示词段落（不向仓库写任何文件）；<code>memory-remote</code> 支撑设置界面里的记忆管理中心（远程写默认关闭，需显式开启）——外加一个只做客户端模块发现的 <code>memory-root</code> 根条目。存储介质只是 <code>~/.dsh/storages/memory.json</code> 一个文件——卸载插件也不会丢失记忆。</p>
+    <p class="sec-sub rv" style="--d:.08s">Cairn（<code>@chenhw7/dsh-memory</code>）不是一张静态的表，而是一个有进、有出、有衰亡的循环系统。</p>
+
+    <div class="flow rv" style="--d:.12s">
+      <div class="fnode"><b>信号感知</b><span>projector</span></div>
+      <div class="farrow">→</div>
+      <div class="fnode"><b>LLM 提取</b><span>extract</span></div>
+      <div class="farrow">→</div>
+      <div class="fnode"><b>安全闸门</b><span>scanContent</span></div>
+      <div class="farrow">→</div>
+      <div class="fnode"><b>持久化</b><span>KV + audit</span></div>
+      <div class="farrow">→</div>
+      <div class="fnode"><b>BM25 检索</b><span>rank</span></div>
+      <div class="farrow">→</div>
+      <div class="fnode"><b>上下文注入</b><span>inject</span></div>
+    </div>
+    <div class="flow-loop rv" style="--d:.16s"><i>↺</i> 衰减与巡扫在后台回收：被反复使用的记忆保鲜，无人问津的退场——然后循环重新开始。</div>
+
+    <p class="lede rv" style="margin-top:44px">实现上，它是七行 Cordis 编排：<code>memory-store</code> 打开存储域并注册 <code>ctx.memory</code> 服务；<code>tool-memory</code> 暴露九个模型工具；<code>memory-review</code> 负责自动提取与整合；<code>memory-context</code> 管理系统提示注入；<code>memory-notes</code> 把约定与踩坑渲染成 <code>project-notes</code> 段落（不向仓库写任何文件）；<code>memory-remote</code> 支撑设置界面的记忆管理中心（远程写默认关闭）；<code>memory-root</code> 只做客户端模块发现。所有插件共享同一个存储域。</p>
+    <p class="rv" style="--d:.06s">数据落在 <code>$DSH_HOME/storages/memory.json</code>（默认的 host-medium 后端）或 <code>$DSH_HOME/storages/memory.db</code>（SQLite 后端）——卸载插件不会删除记忆。</p>
+
+    <div class="whybox rv" style="--d:.1s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么坚持单包发布、零依赖内核？</h4>
+      <p>一个 npm 包携带全部七行编排：宿主的服务以 peer 依赖声明，由已装的 DeepSeek Harness 提供，绝不重复安装；检索、分词、扫描内核手写零第三方依赖（记录在案的工程约束），SQLite 用 Node 内建 <code>node:sqlite</code>。tarball 预构建发布，安装环节零构建脚本——供应链越小，可信面积越小。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ 01 捕获 ═══════════ -->
-<section id="capture">
+<!-- ═══════════ 站 01 · 诞生 ═══════════ -->
+<section class="station" id="birth">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">01</div><h2 class="sec-title">捕获：只在有信号时学习</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">一个纯同步的投影累加器折叠会话事件流，攒够信号才打扰一次 LLM。</p>
-
-    <div class="col rv">
-      <p>每条用户消息和工具结果都会流过一个<strong>零 LLM 成本</strong>的投影累加器（session-projection）。它只收集三类候选片段——收集层刻意放宽漏斗，准入的保守由提取提示词负责：漏收是白损失，误收几乎免费。</p>
+    <div class="sec-head rv">
+      <div class="st-num">01</div>
+      <h2 class="sec-title">诞生：只在有信号时学习</h2>
     </div>
+    <p class="sec-sub rv" style="--d:.08s">每条用户消息和工具结果都会流过一个零 LLM 成本的投影累加器——它只认三类信号。</p>
 
-    <div class="cards3">
-      <div class="sig-card rv" style="--d:.05s">
-        <div class="no">SIGNAL / 01</div>
-        <h3><i>显式意图</i> keyword</h3>
+    <div class="grid3">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">SIGNAL / 01</div>
+        <h3>显式意图 · keyword</h3>
         <p>用户直接要求记住。中英文的「记住 / 以后都 / 帮我记 / remember that / from now on」等模式命中即入候选。</p>
-        <div class="eg">"记住：这个项目部署在 8080 端口"</div>
+        <div class="tags"><span class="tag warn">"记住：部署在 8080 端口"</span></div>
       </div>
-      <div class="sig-card rv" style="--d:.15s">
-        <div class="no">SIGNAL / 02</div>
-        <h3><i>用户修正</i> correction</h3>
-        <p>用户推翻之前的说法。「不对 / 其实是 / actually / I meant」——修正意味着旧认知是错的，新结论值得沉淀。</p>
-        <div class="eg">"不对，其实用的是 pnpm 不是 npm"</div>
+      <div class="card rv" style="--d:.12s">
+        <div class="ic">SIGNAL / 02</div>
+        <h3>用户纠正 · correction</h3>
+        <p>用户推翻之前的说法。「不对 / 其实是 / actually / I meant」——纠正意味着旧认知是错的，新结论值得沉淀。</p>
+        <div class="tags"><span class="tag warn">"不对，用的是 pnpm 不是 npm"</span></div>
       </div>
-      <div class="sig-card rv" style="--d:.25s">
-        <div class="no">SIGNAL / 03</div>
-        <h3><i>失败序列</i> pitfall-resolved</h3>
-        <p>同一签名的工具调用连续失败（默认 ≥2 次）后终于成功——这次成功就是被验证过的 workaround，蒸馏成踩坑条目。</p>
-        <div class="eg">tool error ×2 → ✓ → [pitfall] 症状/根因/修复</div>
+      <div class="card rv" style="--d:.22s">
+        <div class="ic">SIGNAL / 03</div>
+        <h3>失败序列 · pitfall-resolved</h3>
+        <p>同一签名的工具调用连续失败（默认 ≥2 次）后终于成功——这次成功是被验证过的 workaround，蒸馏成踩坑条目。单次失败不入库。</p>
+        <div class="tags"><span class="tag warn">tool error ×2 → ✓ → [pitfall]</span></div>
       </div>
     </div>
 
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.1 — EXTRACTION, LIVE</span>
-        <div class="sim">
-          <div class="sim-col">
-            <div class="sim-head"><b>事件流 → 投影累加器</b><span class="cnt" id="simCnt">候选 0 / 阈值 3</span></div>
-            <div id="simStream"></div>
-            <div class="sim-bar"><i id="simBar"></i></div>
-            <div class="sim-note" id="simNote">// 只有命中信号的事件才被累计，零 LLM 调用</div>
-          </div>
-          <div class="sim-col">
-            <div class="sim-head"><b>Drain：提取 → 裁决 → 入库</b><span class="cnt" id="simCost">提取预算 20/20（本会话）</span></div>
-            <div id="simOut"></div>
-          </div>
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">提取的触发线（静态图解；演示阈值 3，实际默认 10）</span>
+        <div class="flow">
+          <div class="fnode"><b>事件流</b><span>消息 · 工具结果</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>命中信号？</b><span>三类之一 · 零 LLM</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>候选累加器</b><span>高水位线之前</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>≥ 阈值</b><span>下个 step 触发</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>Drain</b><span>一次 LLM 提取</span></div>
         </div>
+        <div class="flow-loop">提取预算 <b style="color:var(--accent-text)">20 次/会话</b>：drain 计 1，批次内部的多次调用不计数；耗尽即本会话停提——成本的硬顶。</div>
       </div>
-      <figcaption>演示阈值设为 3（实际默认 10，可实时配置）。高水位线只在提取成功后推进——失败的批次留待重试，去重保证重放幂等。</figcaption>
+      <figcaption>高水位线只在提取成功后推进——失败的批次留待重试；候选片段先压平成单行，日期前缀在解析层剥离，时间戳永远由程序盖戳。</figcaption>
     </figure>
 
-    <div class="col rv">
-      <div class="spec">
-        <div class="spec-row">
-          <span class="spec-k">兜底</span>
-          <p>两条 <strong>flush</strong> 路径保证信号不丢失：<strong>压缩结束</strong>（<code>compaction/end</code>）从被遮蔽的原始事件里提取；<strong>会话销毁</strong>（<code>session/disposed</code>）对全会话未压缩的消息做最后一次提取（5 秒超时、fire-and-forget）。</p>
-        </div>
-        <div class="spec-row">
-          <span class="spec-k">预算</span>
-          <p>周期评审、压缩兜底、销毁兜底、定期整理共用每会话 <strong>20</strong> 次提取预算：每触发一次 drain 计 1——批次内部的多次 LLM 调用、去重裁决都不计数，设 0 不限。耗尽后本会话不再自动提取，这是成本的硬顶。</p>
-        </div>
-        <div class="spec-row">
-          <span class="spec-k">准入</span>
-          <p>提取提示词本身是道闸：<em>仓库已记录的内容、瞬时状态与未验证假设、未被工具验证过的流程</em>都不记；偏好类需用户明确提出或主题重复出现。日期前缀在解析层剥离——时间戳永远由程序盖戳；输出走 <code>scope: content</code> 行协议，片段先压平成单行，防止伪造行污染协议。</p>
-        </div>
+    <div class="spec">
+      <div class="spec-row rv" style="--d:.04s">
+        <span class="spec-k">兜底</span>
+        <p>两条 <strong>flush</strong> 路径保证信号不丢：<strong>压缩结束</strong>（<code>compaction/end</code>）从被遮蔽的原始事件里提取；<strong>会话销毁</strong>（<code>session/disposed</code>）对全会话做最后一次提取（5 秒上限、fire-and-forget，绝不阻塞事件）。</p>
       </div>
+      <div class="spec-row rv" style="--d:.1s">
+        <span class="spec-k">准入</span>
+        <p>提取提示词本身是道闸：<em>仓库已记录的内容、瞬时状态与未验证假设、未经工具验证的流程</em>都不记；偏好类需用户明确提出或主题反复出现。输出行协议产出 <code>[anchors:…]</code> 与 <code>[project]</code> 标签，projectName 取最高优先级来源。</p>
+      </div>
+      <div class="spec-row rv" style="--d:.16s">
+        <span class="spec-k">策展</span>
+        <p>每 20 个会话，curator 把超长（≥400 字符）的条目挑出来——每批最多 5 条——交给提取模型改写成简洁单行。记忆库既会遗忘，也会沉淀。</p>
+      </div>
+    </div>
+
+    <div class="whybox rv" style="--d:.2s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么收集放宽、准入从严？</h4>
+      <p>收集层刻意放宽漏斗，保守由提取提示词承担：漏收是白损失——真信号一去不返；误收几乎免费——下一站的去重与整合会把噪音裁掉。把闸门放错位置，代价是不对称的。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ 02 存储 ═══════════ -->
-<section id="store">
+<!-- ═══════════ 站 02 · 入库 ═══════════ -->
+<section class="station" id="store">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">02</div><h2 class="sec-title">存储：先过闸，再落库</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">每一次写入——无论来自模型工具还是后台提取——都必须穿过同一道闸门。</p>
+    <div class="sec-head rv">
+      <div class="st-num">02</div>
+      <h2 class="sec-title">入库：先过闸，再落库</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">每一次写入——无论来自模型工具还是后台提取——都必须穿过同一道闸门。亲手试试：</p>
 
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.2 — THE WRITE PATH, INTERACTIVE</span>
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">演示 1 · 写入安全门（交互）</span>
         <div class="gates" id="gates">
           <div class="chip" id="chip"><div class="payload" id="payload">memory_add</div></div>
           <div class="gate" data-g="0"><div class="ic">✎</div><div class="gt">结构校验</div><div class="gs">scope + projectName</div></div>
-          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">安全扫描</div><div class="gs">16 密钥 · 17 注入 · 4 外泄</div></div>
+          <div class="gate" data-g="1"><div class="ic">⛨</div><div class="gt">安全扫描</div><div class="gs">37 条规则</div></div>
           <div class="gate" data-g="2"><div class="ic">▤</div><div class="gt">KV 落库</div><div class="gs">entries.put</div></div>
           <div class="gate" data-g="3"><div class="ic">≡</div><div class="gt">审计追加</div><div class="gs">audit + seq</div></div>
         </div>
@@ -538,87 +218,170 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
           <div id="miniStore"><div class="ms-row audit">audit #41 · update · source:janitor · "…staleSince 盖章"</div></div>
         </div>
       </div>
-      <figcaption>扫描器是纯函数：37 条正则覆盖 16 类密钥、17 条注入模式（含 8 条中文对应规则）与 4 类外泄企图，支持白名单豁免。读取侧还有第二道防线（见 06）。</figcaption>
+      <figcaption>扫描器是纯函数：37 条正则覆盖 16 类密钥、17 条注入模式（含 8 条中文对应规则）与 4 类外泄企图，支持白名单豁免示例值。读取侧还有第二道防线（见站 05）。</figcaption>
     </figure>
 
-    <div class="anat rv" style="margin-top:70px">
+    <div class="anat rv">
       <div>
-        <div class="anat-card" id="anatCard">{<br>
+        <div class="anat-card">{<br>
 &nbsp;&nbsp;<span class="k">"id"</span>: <span class="v">"mem_9f2c…"</span>,<br>
 &nbsp;&nbsp;<span class="k">"scope"</span>: <span class="v">"project"</span>,&nbsp;&nbsp;<span class="c">// ①</span><br>
 &nbsp;&nbsp;<span class="k">"category"</span>: <span class="v">"convention"</span>,&nbsp;&nbsp;<span class="c">// ②</span><br>
-&nbsp;&nbsp;<span class="k">"content"</span>: <span class="v">"提交信息用中文…"</span>,<br>
+&nbsp;&nbsp;<span class="k">"content"</span>: <span class="v">"提交信息用中文，首行不超过 50 字"</span>,<br>
 &nbsp;&nbsp;<span class="k">"summary"</span>: <span class="v">"中文提交信息约定"</span>,&nbsp;&nbsp;<span class="c">// ③</span><br>
 &nbsp;&nbsp;<span class="k">"projectName"</span>: <span class="v">"dsh-memory"</span>,<br>
-&nbsp;&nbsp;<span class="k">"createdAt"</span>: <span class="v">1756…</span>, <span class="k">"updatedAt"</span>: <span class="v">1756…</span>,<br>
-&nbsp;&nbsp;<span class="k">"pinned"</span>: <span class="v">false</span>,&nbsp;&nbsp;<span class="c">// ④</span><br>
-&nbsp;&nbsp;<span class="k">"accessCount"</span>: <span class="v">7</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
-&nbsp;&nbsp;<span class="k">"lastRecalledAt"</span>: <span class="v">1756…</span>,&nbsp;&nbsp;<span class="c">// ⑥</span><br>
-&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑦</span><br>}
+&nbsp;&nbsp;<span class="k">"anchors"</span>: <span class="v">["提交信息"]</span>,&nbsp;&nbsp;<span class="c">// ④</span><br>
+&nbsp;&nbsp;<span class="k">"importance"</span>: <span class="v">4</span>,&nbsp;&nbsp;<span class="c">// ⑤</span><br>
+&nbsp;&nbsp;<span class="k">"pinned"</span>: <span class="v">false</span>,&nbsp;&nbsp;<span class="c">// ⑥</span><br>
+&nbsp;&nbsp;<span class="k">"status"</span>: <span class="v">"active"</span>, <span class="k">"supersededBy"</span>: <span class="v">undefined</span>,&nbsp;&nbsp;<span class="c">// ⑦</span><br>
+&nbsp;&nbsp;<span class="k">"accessCount"</span>: <span class="v">7</span>, <span class="k">"lastRecalledAt"</span>: <span class="v">1756699…</span>,&nbsp;&nbsp;<span class="c">// ⑧</span><br>
+&nbsp;&nbsp;<span class="k">"hitCount"</span>: <span class="v">3</span>,&nbsp;&nbsp;<span class="c">// ⑨</span><br>
+&nbsp;&nbsp;<span class="k">"staleSince"</span>: <span class="v">undefined</span>&nbsp;&nbsp;<span class="c">// ⑩</span><br>}
         </div>
       </div>
       <div class="anat-list">
-        <div class="anat-item"><b>scope</b><span>三层作用域：global 跨项目、project 按仓库（cwd 自动推断）、user 跟随个人</span></div>
-        <div class="anat-item"><b>category</b><span>七类课程：failure / correction / insight / preference / convention / tool-quirk / procedure</span></div>
-        <div class="anat-item"><b>summary</b><span>可选短摘要——索引与自动召回优先渲染它，渐进式披露</span></div>
-        <div class="anat-item"><b>pinned</b><span>置顶即免疫衰减：「用户希望它被记住」</span></div>
-        <div class="anat-item"><b>accessCount</b><span>每次命中都 +1 并刷新 lastRecalledAt——容量淘汰时，使用信号最低的条目先走</span></div>
-        <div class="anat-item"><b>lastRecalledAt</b><span>每次被检索/读取命中都会刷新——使用频率就是保鲜剂</span></div>
-        <div class="anat-item"><b>staleSince</b><span>软衰减章：被盖章后退出注入面，但仍可搜索、可复活</span></div>
+        <div class="anat-item"><b>① scope</b><span>三层作用域：global 跨项目、project 按仓库（cwd 自动推断）、user 跟随个人</span></div>
+        <div class="anat-item"><b>② category</b><span>七类课程：failure / correction / insight / preference / convention / tool-quirk / procedure</span></div>
+        <div class="anat-item"><b>③ summary</b><span>可选短摘要——索引与自动召回优先渲染它，渐进式披露；也入检索索引，同义查询靠它命中</span></div>
+        <div class="anat-item"><b>④ anchors</b><span>提取阶段产出的锚点标签——命中信号与巡扫选对的重要线索</span></div>
+        <div class="anat-item"><b>⑤ importance</b><span>1–5 模型自评：高分延长衰减宽限期，并作为检索排序的弱断平</span></div>
+        <div class="anat-item"><b>⑥ pinned</b><span>置顶即免疫衰减、豁免批量遗忘——「用户希望它被记住」</span></div>
+        <div class="anat-item"><b>⑦ status</b><span>冲突取代的唯一通道：旧条目转 superseded 并指向新条目（见站 03）</span></div>
+        <div class="anat-item"><b>⑧ accessCount</b><span>每次命中 +1 并刷新 lastRecalledAt——使用频率就是保鲜剂；容量淘汰时低使用者先走</span></div>
+        <div class="anat-item"><b>⑨ hitCount</b><span>答案回声命中（v0.9，可选）：注入条目被回答复述时 +1——只喂巡扫，从不触发删除</span></div>
+        <div class="anat-item"><b>⑩ staleSince</b><span>软衰减章：被盖章后退出注入面，但仍可搜索、可复活</span></div>
       </div>
     </div>
 
-    <div class="tables3">
-      <div class="tbl rv" style="--d:.05s"><h4>entries</h4><div class="tb-sub">KvTable&lt;MemoryId, MemoryEntry&gt; · 软上限 500</div><p>记忆条目主表。读取同步走内存权威态，写在域写链上串行化，先达后端再更新内存。写后超出软上限（<code>entriesCap</code>，可配）即按使用信号淘汰：pinned 免疫，accessCount / lastRecalledAt 最低者先走；全部豁免时允许超限，绝不硬删健康数据。</p></div>
-      <div class="tbl rv" style="--d:.15s"><h4>audit</h4><div class="tb-sub">cap = 200 条</div><p>每次成功变更追加一条审计：操作、来源（tool/review/flush/ui/janitor）、单调 seq、内容预览。谁写的、何时写的，永远可查。</p></div>
-      <div class="tbl rv" style="--d:.25s"><h4>suggestions</h4><div class="tb-sub">cap = 200 条</div><p>人审模式的待确认队列。提议不是记忆——不注入、不搜索、不衰减，只等待人的裁决（见 06）。</p></div>
+    <div class="tbls">
+      <div class="tbl rv" style="--d:.02s"><h4>entries</h4><div class="tb-sub">软上限 500（entriesCap 可配）</div><p>记忆主表。写在域写链上串行化；超出软上限按使用信号淘汰（pinned 免疫，accessCount / lastRecalledAt 最低者先走），全部豁免时允许超限——绝不硬删健康数据。</p></div>
+      <div class="tbl rv" style="--d:.1s"><h4>audit</h4><div class="tb-sub">cap = 200 条 · 单调 seq</div><p>每次成功变更追加：操作、来源（tool / review / flush / ui / janitor）、内容预览。谁写的、何时写的，永远可查。</p></div>
+      <div class="tbl rv" style="--d:.18s"><h4>suggestions</h4><div class="tb-sub">cap = 200 条</div><p>人审模式的待确认队列。提议不是记忆——不注入、不搜索、不衰减，只等待人的裁决（见站 07）。</p></div>
+      <div class="tbl rv" style="--d:.26s"><h4>meta</h4><div class="tb-sub">v0.9 新增</div><p>系统元数据：SQLite 迁移水位线（防止二次迁移）、全库巡扫的进度与冷却、整合管线元信息。</p></div>
     </div>
 
-    <div class="col rv" style="margin-top:44px">
-      <p>存储还有一层<strong>跨进程单写者检测</strong>：宿主的存储后端假设每个进程独占写入——两个 DSH 进程共享同一存储根时，各自持有内存权威态并整文件回写，互相静默覆盖。memory-store 因此每次启动把一枚 owner stamp（pid + bootId）写进存储域的 global 槽，并周期性回读：自己写的印章读回来变成别家的，即证明存在并发发布者，立即上报。它只检测、不加锁——pid 已死或干净退出的前代印章不算活威胁，重启场景不会误报。</p>
+    <p class="lede rv" style="margin-top:56px">存储有两种后端，一条配置切换：</p>
+    <div class="cmp-wrap rv" style="--d:.06s">
+      <table class="cmp">
+        <tr><th>维度</th><th>host-medium（默认）</th><th>sqlite</th></tr>
+        <tr><td>文件</td><td><code>$DSH_HOME/storages/memory.json</code></td><td><code>$DSH_HOME/storages/memory.db</code></td></tr>
+        <tr><td>引擎</td><td>宿主存储域 KV（与其他插件同构）</td><td>Node 内建 <code>node:sqlite</code>，WAL + busy_timeout，零额外依赖</td></tr>
+        <tr><td>写路径</td><td>域写链串行化，每次写整文件重新发布</td><td class="ok"><b>每逻辑写 1 个事务</b>（entries + audit 原子提交）</td></tr>
+        <tr><td>写放大 A/B<br>（226 次逻辑写）</td><td>628 次全文件发布（2.78/写）· 累计 ~62 MB · 2.2 s</td><td class="ok"><b>0 次全文件发布</b> · 139 KB · 0.79 s（≈2.8×）</td></tr>
+        <tr><td>切换</td><td colspan="2">配置 <code>storage: 'sqlite'</code> 启动时一次性迁移并盖 <code>migratedToSqlite</code> 水位线；迁移后任一侧误启动都会 <b>fail loud</b>，绝不静默分叉</td></tr>
+      </table>
+    </div>
+
+    <p class="rv" style="--d:.1s" >还有一层<strong>跨进程单写者检测</strong>：存储后端假设每个进程独占写入——两个 DSH 进程共享同一存储根时会互相静默覆盖。memory-store 每次启动把一枚 owner stamp（pid + bootId）写进存储域的 global 槽并周期回读：读回别家的活印章即证明存在并发发布者，立即上报。它只检测、不加锁；已死 pid 或干净退出的前代印章不算威胁，重启不会误报。</p>
+
+    <div class="whybox rv" style="--d:.14s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么 SQLite 是可选，而不是默认？</h4>
+      <p>host-medium 走宿主存储域，与其他插件同构、不引入额外文件，小写入量的记忆库完全够用；SQLite 服务于高写入场景（自动提取 + 巡扫 + 命中盖章），把整文件写放大压成每写一个事务。迁移只做一次且方向不可逆，两侧都会 fail loud——两条后端并存只会带来静默分叉，那是比慢更糟的故障。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ 03 检索 ═══════════ -->
-<section id="retrieve">
+<!-- ═══════════ 站 03 · 成长 ═══════════ -->
+<section class="station" id="grow">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">03</div><h2 class="sec-title">检索：零依赖的 BM25</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">没有向量库、没有嵌入模型——一套约 270 行的零依赖 Okapi BM25，配上 CJK 感知分词与拉丁保守词干。</p>
+    <div class="sec-head rv">
+      <div class="st-num">03</div>
+      <h2 class="sec-title">成长：去重、整合与冲突取代</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">新条目不直接堆进库里——它先和既有的记忆对质。</p>
 
-    <div class="col rv">
-      <p>检索分两步：<strong>结构化过滤先行</strong>（scope / category / projectName），再对幸存候选做 BM25 打分。分词器对拉丁文按词切分，并剥掉一个保守的规则后缀收敛词形——<code>uses→use</code>、<code>studies→study</code>，而 <code>class</code>、<code>basis</code> 这类词干永不受损（文档与查询共用同一分词器）；对中文同时产出<strong>单字一元 + 相邻二字 bigram</strong>——bigram 让「记忆」不再命中所有只含「记」的条目，一元保留单字查询的召回。summary 与正文一起入索引，短摘要同样能召回条目。排序依次按：相关性 ↓、置顶 ↓、新近度 ↓。</p>
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">整合管线（静态图解；裁决规则与 src/review 一致）</span>
+        <div class="flow">
+          <div class="fnode"><b>新条目</b><span>提取产出</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>预筛</b><span>IDF 加权重叠 ≥ 0.15</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>两层整合</b><span>每批一次 LLM</span></div>
+          <div class="farrow">→</div>
+          <div class="fnode"><b>逐对裁决</b><span>merge / update /<br>conflict / new</span></div>
+        </div>
+        <div class="flow-loop">预筛阈值经真伪对校准（量级分离），零 LLM 成本先滤掉绝大多数无关对——包括跨作用域的对。</div>
+        <div class="queue" style="border-top:none;padding-top:6px">
+          <div class="q-row"><div class="hits">merge</div><div class="qt">"项目用 pnpm" + "包管理器统一 pnpm" → 合并为一条，保留更完整的表述</div></div>
+          <div class="q-row"><div class="hits">update</div><div class="qt">"CI 用 jest" ⟵ 新观察 "CI 其实用 vitest" → 更新既有条目，审计留痕</div></div>
+          <div class="q-row"><div class="hits">conflict</div><div class="qt">"部署在 8080" ⟵ 新观察 "端口改到 9090" → 旧条目 <b style="color:var(--bad)">superseded</b>，supersededBy 指向新条目</div></div>
+          <div class="q-row"><div class="hits">new</div><div class="qt">与库中任何条目都不相关 → 直接入库</div></div>
+        </div>
+      </div>
+      <figcaption>两层整合（v0.9 默认）：词法预筛 + 每批一次 LLM 批量裁决，取代旧的逐对判分；<code>consolidation: 'legacy-judge'</code> 保留旧路径作为开关。</figcaption>
+    </figure>
+
+    <div class="spec">
+      <div class="spec-row rv" style="--d:.04s">
+        <span class="spec-k">巡扫</span>
+        <p><strong>全库巡扫</strong>（可选，默认关）：每 20 个会话创建时，按使用信号从全库挑出 top 20 对条目重新过一遍裁决协议——专抓零共享 token 的同义改写；进度与冷却（≥1 小时）持久在 meta 表。</p>
+      </div>
+      <div class="spec-row rv" style="--d:.1s">
+        <span class="spec-k">命中</span>
+        <p><strong>命中信号</strong>（可选，默认关）：每轮被注入的条目进入会话内台账；当助手的回答复述了某条目的 token 或 anchors，<code>hitCount</code> / <code>lastHitAt</code> +1——它<strong>只喂巡扫选对</strong>，从不参与删除。</p>
+      </div>
     </div>
 
-    <div class="formula rv">score = Σ <i>IDF(term)</i> × <b>tf·(k₁+1) / (tf + k₁·(1−b + b·|d|/avgdl))</b>　　<span class="dim">k₁ = 1.2, b = 0.75, IDF 非负变体</span></div>
+    <div class="whybox rv" style="--d:.14s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么 conflict 直接取代旧条目？</h4>
+      <p>被推翻的旧结论继续以「事实」身份被注入，是记忆库最危险的谎言——模型会拿着过期信息反驳当下的现实。取代不是删除：原文、审计与 <code>supersededBy</code> 指针全部保留，证据链完整可查；只是从此不再把它当作当前事实。</p>
+    </div>
+  </div>
+</section>
 
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.3 — 真实运行的检索内核（本页面内嵌同一算法）</span>
+<!-- ═══════════ 站 04 · 召回 ═══════════ -->
+<section class="station" id="recall">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="st-num">04</div>
+      <h2 class="sec-title">召回：零依赖的 BM25</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">没有向量库、没有嵌入模型——一套零依赖的 Okapi BM25，配上 CJK 感知分词与拉丁保守词干。</p>
+
+    <p class="lede rv" style="margin-top:40px">检索分两步：<strong>结构化过滤先行</strong>（scope / category / projectName），再对幸存候选做 BM25 打分——文档频率按全语料统计，防止小候选池里的常见词虚高。分词器对拉丁文按词切分并剥一个保守后缀收敛词形（<code>uses→use</code>、<code>studies→study</code>，<code>class</code>、<code>basis</code> 永不受损）；对中文同时产出<strong>单字一元 + 相邻二元</strong>——bigram 让「记忆」不再命中所有只含「记」的条目，一元保留单字查询的召回。summary 与正文同入索引。最终排序：<strong>相关性 ↓ → 置顶 ↓ → importance（缺省按中位）↓ → 新近度 ↓</strong>。</p>
+
+    <div class="formula rv" style="--d:.05s">score = Σ <i>IDF(term)</i> × <b>tf·(k₁+1) / (tf + k₁·(1−b + b·|d|/avgdl))</b>　　<span class="dim">k₁ = 1.2, b = 0.75, IDF 非负变体</span></div>
+
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">演示 2 · 真实运行的检索内核（本页面内嵌同一算法）</span>
         <input class="bm-query" id="bmQuery" placeholder="输入查询，试试：包管理器 / 端口 / 评审意见 / OOM …" value="包管理器">
         <div class="bm-chips" id="bmChips"></div>
         <div style="margin-top:14px" id="bmTokens"></div>
         <div class="bm-res" id="bmRes"></div>
-        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · P@1 = 82.9% · MRR = 0.902（35 条 × 35 查询 · en+zh，CI 实测）</span></div>
+        <div class="bm-meta"><span id="bmMeta"></span><span>golden set: success@5 = 100% · P@1 = 82.9% · MRR = 0.902（35 条目 × 35 查询 · en+zh · CI 门禁）</span></div>
       </div>
-      <figcaption>上方是移植自 src/store/bm25.ts 的同一份算法在浏览器里实时运行。命中即盖章 lastRecalledAt——召回本身就是保鲜。</figcaption>
+      <figcaption>上方是移植自 src/store/bm25.ts 的同一份算法在浏览器里实时运行（演示库 10 条；置顶 / importance / 新近三道断平未包含在演示中）。命中即盖章 lastRecalledAt——召回本身就是保鲜。</figcaption>
     </figure>
+
+    <p class="rv" style="--d:.06s"><strong>零命中回退</strong>：非空查询一个词法命中都没有时，<code>memory_search</code> 返回同过滤器下最近的条目并标记 <code>fallback: true</code>——只发生在工具返回里，注入面永不兜底。基准工具以 <code>@chenhw7/dsh-memory/benchmark</code> 导出，golden set 在 CI 里设下限门禁：success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、中文切片 success@5 ≥ 0.8。</p>
+
+    <div class="whybox rv" style="--d:.1s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么不用向量检索？</h4>
+      <p>零依赖是记录在案的工程约束：BM25 可解释、零运行成本、离线可跑可测；中文二元分词补上了词级精度。诚实的代价也在明面上——没有跨语言与换说法的语义召回，golden set 的同义改写切片靠 summary 入索引兜住。等真实负载证明词法不够用时再评估升级，今天不为假设的需求付复杂度。</p>
+    </div>
   </div>
 </section>
 
-<!-- ═══════════ 04 注入 ═══════════ -->
-<section id="inject">
+<!-- ═══════════ 站 05 · 注入 ═══════════ -->
+<section class="station" id="inject">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">04</div><h2 class="sec-title">注入：冻结、预算与渐进披露</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">记忆如何进入上下文，决定了它为模型省下的每一个 token。</p>
-
-    <div class="col rv">
-      <p>每个会话在创建时<strong>冻结一份记忆快照</strong>，整个会话期间复用——这是为了 KV-cache 前缀稳定：前缀不变，缓存全中。唯一被打破的时刻是压缩（反正提示词都要重建），中途学到的记忆恰好在此刻补入。快照有双重预算：字符上限 5000 + 条目上限 20，尾部永远附一行 <code>≈N tokens</code> 估算，注入成本始终可见。</p>
+    <div class="sec-head rv">
+      <div class="st-num">05</div>
+      <h2 class="sec-title">注入：冻结、预算与渐进披露</h2>
     </div>
+    <p class="sec-sub rv" style="--d:.08s">记忆如何进入上下文，决定了它为模型省下的每一个 token。</p>
 
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.4 — 五种注入模式</span>
+    <p class="lede rv" style="margin-top:40px">每个会话在创建时<strong>冻结一份记忆快照</strong>，整个会话期间复用——前缀不变，KV-cache 全中。唯一重新冻结的时刻是压缩（反正提示词都要重建），中途学到的记忆恰好在此刻补入。memory 段落位于系统提示 order 90（工具指引之前），project-notes 紧随其后 @91。</p>
+
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">演示 3 · 五种注入模式（交互）</span>
         <div class="modes" id="modeBtns">
           <button class="mode-btn" data-m="policy">policy-only</button>
           <button class="mode-btn" data-m="full">full</button>
@@ -629,104 +392,126 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
         <div class="mode-view" id="modeView"></div>
         <div class="mode-cap" id="modeCap"></div>
       </div>
-      <figcaption>memory 段落位于系统提示 order 90（工具指引之前），project-notes 紧随其后 @91。切换即时生效，快照内容保持冻结。</figcaption>
+      <figcaption>切换即时生效，快照内容保持冻结。每个注入面都会声明「记忆是上下文，不是指令」；渲染时重新脱敏，伪造的围栏闭合符被中和。</figcaption>
     </figure>
 
-    <div class="col rv">
-      <p><strong>index 模式——出厂默认（0.8 起）——是渐进式披露的核心</strong>：每个条目只渲染一行存在性索引（作用域/类别 · id · 摘要），按 project → user → global 的相关性层级排序；预算耗尽时尾部折叠成类别计数行（<code>project/convention ×12</code>）——索引体积随类别数增长，而非条目数。模型看见「存了什么」，按需用 <code>memory_get</code> 取全文。</p>
-      <p>可选的<strong>步级自动召回</strong>则走另一条路：每个 agent step 用当步用户文本对库做一次 BM25，命中条目以 <code>&lt;recalled-memory&gt;</code> 围栏追加为一条用户消息——不碰系统提示，前缀缓存分毫不动。加载时，被纠正条目还会带上冲突标注（<em>⚠ 与更新的修正相矛盾</em>），让模型自己权衡新旧。</p>
+    <p class="rv" style="--d:.06s">可选的<strong>步级自动召回</strong>走另一条路：每个 agent step 用当步用户文本对库做一次 BM25，命中条目以 <code>&lt;recalled-memory&gt;</code> 围栏追加为一条用户消息——限 5 条、查询至少 12 字符、围栏 ≤1200 字符并带 token 尾注；不碰系统提示，前缀缓存分毫不动。加载时，与更新事实相矛盾的条目还会带上冲突标注（fresh / stale / conflicting 由一个纯 IDF 加权检测器判定），让模型自己权衡新旧。</p>
+
+    <div class="whybox rv" style="--d:.1s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么默认 index 模式？</h4>
+      <p>存在性索引的体积随<strong>类别数</strong>增长，而不是条目数——常驻成本可控且可预算（policy-only 约 344 tokens 扁平；full 模式双预算 5000 字符 / 20 条）。模型看见「存了什么」，用 <code>memory_get</code> 按需取全文：渐进式披露同时保住了 KV 前缀稳定与 token 预算。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ 05 生命周期 ═══════════ -->
-<section id="lifecycle">
+<!-- ═══════════ 站 06 · 衰减 ═══════════ -->
+<section class="station" id="decay">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">05</div><h2 class="sec-title">生命周期：记忆会老去</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">janitor 在每次会话创建时巡场。拖动时间轴，看三种条目的不同命运。</p>
+    <div class="sec-head rv">
+      <div class="st-num">06</div>
+      <h2 class="sec-title">衰减：记忆会老去</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">janitor 在每次会话创建时巡场。拖动时间轴，看三种条目的不同命运：</p>
 
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.5 — 衰减模拟器（decayDays = 30）</span>
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">演示 4 · 衰减模拟器（交互，decayDays = 30）</span>
         <div class="life-now"><span id="lifeDay">0</span> <small>天后 · janitor 巡场中</small></div>
-        <input type="range" class="life-slider" id="lifeSlider" min="0" max="45" value="0" step="1">
-        <div class="life-days"><span>day 0</span><span>day 15</span><span style="color:var(--red)">day 30 — 衰减线</span><span>day 45</span></div>
+        <input type="range" class="life-slider" id="lifeSlider" min="0" max="45" value="0" step="1" aria-label="模拟天数">
+        <div class="life-days"><span>day 0</span><span>day 15</span><span style="color:var(--bad)">day 30 — 衰减线</span><span>day 45</span></div>
         <div class="life-cards">
-          <div class="lc" id="lcProject">
-            <span class="lc-tag" style="background:rgba(96,165,250,.14);color:#7db4f8">project</span>
+          <div class="lc" id="lcProject" data-dead="已硬删除">
+            <span class="lc-tag pj">project</span>
             <p>"部署脚本在 scripts/deploy.sh，端口 8080"</p>
             <div class="lc-state" id="lcProjectState">// 活跃 · 30 天未被召回将硬删除</div>
           </div>
           <div class="lc" id="lcGlobal">
-            <span class="lc-tag" style="background:var(--teal-dim);color:var(--teal)">global</span>
+            <span class="lc-tag gl">global</span>
             <p>"代理环境下 pnpm 需先设置 registry 镜像"</p>
             <div class="lc-state" id="lcGlobalState">// 活跃 · 30 天未被召回将软衰减</div>
             <button class="revive-btn" id="reviveBtn">↺ memory_search 再次召回它</button>
           </div>
           <div class="lc" id="lcPinned">
-            <span class="lc-tag" style="background:var(--amber-dim);color:var(--amber)">pinned · user</span>
+            <span class="lc-tag pn">pinned · user</span>
             <p>"代码评审意见必须逐条给出理由"</p>
             <div class="lc-state">// 置顶 · 免疫一切衰减</div>
           </div>
         </div>
         <div class="life-log" id="lifeLog"><div>// 审计流将在此出现</div></div>
       </div>
-      <figcaption>硬删除只针对 project 作用域；global/user 只做软衰减——盖章 staleSince，退出注入面但保留可搜索，一次召回即刻复活。</figcaption>
+      <figcaption>硬删除只针对 project 作用域；global / user 只做软衰减——盖章 staleSince，退出注入面但保留可搜索，一次召回即刻复活。置顶与手动归档在管理界面随手可调。</figcaption>
     </figure>
 
-    <div class="col rv">
-      <p>与衰减相对的是<strong>凝练</strong>：每 20 个会话，curator 会把超长（≥400 字符）的条目挑出来——每批最多 5 条——交给 LLM 改写成简洁的单行；低频、有预算约束、同样可进入人审队列。记忆库因此既会遗忘，也会沉淀。</p>
+    <div class="whybox rv" style="--d:.08s">
+      <div class="wq">WHY · 为什么这样设计</div>
+      <h4>为什么衰减分两层？</h4>
+      <p>project 作用域绑定仓库：仓库都换了、约定早改了，过期的项目记忆留着只会污染检索——过期即硬删。global / user 是跨项目资产，错删的代价远高于留存——盖章而非删除，一次召回就能翻案。两类记忆的错删成本不同，它们的死亡机制也应该不同。</p>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ 06 安全与人审 ═══════════ -->
-<section id="guard">
+<!-- ═══════════ 站 07 · 告别 ═══════════ -->
+<section class="station" id="farewell">
   <div class="wrap">
-    <div class="sec-head rv"><div class="sec-num">06</div><h2 class="sec-title">边界：两道防线与一票否决</h2></div>
-    <p class="sec-sub rv" style="--d:.1s">记忆会被重新读进未来的上下文——所以它本身就是攻击面，必须双面设防。</p>
+    <div class="sec-head rv">
+      <div class="st-num">07</div>
+      <h2 class="sec-title">告别：遗忘也有仪式感</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">删除是整个系统里最重的操作——所以它的每一步都被拦下来。</p>
 
-    <div class="defense rv">
-      <div class="def-card">
-        <div class="dt">WRITE-TIME · 写入时</div>
-        <h4><i>scanContent</i> 闸门</h4>
-        <ul>
-          <li>37 条正则：密钥 16 · 注入 17（含 8 条中文对应规则）· 外泄 4</li>
-          <li>工具边界先拦一次，存储层复检一次（纵深防御）</li>
-          <li>被拒内容返回错误，永不落库；支持白名单豁免示例值</li>
-        </ul>
+    <div class="grid2">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">FORGET · 批量遗忘</div>
+        <h3>memory_forget 的四道锁</h3>
+        <p>显式 <code>confirm: true</code> 双确认；超过检索上限一半的批次直接拒绝（失控保护）；置顶条目跳过并在结果中报告；每一条删除独立写入审计。主题级遗忘不会顺手抹掉你置顶的镇馆之宝。</p>
       </div>
-      <div class="def-arrow">⇄</div>
-      <div class="def-card">
-        <div class="dt">LOAD-TIME · 读取时</div>
-        <h4><i>redactBlocked</i> 兜底</h4>
-        <ul>
-          <li>任何内容再次进入 prompt 前重新过扫</li>
-          <li>漏网内容渲染为 <code>[BLOCKED: …]</code> 占位符</li>
-          <li>原文保留在库中供人审查——静默删除只会掩盖攻击</li>
-        </ul>
+      <div class="card rv" style="--d:.12s">
+        <div class="ic">RAW · 破窗读取</div>
+        <h3>被拦截的内容，仍可修复</h3>
+        <p>扫描器拦下的内容不落库；已入库后才发现的问题内容，管理界面通过 <code>memory_get</code> 的 <code>raw: true</code> 破窗读回修复——破窗本身进审计。原文永远可查，静默删除只会掩盖攻击。</p>
       </div>
     </div>
 
-    <div class="col rv">
-      <p>打开 <code>confirmBeforeWrite</code>，系统的信任模型彻底改变：所有提取与工具写入都降级为<strong>提议</strong>，进入待确认队列。同一提议被反复观察到会累计 <code>hits</code> 并置顶——<em>频率即信号</em>。人可以编辑后再采纳，也可以一键拒绝；对既有条目的修改提议在采纳前绝不触碰原文。<strong>模型永不自我提升。</strong></p>
-    </div>
-
-    <figure class="rv">
-      <div class="fig-panel">
-        <span class="fig-tag">FIG.6 — 待确认队列，亲手裁决</span>
-        <div class="queue-demo" id="queueDemo"></div>
+    <figure class="demo rv">
+      <div class="demo-panel">
+        <span class="fig-tag">人审队列（静态图解 · confirmBeforeWrite 打开后）</span>
+        <div class="queue" style="border-top:none;padding-top:0">
+          <div class="ms-head">PENDING · 按 hits 降序 —「频率即信号」</div>
+          <div class="q-row"><div class="hits">×7</div><div class="qt"><b class="mono" style="color:var(--ok)">global/tool-quirk</b> · pnpm install 在代理环境下需先设置 registry 镜像 <div class="qs">source: review · 提议中 → 采纳（可先编辑）/ 拒绝</div></div><div><span class="q-note">待裁决</span></div></div>
+          <div class="q-row"><div class="hits">×3</div><div class="qt"><b class="mono pjx">project/convention</b> · 提交信息使用中文，首行 ≤ 50 字 <div class="qs">source: flush · 人工编辑摘要后采纳</div></div><div><span class="q-note">✓ 已入库 · audit +1</span></div></div>
+          <div class="q-row" style="opacity:.55"><div class="hits">×1</div><div class="qt"><b class="mono" style="color:var(--accent-text)">user/preference</b> · 评审意见逐条给出理由（修改既有条目 mem_77aa） <div class="qs">source: tool · 对既有条目的修改，采纳前绝不触碰原文</div></div><div><span class="q-note rj">已丢弃</span></div></div>
+        </div>
       </div>
-      <figcaption>队列按 hits 降序排列：被模型反复提出的提议，往往最值得你亲眼看一眼。</figcaption>
+      <figcaption>同一提议被反复观察到会累计 hits 并上浮——被模型反复提起的，往往最值得你亲眼看一眼。<strong>模型永不自我提升。</strong></figcaption>
     </figure>
 
-    <div class="col rv">
-      <p>最后，记忆还会<strong>流回每次会话</strong>：convention / preference 条目与 failure / procedure / tool-quirk 踩坑日志渲染进 <code>project-notes</code> system prompt 段落。不向你的仓库写入任何文件——记忆保存在 host 侧存储中，在 Memory 设置 UI 中管理（0.6 起；≤0.5.x 留下的仓库内笔记文件会被自动清理）。已渲染进笔记的条目会从 memory 段落中剔除——同一份内容绝不在提示词里出现两次。存储是事实源，笔记段落只是它的只读投影。</p>
+    <p class="rv" style="--d:.06s">最后是<strong>远程边界</strong>：记忆管理中心的 15 个 RPC 方法默认全读——写操作藏在一枚部署级开关（<code>remoteWritesEnabled</code>）后面。信任的是传输围栏（回环 / 局域网 / 受信主机，由宿主持有），不是存储面：再宽的信任域也不会悄悄放大成整库写权限。</p>
+  </div>
+</section>
+
+<!-- ═══════════ 尾声 · 基准与评估 ═══════════ -->
+<section class="station" id="evidence">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="st-num">尾</div>
+      <h2 class="sec-title">尾声：数字从哪来</h2>
+    </div>
+    <p class="sec-sub rv" style="--d:.08s">这个页面上的每个指标都有出处——要么在 CI 里设了门禁，要么跑在真实的 DeepSeek Harness 上。</p>
+
+    <div class="cmp-wrap rv" style="--d:.06s">
+      <table class="cmp">
+        <tr><th>层</th><th>测什么</th><th>怎么跑</th></tr>
+        <tr><td>L0</td><td>golden set 检索基准（35 条目 × 35 查询，en / zh / 混合，含同义改写与拉丁屈折切片）</td><td>CI 门禁：success@5 ≥ 0.85 · MRR ≥ 0.75 · P@1 ≥ 0.6 · 中文切片 success@5 ≥ 0.8</td></tr>
+        <tr><td>L1</td><td>行为评估：core-v0 32 场景 132 题 + noise-v0 6 个长噪声场景</td><td>跑真实 harness + 确定性 mock 模型——无凭据随时可跑，每次 push 必绿</td></tr>
+        <tr><td>L2</td><td>真模型判分，版本化 rubric（storage-v2 / recall-v2）</td><td>环境门控；判分模型刻意不用被测模型——防自评偏置</td></tr>
+        <tr><td>单元</td><td>967 个测试用例（961 通过 + 6 需密钥跳过）</td><td>存储契约测试跨三个后端跑：内存 / JSON 域 / SQLite</td></tr>
+      </table>
     </div>
 
-    <div class="creed rv">
+    <div class="creed rv" style="--d:.1s">
       <div><b>频率即信号</b><p>被反复观察到的提议累计 hits 自动置顶；被反复召回的条目自动保鲜。使用痕迹本身就是最重要的元数据。</p></div>
-      <div><b>稳定高于新鲜</b><p>快照为 KV-cache 冻结整个会话，宁可延迟一拍也不抖动前缀——缓存命中省下的成本远超即时的收益。</p></div>
+      <div><b>稳定高于新鲜</b><p>快照为 KV-cache 冻结整个会话，宁可延迟一拍也不抖动前缀——缓存命中省下的成本远超即时注入的收益。</p></div>
       <div><b>记忆是上下文，不是指令</b><p>每个注入面都声明：当前用户请求、仓库文件与工具输出永远优先于记忆。冲突时，相信当下。</p></div>
       <div><b>每次写入都可审计</b><p>37 条扫描规则、audit / suggestions 各 200 条滚动、entries 软上限 500、可选的人审队列——记忆系统必须能回答「这条记忆是谁、在何时、为什么写下的」。</p></div>
     </div>
@@ -736,192 +521,41 @@ footer .src b{color:var(--muted);display:block;letter-spacing:.14em;font-size:10
 <footer>
   <div class="wrap">
     <div>
-      <div class="f-t">Cairn · dsh-memory</div>
-      <p>Long-term memory for the DeepSeek Harness — 一个可安装的 profile bundle。FIG.0–FIG.6 的演示均为同构算法在页面内的真实运行，数据为演示用例。<a href="https://github.com/chenhw7/dsh-memory">在 GitHub 查看 →</a></p>
+      <div class="f-brand">Cairn <span>·</span> 一条记忆的一生</div>
+      <p>本页演示（写闸 · BM25 演练场 · 注入模式 · 衰减滑块）均为与源码同构的算法在页面内真实运行；演示数据为示意用例。<a href="https://github.com/chenhw7/dsh-memory">在 GitHub 查看 →</a></p>
     </div>
     <div class="src">
       <b>SOURCE REFERENCES</b>
-      src/review/ · 捕获与提取管线<br>
-      src/store/ · KV 存储 + BM25 检索<br>
+      src/review/ · 捕获、提取与整合管线<br>
+      src/store/ · 双后端存储 + BM25 检索<br>
       src/context/ · 注入策略与冲突标注<br>
+      src/tool/ · 九个模型工具<br>
       src/scanner.ts · 双向内容防线<br>
-      src/notes/ · 仓库内笔记投影
+      src/notes/ · 项目笔记投影
     </div>
   </div>
 </footer>
 
+<script src="assets/site.js"></script>
 <script>
-/* ═════════ progress + nav + reveal ═════════ */
+/* ═════════ 阅读进度条 + 站牌导航 scrollspy ═════════ */
+(function(){
 const prog=document.getElementById('progress');
-addEventListener('scroll',()=>{const h=document.documentElement;prog.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'},{passive:true});
-const navLinks=[...document.querySelectorAll('#sidenav a')];
-const secs=navLinks.map(a=>document.querySelector(a.getAttribute('href')));
-const navIO=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){navLinks.forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id))}})},{rootMargin:'-40% 0px -55% 0px'});
-secs.forEach(s=>s&&navIO.observe(s));
-const rvIO=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){window.__ioOk=1;e.target.classList.add('in');rvIO.unobserve(e.target)}})},{threshold:.12});
-document.querySelectorAll('.rv').forEach(el=>rvIO.observe(el));
-setTimeout(()=>{if(!document.querySelector('.rv.in'))document.querySelectorAll('.rv').forEach(el=>el.classList.add('in'))},2500);
-
-/* ═════════ hero canvas ═════════ */
-(function(){
-const cv=document.getElementById('heroCanvas'),cx=cv.getContext('2d');
-let W,H,ps=[],core={x:0,y:0};
-function rs(){W=cv.width=cv.offsetWidth*devicePixelRatio;H=cv.height=cv.offsetHeight*devicePixelRatio;cx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);const w=cv.offsetWidth;core={x:w*(w<760?.5:.76),y:cv.offsetHeight*.42}}
-rs();addEventListener('resize',rs);
-const N=90;
-for(let i=0;i<N;i++)ps.push({x:Math.random()*2000,y:Math.random()*1200,vx:.12+Math.random()*.3,vy:(Math.random()-.5)*.14,r:1+Math.random()*1.8,c:Math.random()<.82?'232,168,62':'78,201,176',a:.15+Math.random()*.5,ph:Math.random()*6.28});
-const glyphs=['记住','pnpm','8080','修正','约定','踩坑','偏好','cr'];
-let t=0;
-(function frame(){
-  t+=.016;const w=cv.offsetWidth,h=cv.offsetHeight;
-  cx.clearRect(0,0,w,h);
-  const g=cx.createRadialGradient(core.x,core.y,0,core.x,core.y,190);
-  g.addColorStop(0,'rgba(232,168,62,.20)');g.addColorStop(1,'rgba(232,168,62,0)');
-  cx.fillStyle=g;cx.fillRect(core.x-190,core.y-190,380,380);
-  cx.beginPath();cx.arc(core.x,core.y,46+Math.sin(t*2)*3,0,6.28);
-  cx.strokeStyle='rgba(232,168,62,.55)';cx.lineWidth=1.2;cx.stroke();
-  cx.beginPath();cx.arc(core.x,core.y,30,0,6.28);cx.fillStyle='rgba(232,168,62,.10)';cx.fill();
-  cx.font='600 11px "IBM Plex Mono"';cx.fillStyle='rgba(255,206,115,.9)';cx.textAlign='center';cx.fillText('memory',core.x,core.y+4);
-  for(const p of ps){
-    p.x-=p.vx;p.y+=p.vy;
-    const dx=core.x-p.x,dy=core.y-p.y,d=Math.hypot(dx,dy);
-    if(d<230){p.x+=dx/d*.55;p.y+=dy/d*.55}
-    if(d<34||p.x<-20){p.x=w+Math.random()*140;p.y=Math.random()*h;p.a=.15+Math.random()*.5}
-    p.y+=Math.sin(t+p.ph)*.12;
-    cx.beginPath();cx.arc(p.x,p.y,p.r,0,6.28);cx.fillStyle=`rgba(${p.c},${p.a*(d<240?.9:.45)})`;cx.fill();
-    if(d<240){cx.beginPath();cx.moveTo(p.x,p.y);cx.lineTo(core.x,core.y);cx.strokeStyle=`rgba(${p.c},${(1-d/240)*.14})`;cx.lineWidth=.6;cx.stroke()}
-  }
-  requestAnimationFrame(frame);
-})();
+addEventListener('scroll',()=>{
+  const h=document.documentElement;
+  prog.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%';
+},{passive:true});
+const links=[...document.querySelectorAll('#sidenav a')];
+const secs=links.map(a=>document.querySelector(a.getAttribute('href')));
+const io=new IntersectionObserver(es=>{
+  es.forEach(e=>{
+    if(e.isIntersecting)links.forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id));
+  });
+},{rootMargin:'-40% 0px -55% 0px'});
+secs.forEach(s=>s&&io.observe(s));
 })();
 
-/* ═════════ loop diagram（单时钟驱动：彗星弧与节点点亮严格同步） ═════════ */
-(function(){
-const stage=document.getElementById('loopStage');
-const nodes=[['信号感知','projector'],['LLM 提取','extract'],['安全闸门','scan'],['持久化','KV + audit'],['BM25 检索','rank'],['上下文注入','inject']];
-const SVGNS='http://www.w3.org/2000/svg';
-const svg=document.createElementNS(SVGNS,'svg');
-svg.setAttribute('viewBox','0 0 100 100');
-svg.style.cssText='position:absolute;inset:0;width:100%;height:100%;overflow:visible';
-const track=document.createElementNS(SVGNS,'circle');
-track.setAttribute('cx',50);track.setAttribute('cy',50);track.setAttribute('r',41);
-track.setAttribute('fill','none');track.setAttribute('stroke','#2b261d');track.setAttribute('stroke-width',.5);
-const arc=document.createElementNS(SVGNS,'circle');
-arc.setAttribute('cx',50);arc.setAttribute('cy',50);arc.setAttribute('r',41);
-arc.setAttribute('fill','none');arc.setAttribute('stroke','#e8a83e');arc.setAttribute('stroke-width',.9);
-arc.setAttribute('stroke-linecap','round');arc.setAttribute('pathLength','100');
-arc.setAttribute('stroke-dasharray','13 87');
-arc.setAttribute('transform','rotate(-90 50 50)');
-arc.style.filter='drop-shadow(0 0 2px rgba(232,168,62,.75))';
-const glow=document.createElementNS(SVGNS,'circle');
-glow.setAttribute('r',2.7);glow.setAttribute('fill','rgba(255,206,115,.22)');
-const tip=document.createElementNS(SVGNS,'circle');
-tip.setAttribute('r',1.15);tip.setAttribute('fill','#ffce73');
-svg.append(track,arc,glow,tip);
-stage.insertBefore(svg,stage.firstChild);
-const els=nodes.map((n,i)=>{
-  const a=(-90+i*60)*Math.PI/180,r=41;
-  const d=document.createElement('div');d.className='loop-node';
-  d.style.left=(50+r*Math.cos(a))+'%';d.style.top=(50+r*Math.sin(a))+'%';
-  d.innerHTML=`<div class="dot"></div><div class="lb">${n[0]}</div><div class="sb">${n[1]}</div>`;
-  stage.appendChild(d);return d;
-});
-const dots=els.map(e=>e.querySelector('.dot')),lbs=els.map(e=>e.querySelector('.lb'));
-const T=9000,rad=Math.PI/180,lerp=(a,b,t)=>Math.round(a+(b-a)*t);
-function paint(f){ // f ∈ [0,100)：脉冲沿轨道（自顶部顺时针）的位置百分比
-  arc.setAttribute('stroke-dashoffset',-f);
-  const ft=(f+13)%100; // 彗星头部 = 弧的前缘
-  const a=(-90+ft*3.6)*rad;
-  const px=50+41*Math.cos(a),py=50+41*Math.sin(a);
-  glow.setAttribute('cx',px);glow.setAttribute('cy',py);
-  tip.setAttribute('cx',px);tip.setAttribute('cy',py);
-  for(let i=0;i<6;i++){
-    const fi=i/6*100;
-    const behind=(ft-fi+100)%100,ahead=(fi-ft+100)%100;
-    const g=Math.max(0,1-Math.min(behind,ahead)/7);
-    dots[i].style.background=`rgb(${lerp(58,232,g)},${lerp(51,168,g)},${lerp(37,62,g)})`;
-    dots[i].style.boxShadow=g>.03?`0 0 ${6+g*14}px rgba(232,168,62,${(.25+g*.65).toFixed(2)})`:'none';
-    dots[i].style.transform=`scale(${(1+g*.45).toFixed(3)})`;
-    const lg=g*g; // 标签：白 → 金 → 白 平滑渐变（二次缓动，端点更柔）
-    lbs[i].style.color=`rgb(${lerp(236,255,lg)},${lerp(229,206,lg)},${lerp(213,115,lg)})`;
-    lbs[i].style.textShadow=lg>.04?`0 0 ${(8+lg*10).toFixed(1)}px rgba(255,206,115,${(lg*.4).toFixed(2)})`:'none';
-  }
-}
-const t0=performance.now();
-(function frame(now){
-  paint(((now-t0)%T)/T*100);
-  requestAnimationFrame(frame);
-})(t0);
-})();
-
-/* ═════════ extraction simulator（对齐 src/review：事件 → 候选 → 阈值 → drain） ═════════ */
-(function(){
-const stream=document.getElementById('simStream'),out=document.getElementById('simOut'),
-      cnt=document.getElementById('simCnt'),bar=document.getElementById('simBar'),
-      note=document.getElementById('simNote'),cost=document.getElementById('simCost');
-// 左栏 = 真实流经的事件流。只有命中信号的事件才累计：普通消息不累计；
-// pitfall 候选要求「同签名连续失败 ≥2 + 成功」，所以失败链按三个事件展开。
-const evts=[
-  {tag:'user', cls:'tag-tool', text:'user: 先写个部署脚本吧', miss:'不累计', note:'// 普通消息不命中任何信号 → 不累计'},
-  {tag:'keyword', cls:'tag-kw', text:'user: 记住——本项目提交信息一律用中文，首行 ≤ 50 字', cand:'①', note:'// keyword 命中 → 累加器 +1，仍零 LLM 调用'},
-  {tag:'correction', cls:'tag-fix', text:'user: 不对，其实 CI 跑的是 vitest 不是 jest', cand:'②', note:'// correction 命中 → 累加器 +1'},
-  {tag:'tool', cls:'tag-tool', text:'tool: pnpm install → ✕ E404', miss:'失败链 1/2', note:'// 同签名失败 1/2 → 开失败链，不累计'},
-  {tag:'tool', cls:'tag-tool', text:'tool: pnpm install → ✕ E404', miss:'失败链 2/2', note:'// 同签名失败 2/2 → 等一次成功来验证'},
-  {tag:'pitfall', cls:'tag-pit', text:'tool: pnpm install → ✓', cand:'③', note:'// 成功闭合失败链 → pitfall-resolved 候选 +1'},
-];
-// 右栏 = 一次 drain 的产物。ref 对应左栏的候选编号，左→右一一对应：
-// ①② 走通用 review 提示词（调用 A），③ 走 pitfall 专用提示词（调用 B）——
-// 两次 LLM 调用，但预算只计 1 次 drain。
-const outs=[
-  {ref:'①', text:'project: [convention] 提交信息使用中文，首行 ≤ 50 字', verdict:'Jaccard 预筛未命中 → <b>新建</b>条目'},
-  {ref:'②', text:'project: CI 使用 vitest 运行测试', verdict:'预筛命中既有条目「CI 使用 jest 运行测试」→ LLM 裁决 <b>update</b> → 更新既有条目（非新建）', merge:true},
-  {ref:'③', text:'project: [pitfall] 症状：pnpm install E404。根因：代理环境。修复：registry 指向内网镜像', verdict:'预筛未命中 → <b>新建</b>条目（[pitfall] 标签 → failure 类别）'},
-];
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let running=false;
-function addLine(host,cls,html){
-  const d=document.createElement('div');d.className='sim-line '+cls;
-  d.innerHTML=html;host.appendChild(d);void d.offsetWidth;d.classList.add('show');
-}
-async function loop(){
-  if(running)return;running=true;
-  for(;;){
-    stream.innerHTML='';out.innerHTML='';cnt.textContent='候选 0 / 阈值 3';bar.style.width='0%';
-    note.textContent='// 只有命中信号的事件才被累计，零 LLM 调用';note.classList.remove('fire');
-    cost.textContent='提取预算 20/20（本会话）';
-    let n=0;
-    await sleep(1300);
-    for(const e of evts){
-      addLine(stream,'ev',`<span class="tag ${e.cls}">${e.tag}</span><span>${e.text}</span><span class="res ${e.cand?'hit':''}">${e.cand?'+ 候选 '+e.cand:e.miss}</span>`);
-      if(e.cand){n++;cnt.textContent=`候选 ${n} / 阈值 3`;bar.style.width=(n/3*100)+'%';}
-      note.textContent=e.note;
-      await sleep(1050);
-    }
-    note.textContent='⚡ 候选 3 ≥ 阈值 3 → 下一个 agent step 触发一次 drain';note.classList.add('fire');
-    await sleep(1500);
-    addLine(out,'hdr','# drain · 未处理候选 ①②③（seq > 高水位线）');
-    await sleep(850);
-    addLine(out,'hdr','# 调用 A · 通用 review 提示词 ← ①②');
-    await sleep(600);
-    for(let i=0;i<2;i++){
-      addLine(out,'out'+(outs[i].merge?' merge':''),`<span class="ref">${outs[i].ref}→</span>${outs[i].text}<br><span class="verdict">${outs[i].verdict}</span>`);
-      await sleep(1150);
-    }
-    addLine(out,'hdr','# 调用 B · pitfall 专用提示词 ← ③');
-    await sleep(600);
-    addLine(out,'out',`<span class="ref">${outs[2].ref}→</span>${outs[2].text}<br><span class="verdict">${outs[2].verdict}</span>`);
-    cost.textContent='提取预算 19/20 · 本次 drain 计 1';
-    note.textContent='高水位线 → ③，批次已消费；调用失败则留待重试';
-    await sleep(5200);
-  }
-}
-// 观察整个 .sim 面板：#simStream 容器在动画启动前是零高度，
-// 零面积目标的 IO 阈值永远不会被满足。
-new IntersectionObserver((es,o)=>{if(es[0].isIntersecting){loop();o.disconnect()}},{threshold:.3}).observe(stream.closest('.sim')||stream);
-setTimeout(()=>{if(!window.__ioOk)loop()},2700);
-})();
-
-/* ═════════ write-path gates ═════════ */
+/* ═════════ 演示 1 · 写入安全门（对齐 src/store 写路径与 src/scanner.ts） ═════════ */
 (function(){
 const chip=document.getElementById('chip'),payload=document.getElementById('payload'),
       gates=[...document.querySelectorAll('.gate')],log=document.getElementById('gateLog'),
@@ -932,14 +566,33 @@ let seq=42,busy=false;
 const gatesHost=document.getElementById('gates');
 const POS=['9.5%','34.5%','59.5%','84.5%'];
 const isNarrow=()=>matchMedia('(max-width:760px)').matches;
-// chip 位置改为按 gate 元素实测：桌面沿横线左移，≤760px 竖排时沿纵线下移——
-// 断点切换、字体差异、滚动期间触发都不会让轨道漂移。
+/* 载荷滑行由 JS 逐帧驱动（rAF + easeInOutSine），不依赖 CSS transition：
+   系统的「减少动态效果」会经全局规则 `*{transition:none!important}` 吃掉
+   CSS 过渡、观感变成瞬移；rAF 写入行内样式不受其影响，保证每跳 1.2s 内
+   精确的柔和加速-减速-停稳，与步进窗口 sleep(1300) 对齐。 */
+const EASE=t=>.5-.5*Math.cos(Math.PI*t);
+let glideRaf=0;
+function glideChip(x,y){
+  if(glideRaf)cancelAnimationFrame(glideRaf);
+  const cs=getComputedStyle(chip),sx=parseFloat(cs.left),sy=parseFloat(cs.top);
+  const dx=x-sx,dy=y-sy;
+  if(Math.hypot(dx,dy)<.5){chip.style.left=x+'px';chip.style.top=y+'px';return}
+  const t0=performance.now(),ms=1200;
+  const step=now=>{
+    const k=Math.min(1,(now-t0)/ms),e=EASE(k);
+    chip.style.left=(sx+dx*e)+'px';chip.style.top=(sy+dy*e)+'px';
+    if(k<1)glideRaf=requestAnimationFrame(step);
+  };
+  glideRaf=requestAnimationFrame(step);
+}
+/* chip 目标位按 gate 元素实测：桌面沿横线移动，≤760px 竖排沿纵线下移——
+   断点切换、字体差异、滚动期间触发都不会让轨道漂移。 */
 function setChip(i){
+  const host=gatesHost.getBoundingClientRect();
   if(isNarrow()){
-    const host=gatesHost.getBoundingClientRect(),r=gates[i].getBoundingClientRect();
-    chip.style.left='-3px';
-    chip.style.top=(r.top+r.height/2-host.top-chip.offsetHeight/2)+'px';
-  }else{chip.style.left=POS[i];chip.style.top='33px'}
+    const r=gates[i].getBoundingClientRect();
+    glideChip(-3, r.top+r.height/2-host.top-chip.offsetHeight/2);
+  }else{glideChip(host.width*parseFloat(POS[i])/100, 33)}
 }
 function reset(){gates.forEach(g=>g.classList.remove('ok','bad'))}
 async function run(evil){
@@ -947,23 +600,24 @@ async function run(evil){
   chip.classList.toggle('evil',evil);
   payload.textContent=evil?'sk-ant-api03…':'user: 偏好逐条评审';
   setChip(0);log.innerHTML='// validateProjectScope ✓ · validateContent ✓';
-  await sleep(900);
+  await sleep(700);
   gates[0].classList.add('ok');setChip(1);
   log.innerHTML='// scanContent：扫描 37 条模式 …';
-  await sleep(1100);
+  /* 每跳 sleep 须 ≥ 芯片滑行的 1.2s：让 payload 完整滑到下一闸门，闸门才反应 */
+  await sleep(1300);
   if(evil){
     gates[1].classList.add('bad');
     log.innerHTML='<span class="err">✗ secret: Anthropic API key — 内容被扫描器拒绝，永不落库</span>';
-    await sleep(1600);
+    await sleep(1800);
   }else{
     gates[1].classList.add('ok');setChip(2);
     log.innerHTML='// scanContent ✓ → entries.put(mem_7a41…)';
-    await sleep(1000);
+    await sleep(1300);
     gates[2].classList.add('ok');setChip(3);
     const row=document.createElement('div');row.className='ms-row';
     row.textContent='entry mem_7a41… · user/preference · "代码评审意见必须逐条给出理由"';
     store.prepend(row);
-    await sleep(1000);
+    await sleep(1300);
     gates[3].classList.add('ok');
     const a=document.createElement('div');a.className='ms-row audit';
     a.textContent=`audit #${seq++} · add · source:tool · "代码评审意见必须逐条给出理由…"`;
@@ -976,7 +630,7 @@ async function run(evil){
 bC.onclick=()=>run(false);bE.onclick=()=>run(true);
 })();
 
-/* ═════════ BM25 playground（移植自 src/store/bm25.ts） ═════════ */
+/* ═════════ 演示 2 · BM25 演练场（移植自 src/store/bm25.ts，算法逐行一致） ═════════ */
 const ENTRIES=[
  {s:'project',c:'convention',t:'本项目包管理器统一使用 pnpm，禁止提交 package-lock.json',p:'dsh-memory'},
  {s:'project',c:'procedure',t:'部署先跑 scripts/deploy.sh，服务监听 8080 端口， health check 路径 /healthz',p:'dsh-memory'},
@@ -989,7 +643,7 @@ const ENTRIES=[
  {s:'global',c:'procedure',t:'排查端口占用：lsof -i :8080 找到 PID 后 kill，不要盲目重启机器'},
  {s:'user',c:'correction',t:'其实团队周会改到周三下午了，不是之前说的周一'},
 ];
-/* stemLatin：剥除一个保守的拉丁词形后缀（移植自 src/store/bm25.ts，规则逐条一致）。
+/* stemLatin：剥除一个保守的拉丁词形后缀（规则与 src/store/bm25.ts 逐条一致）。
    文档与查询共用同一分词器——"testing / tests / test" 收敛为同一 token，
    纯数字与 class / basis 这类词干永不受损；CJK 走另一条路径，从不进入本函数。 */
 function stemLatin(t){
@@ -1009,7 +663,7 @@ function tokenizeForSearch(text){
   const re=/[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+/g;
   let m;while((m=re.exec(lowered))!==null){
     const run=m[0];
-    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(stemLatin(run));continue}
+    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf]/.test(run)){tokens.push(stemLatin(run));continue}
     const chars=[...run];
     for(const ch of chars)tokens.push(ch);
     for(let i=0;i+1<chars.length;i++)tokens.push(chars[i]+chars[i+1]);
@@ -1055,7 +709,7 @@ function search(){
   const uni=[...new Set(qTokens.filter(t=>[...t].length===1))];
   const bi=[...new Set(qTokens.filter(t=>[...t].length>1&&/[\u4e00-\u9fff]/.test(t)))];
   const latin=[...new Set(qTokens.filter(t=>/^[a-z0-9]+$/.test(t)))];
-  tk.innerHTML=query?('<span class="dim" style="font-size:11px;font-family:var(--mono)">query tokens → </span>'
+  tk.innerHTML=query?('<span class="dim" style="font-size:12px;font-family:var(--font-mono)">query tokens → </span>'
     +latin.map(t=>`<span class="bm-token">${esc(t)}</span>`).join('')
     +uni.map(t=>`<span class="bm-token">${esc(t)}</span>`).join('')
     +bi.map(t=>`<span class="bm-token bigram">${esc(t)}</span>`).join('')):'';
@@ -1064,7 +718,7 @@ function search(){
   const max=Math.max(...scores,0.0001);
   const order=scores.map((s,i)=>[s,i]).sort((a,b)=>b[0]-a[0]);
   const hits=order.filter(([s])=>s>0);
-  meta.textContent=query?`${hits.length} / ${ENTRIES.length} 条命中 · 结构化过滤 → BM25 打分 → 相关性 ↓ 置顶 ↓ 新近 ↓`:'输入查询以检索';
+  meta.textContent=query?`${hits.length} / ${ENTRIES.length} 条命中 · 结构化过滤 → BM25 打分 · 完整排序还有置顶 / importance / 新近三道断平`:'输入查询以检索';
   res.innerHTML='';
   order.forEach(([s,i],rank)=>{
     const e=ENTRIES[i];
@@ -1093,7 +747,7 @@ q.addEventListener('input',search);
 search();
 })();
 
-/* ═════════ injection modes ═════════ */
+/* ═════════ 演示 3 · 注入模式切换器 ═════════ */
 (function(){
 const view=document.getElementById('modeView'),cap=document.getElementById('modeCap');
 const views={
@@ -1127,17 +781,16 @@ user/preference · mem_77aa · 评审意见逐条给理由
 custom:`<span class="cm"># memoryPolicyCustomText 原样注入</span>
 <span class="fx">&lt;memory-policy&gt;</span>
 （你的团队自己的记忆使用规约，
-  由设置界面或 cordis.yml 提供，
-  YAML 的 | 语法支持多行文本）
+  由设置界面或 cordis.patch.yml 提供）
 <span class="fx">&lt;/memory-policy&gt;</span>`,
 off:`<span class="cm">// 不注入任何 memory 段落
 // 记忆仍可通过 memory_search 等工具按需访问
 // 系统提示中 0 字符、0 token 成本</span>`
 };
 const caps={
-policy:'<b>纯策略模式（0.8 前的默认）。</b>只注入行为指引，不注入内容——模型按需调用 memory_search。常驻成本最低。',
-full:'<b>全量模式。</b>冻结快照 + 指引一起注入，模型开箱即见所有健康记忆。适合条目少而精的库。',
-index:'<b>默认模式（0.8 起）· 渐进式披露。</b>模型看见每条的摘要与 id，按需取全文。索引体积随类别数增长，而非条目数。',
+policy:'<b>纯策略模式。</b>只注入行为指引，不注入内容——模型按需调用 memory_search。常驻成本最低：≈344 tokens，与库大小无关。',
+full:'<b>全量模式。</b>冻结快照 + 指引一起注入，模型开箱即见所有健康记忆（双预算：5000 字符 / 20 条）。适合条目少而精的库。',
+index:'<b>默认模式（0.8 起）· 渐进式披露。</b>每个条目只渲染一行存在性索引；预算耗尽时尾部折叠成类别计数行——索引体积随类别数增长，而非条目数。',
 custom:'<b>自定义模式。</b>注入你自己的策略文本，完全接管记忆段落的措辞。',
 off:'<b>关闭。</b>段落整体缺席；工具层不受影响。'
 };
@@ -1150,7 +803,7 @@ btns.forEach(b=>b.onclick=()=>{
 view.innerHTML=views.index;cap.innerHTML=caps.index;
 })();
 
-/* ═════════ lifecycle simulator ═════════ */
+/* ═════════ 演示 4 · 衰减模拟器 ═════════ */
 (function(){
 const slider=document.getElementById('lifeSlider'),day=document.getElementById('lifeDay'),
       lp=document.getElementById('lcProject'),lg=document.getElementById('lcGlobal'),
@@ -1163,8 +816,8 @@ function render(){
   if(over&&!crossed){
     crossed=true;revived=false;
     lp.classList.add('dead');lg.classList.add('stale');
-    lps.innerHTML='<span style="color:var(--red)">✕ 硬删除 · 30 天未被召回</span>';
-    lgs.innerHTML='<span style="color:var(--amber)">◔ staleSince 盖章 · 退出注入面，仍可搜索</span>';
+    lps.innerHTML='<span style="color:var(--bad)">✕ 硬删除 · 30 天未被召回</span>';
+    lgs.innerHTML='<span style="color:var(--accent-text)">◔ staleSince 盖章 · 退出注入面，仍可搜索</span>';
     log.innerHTML=`<div class="jl">janitor → audit #${aseq++} · remove · project "部署脚本…端口 8080"</div>
 <div class="jl">janitor → audit #${aseq++} · update · global "pnpm registry…" · staleSince = now</div>`;
   }else if(!over&&crossed){
@@ -1179,29 +832,11 @@ slider.addEventListener('input',render);
 rb.onclick=()=>{
   if(revived)return;revived=true;
   lg.classList.remove('stale');
-  lgs.innerHTML='<span style="color:var(--teal)">✓ 召回即复活 · staleSince 清除，lastRecalledAt 刷新</span>';
+  lgs.innerHTML='<span style="color:var(--ok)">✓ 召回即复活 · staleSince 清除，lastRecalledAt 刷新</span>';
   log.innerHTML+=`<div class="rv2">recall → audit #${aseq++} · update · global "pnpm registry…" · revived</div>`;
 };
 })();
-
-/* ═════════ suggestion queue demo ═════════ */
-(function(){
-const box=document.getElementById('queueDemo');
-const rows=[
-  {h:7,t:'<b class="mono" style="color:var(--teal)">global/tool-quirk</b> · pnpm install 在代理环境下需先设置 registry 镜像',s:'review'},
-  {h:3,t:'<b class="mono" style="color:#7db4f8">project/convention</b> · 提交信息使用中文，首行 ≤ 50 字',s:'flush'},
-  {h:1,t:'<b class="mono" style="color:var(--amber)">user/preference</b> · 评审意见逐条给出理由（修改既有条目 mem_77aa）',s:'tool'},
-];
-box.innerHTML='<div class="ms-head" style="font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.18em;margin-bottom:12px">PENDING · 按 hits 降序 —「频率即信号」</div>';
-rows.forEach(r=>{
-  const d=document.createElement('div');d.className='q-row';
-  d.innerHTML=`<div class="hits">×${r.h}</div><div class="qt">${r.t}<div style="font-family:var(--mono);font-size:10.5px;color:var(--faint)">source: ${r.s}</div></div>
-  <div class="qa"><button class="q-btn adopt">采纳</button><button class="q-btn reject">拒绝</button></div>`;
-  d.querySelector('.adopt').onclick=()=>{d.classList.add('adopted');d.querySelector('.qa').innerHTML='<span style="font-family:var(--mono);font-size:11px;color:var(--teal)">✓ 已入库 · audit +1</span>'};
-  d.querySelector('.reject').onclick=()=>{d.classList.add('rejected');d.querySelector('.qa').innerHTML='<span style="font-family:var(--mono);font-size:11px;color:var(--faint)">已丢弃</span>'};
-  box.appendChild(d);
-});
-})();
 </script>
+
 </body>
 </html>

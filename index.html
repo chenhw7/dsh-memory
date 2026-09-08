@@ -5,268 +5,350 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
 <title>Cairn — long-term memory for DeepSeek Harness</title>
-<meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.">
+<meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. One command to install — nine model-facing tools, five injection modes; auto-extraction, BM25 retrieval, full audit. Restart the session — it still remembers.">
 <link rel="canonical" href="https://chenhw7.github.io/dsh-memory/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Cairn">
 <meta property="og:title" content="Cairn — long-term memory for DeepSeek Harness">
-<meta property="og:description" content="Persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.">
+<meta property="og:description" content="Persistent cross-session memory: one command to install, nine model-facing tools, five injection modes; auto-extraction, BM25 retrieval, full audit.">
 <meta property="og:url" content="https://chenhw7.github.io/dsh-memory/">
 <meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="zh_CN">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Cairn — long-term memory for DeepSeek Harness">
-<meta name="twitter:description" content="Persistent cross-session memory for DeepSeek Harness. Facts, preferences, corrections, and lessons survive across sessions and restarts.">
+<meta name="twitter:description" content="Persistent cross-session memory: one command to install, nine model-facing tools, five injection modes. Restart the session — it still remembers.">
 <meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0e1f" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;900&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/site.css">
+<script>
+/* theme pre-paint: write the theme onto <html> before first paint to avoid a flash */
+(function(){var t=null;try{t=localStorage.getItem('cairn-theme')}catch(e){t=null}
+document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();
+</script>
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Cairn","alternateName":"@chenhw7/dsh-memory","description":"Long-term memory for the DeepSeek Harness: persistent cross-session memory — facts, preferences, corrections, and lessons survive across sessions and restarts. BM25 retrieval, three-layer scoping, human-confirmed writes.","applicationCategory":"DeveloperApplication","operatingSystem":"Cross-platform","url":"https://chenhw7.github.io/dsh-memory/","downloadUrl":"https://github.com/chenhw7/dsh-memory","author":{"@type":"Person","name":"chenhw7"},"license":"https://github.com/chenhw7/dsh-memory/blob/main/LICENSE","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
 </script>
-<style>
-:root{
-  --bg:#0e0d0b; --bg2:#14120e; --panel:#191612; --panel2:#1f1b15;
-  --ink:#ece5d5; --muted:#9c937f; --faint:#6b6355;
-  --line:#2b261d; --line2:#3a3325;
-  --amber:#e8a83e; --amber-hi:#ffce73; --amber-dim:rgba(232,168,62,.14);
-  --teal:#4ec9b0; --teal-dim:rgba(78,201,176,.12);
-  --red:#e0604a; --red-dim:rgba(224,96,74,.12);
-  --serif:"Noto Serif SC",serif; --sans:"Noto Sans SC",sans-serif; --mono:"IBM Plex Mono",monospace;
-}
-*{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth;scroll-padding-top:70px}
-body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16.5px;line-height:1.85;overflow-x:hidden}
-::selection{background:var(--amber);color:#14110a}
-a{color:var(--amber);text-decoration:none}
-a:hover{color:var(--amber-hi)}
-*{scrollbar-color:var(--line2) transparent}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--line2);border-radius:99px}
-::-webkit-scrollbar-thumb:hover{background:var(--amber)}
-
-/* ── top nav ─── */
-nav.topnav{position:sticky;top:0;z-index:95;background:rgba(14,13,11,.84);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
-.topnav-in{display:flex;align-items:center;justify-content:space-between;gap:12px;height:54px}
-.tn-brand{font-family:var(--serif);font-size:18px;font-weight:900;color:var(--ink);text-decoration:none;letter-spacing:-.01em;flex:none}
-.tn-brand em{font-style:normal;color:var(--amber);font-weight:700}
-.tn-links{display:flex;align-items:center;gap:2px}
-.tn-links a{font-family:var(--mono);font-size:12.5px;color:var(--muted);text-decoration:none;padding:6px 11px;border-radius:99px;white-space:nowrap;transition:color .2s,background .2s}
-.tn-links a:hover{color:var(--amber-hi);background:var(--amber-dim)}
-.tn-links a.tn-doc{color:var(--amber)}
-@media(max-width:520px){
-  .topnav-in{gap:8px;height:50px}
-  .tn-brand{font-size:16px}
-  .tn-links a{font-size:11.5px;padding:5px 7px}
-  .tn-links .tn-x{display:none}
-}
-
-.wrap{max-width:860px;margin:0 auto;padding:0 40px}
-
-/* ── hero ─── */
-header#hero{padding:96px 0 70px;text-align:center;position:relative}
-header#hero::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse 600px 320px at 50% 30%,rgba(232,168,62,.07),transparent);pointer-events:none}
-.hero-logo{width:clamp(110px,16vw,170px);height:auto;display:block;margin:0 auto 36px;filter:drop-shadow(0 14px 30px rgba(0,0,0,.5))}
-.hero-kick{font-family:var(--mono);font-size:12px;letter-spacing:.32em;color:var(--amber);text-transform:uppercase;margin-bottom:22px}
-h1.wordmark{font-family:var(--serif);font-weight:900;font-size:clamp(72px,13vw,156px);line-height:.95;letter-spacing:-.02em;color:var(--ink);position:relative}
-h1.wordmark em{font-style:normal;color:var(--amber);font-weight:700}
-.hero-tag{font-family:var(--serif);font-size:clamp(20px,3vw,28px);font-weight:500;color:var(--muted);margin-top:18px;line-height:1.5}
-.hero-sub{max-width:620px;margin:28px auto 0;font-size:16px;color:var(--muted);line-height:1.85}
-.hero-sub b{color:var(--ink);font-weight:600}
-
-/* ── install block ─── */
-.install{margin:42px auto 0;max-width:520px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);overflow:hidden}
-.install-label{padding:10px 18px;font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--faint);text-transform:uppercase;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
-.install-label::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--teal)}
-.install-code{padding:16px 18px;font-family:var(--mono);font-size:15px;color:var(--amber-hi);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.install-code .prompt{color:var(--faint);user-select:none}
-.install-code code{color:var(--amber-hi);font-family:inherit}
-
-/* ── features ─── */
-section{padding:70px 0}
-.sec-head{font-family:var(--mono);font-size:12px;letter-spacing:.28em;color:var(--amber);text-transform:uppercase;margin-bottom:36px;text-align:center}
-.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
-.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:28px 26px;transition:border-color .3s,transform .3s}
-.card:hover{border-color:var(--line2);transform:translateY(-3px)}
-.card .ic{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--amber);text-transform:uppercase;margin-bottom:12px}
-.card h3{font-family:var(--serif);font-size:21px;font-weight:700;color:var(--ink);margin-bottom:10px}
-.card p{font-size:14.5px;color:var(--muted);line-height:1.8}
-.card .tag{display:inline-block;margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--teal);border:1px solid rgba(78,201,176,.2);border-radius:99px;padding:2px 12px;background:var(--teal-dim)}
-@media(max-width:640px){.cards{grid-template-columns:1fr}}
-
-/* ── explore links ─── */
-.links{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:10px}
-.links a{display:flex;align-items:center;gap:14px;padding:18px 22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);transition:all .3s}
-.links a:hover{border-color:var(--amber);background:var(--panel2);transform:translateY(-2px)}
-.links a .lk{flex:none}
-.links a .lk svg{display:block}
-.links a .lt{flex:1;min-width:0}
-.links a .lt b{display:block;font-family:var(--serif);font-size:17px;font-weight:700;color:var(--ink);margin-bottom:2px}
-.links a .lt span{font-size:13px;color:var(--faint)}
-.links a .ar{color:var(--faint);transition:color .3s,transform .3s;flex:none}
-.links a:hover .ar{color:var(--amber);transform:translateX(4px)}
-@media(max-width:640px){.links{grid-template-columns:1fr}}
-
-/* ── development activity panel (live repo data, three-lane tiered; JS at page end) ─── */
-.pulse-lede{max-width:660px;margin:-14px auto 30px;text-align:center;font-size:15px;color:var(--muted);line-height:1.85}
-.pulse-lede code{font-family:var(--mono);font-size:.88em;color:var(--teal)}
-.pulse-panel{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:34px;position:relative;overflow:hidden}
-.pulse-panel::before{content:"";position:absolute;inset:0;background:radial-gradient(600px 200px at 20% -10%,rgba(232,168,62,.06),transparent 70%);pointer-events:none}
-.panel-tag{position:absolute;top:16px;right:18px;font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.1em}
-.rl-head{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.14em;margin-bottom:10px}
-.repo-plate{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
-.rp-v{font-family:var(--serif);font-size:46px;font-weight:900;color:var(--amber-hi);line-height:1;white-space:nowrap}
-.rp-gh{font-family:var(--mono);font-size:12px;color:var(--teal)}
-.rp-chips{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 18px}
-.rp-chip{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line2);background:var(--panel2);border-radius:99px;padding:3px 11px}
-.act{border:1px solid var(--line);border-radius:10px;background:#100e0b;display:block;width:100%;height:150px;touch-action:pan-y;cursor:crosshair}
-.act-sum{margin-top:10px;font-family:var(--mono);font-size:12px;color:#cfc7b4;line-height:1.75}
-.act-sum b{color:var(--amber-hi);font-weight:600}
-.act-note{margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--faint);min-height:17px}
-.act-note .teal{color:var(--teal)}
-/* day-detail readout pinned below the 14-day line chart: never overlays the
-   chart, min-height sized for a full day (date + counts + 5 commits + more) */
-.act-tip{margin-top:8px;min-height:116px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:9px 12px;font-family:var(--mono);font-size:10.5px;line-height:1.55;color:var(--ink);display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2fr);gap:2px 16px;align-content:start}
-.act-tip>*{min-width:0}
-.act-tip .at-d{color:var(--amber-hi);font-weight:600;margin-bottom:2px}
-.act-tip .at-c{color:var(--faint)}
-.act-tip .at-m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
-.act-tip .at-m span{color:var(--teal);margin-right:6px}
-.act-tip .at-more{color:var(--faint)}
-@media(max-width:640px){.act-tip{grid-template-columns:minmax(0,1fr);min-height:152px}}
-.live{position:absolute;top:44px;right:18px;display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
-.live i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
-.live.on i{background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s ease-in-out infinite}
-.live.sh i{background:var(--amber)}
-@keyframes pulse{50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.live i{animation:none}}
-@media(max-width:760px){
-  .pulse-panel{padding:22px 16px;border-radius:14px}
-  .live{position:static;margin:-4px 0 14px;justify-content:flex-end}
-  .rp-v{font-size:36px}
-}
-
-/* ── footer ─── */
-footer{border-top:1px solid var(--line);padding:48px 0 56px;margin-top:30px}
-footer .wrap{display:flex;justify-content:space-between;align-items:flex-start;gap:30px;flex-wrap:wrap}
-footer .f-brand{font-family:var(--serif);font-size:18px;font-weight:700;color:var(--ink)}
-footer .f-brand span{color:var(--amber)}
-footer p{font-size:13.5px;color:var(--faint);margin-top:6px;max-width:420px}
-footer .f-links{display:flex;flex-direction:column;gap:8px;text-align:right}
-footer .f-links a{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
-footer .f-links a:hover{color:var(--amber)}
-</style>
 </head>
 <body>
 
 <nav class="topnav" aria-label="Primary">
   <div class="wrap topnav-in">
-    <a class="tn-brand" href="#hero">Cairn<em>.</em></a>
+    <a class="brand" href="#hero"><img src="assets/logo-512.webp" alt="" width="512" height="512">Cairn<i>.</i></a>
     <div class="tn-links">
-      <a class="tn-doc" href="memory-architecture.html">Deep-dive <span class="tn-x">EN</span></a>
-      <a class="tn-doc" href="memory-architecture.zh-CN.html">技术解析<span class="tn-x"> 中文</span></a>
-      <a href="#pulse">Activity</a>
+      <a class="doc" href="memory-architecture.html">Deep-dive</a>
       <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
       <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm</a>
+      <a href="index.zh-CN.html" hreflang="zh">中文<span class="x"> site</span></a>
+      <button class="tbtn" data-theme-toggle aria-label="Toggle light/dark theme" title="Toggle light/dark theme">
+        <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="ic-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+      </button>
     </div>
   </div>
 </nav>
 
 <!-- ═══════════ HERO ═══════════ -->
-<header id="hero">
+<header class="hero" id="hero">
   <div class="wrap">
-    <img class="hero-logo" src="assets/logo-512.webp" width="512" height="512" alt="Cairn" decoding="async">
-    <div class="hero-kick">Long-term memory for DeepSeek Harness</div>
-    <h1 class="wordmark">Cairn<em>.</em></h1>
-    <p class="hero-tag">Leave durable markers; the next session finds its way.</p>
-    <p class="hero-sub"><b>Cairn</b> is persistent cross-session memory for the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>, packaged as the <code>@chenhw7/dsh-memory</code> profile bundle. Facts, preferences, corrections, and lessons survive across sessions and restarts — your agent starts every conversation already knowing what mattered last time.</p>
+    <img class="hero-logo" src="assets/logo-512.webp" alt="Cairn logo" width="512" height="512" decoding="async">
+    <div class="kick">DEEPSEEK HARNESS · LONG-TERM MEMORY PLUGIN</div>
+    <h1 class="hero-title">Restart the session.<br><em>It still remembers.</em></h1>
+    <p class="hero-sub"><b>Cairn</b> is persistent cross-session memory for the <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> — <b>one command to install · nine model-facing tools · five injection modes</b>. Facts, preferences, conventions, and hard-won lessons survive across sessions: every new conversation starts with last time's experience already on the table.</p>
     <div class="install">
-      <div class="install-label">Install</div>
+      <div class="install-label">INSTALL</div>
       <div class="install-code"><span class="prompt">$</span><code>dsh plugin add --profile web @chenhw7/dsh-memory</code></div>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="memory-architecture.html">Interactive deep-dive →</a>
+      <a class="btn" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn" href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm</a>
     </div>
   </div>
 </header>
 
-<!-- ═══════════ FEATURES ═══════════ -->
-<section id="features">
+<!-- ═══════════ WHY ═══════════ -->
+<section id="why">
   <div class="wrap">
-    <div class="sec-head">What it does</div>
-    <div class="cards">
-      <div class="card">
-        <div class="ic">01 · Persistent memory</div>
-        <h3>A durable KV store with audit logging</h3>
-        <p>Facts, preferences, and conventions stored in a durable backend with a 200-row rolling audit log. Every write answers who, when, and why.</p>
-        <span class="tag">survives restarts</span>
+    <div class="sec-head rv">
+      <div class="sec-kick">WHY · WHY YOU NEED IT</div>
+      <h2 class="sec-title">The session ends. <em>Everything resets.</em></h2>
+      <p class="sec-sub">By default an agent has no cross-session memory — what you said last week and what you debugged yesterday all start from zero today.</p>
+    </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.05s">
+        <div class="ic">WITHOUT MEMORY</div>
+        <h3>Every session starts from zero</h3>
+        <p>"We use pnpm now" is gone by the next session; the same build pit swallows you twice; last week's verified conclusions get reconstructed from vibes. Context grows longer while the things that matter keep being re-explained.</p>
+        <div class="tags"><span class="tag warn">preferences re-explained</span><span class="tag warn">pits re-fallen</span><span class="tag warn">conclusions from vibes</span></div>
       </div>
-      <div class="card">
-        <div class="ic">02 · Three-layer scoping</div>
-        <h3>Global, project, and user scope</h3>
-        <p>Global memories cross every project. Project memories are per-repo and auto-detected. User memories follow your profile across repos. No bleed, no loss.</p>
-        <span class="tag">auto-detected</span>
-      </div>
-      <div class="card">
-        <div class="ic">03 · BM25 retrieval</div>
-        <h3>CJK-aware, dependency-free Okapi BM25</h3>
-        <p>Latin word tokens plus CJK unigrams and bigrams. Pinned entries surface ahead of equal-relevance matches. Evaluated in CI against a fixed golden set — success@5 = 100%, MRR = 0.902.</p>
-        <span class="tag">measured, not vibes</span>
-      </div>
-      <div class="card">
-        <div class="ic">04 · Human-confirmed writes</div>
-        <h3>Models suggest; humans promote</h3>
-        <p>A background distillation pass extracts durable facts from explicit remember-intent, corrections, and verified failure streaks — but models only write <code>suggested</code> entries. Human confirmation makes them effective.</p>
-        <span class="tag">you stay in control</span>
+      <div class="card rv" style="--d:.15s">
+        <div class="ic">WITH CAIRN</div>
+        <h3>Say it once — it stays said</h3>
+        <p>Worthwhile signals are extracted, scanned, audited, and stored; the next session opens with the relevant memories present as an index, full text recalled on demand. Use keeps them fresh, forgetting follows rules.</p>
+        <div class="tags"><span class="tag">auto-distilled</span><span class="tag">recalled on demand</span><span class="tag">decay with rules</span></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════════ DEVELOPMENT ACTIVITY ═══════════ -->
-<section id="pulse">
+<!-- ═══════════ CAPABILITIES ═══════════ -->
+<section id="capabilities">
   <div class="wrap">
-    <div class="sec-head">Development activity</div>
-    <p class="pulse-lede">How often does this project move? Judge from the repo itself. This panel reads the project's real history the moment you open the page — the latest commits on <code>main</code>, plus per-day commit counts and line churn across the whole project.</p>
-    <div class="pulse-panel">
-      <span class="panel-tag">LIVE FROM THE REPO</span>
-      <div class="live" id="livePill"><i></i><span id="liveTxt">○ SNAPSHOT</span></div>
-      <div class="repo-plate">
-        <span class="rp-v" id="rpVer">v0.8.0</span>
-        <span class="rp-gh" id="rpGh">@chenhw7/dsh-memory</span>
-      </div>
-      <div class="rp-chips" id="rpChips"></div>
-      <div class="rl-head">// last 14 days · hover a day for churn &amp; commits</div>
-      <canvas class="act" id="actCv"></canvas>
-      <div class="act-tip" id="actTip"></div>
-      <div class="act-sum" id="actSum"></div>
-      <div class="act-note" id="actNote"></div>
+    <div class="sec-head rv">
+      <div class="sec-kick">CAPABILITIES · WHAT IT DOES</div>
+      <h2 class="sec-title">Four capabilities</h2>
     </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">01 · Persistent storage</div>
+        <h3>Dual-backend KV store, fully audited</h3>
+        <p>JSON (the host storage domain) or SQLite (<code>node:sqlite</code>, zero extra dependencies) backends with a one-time migration; cross-process single-writer detection guards against concurrent clobbering. Four tables — entries / audit / suggestions / meta — and every change is attributed and audited. Uninstall the plugin, keep the memories.</p>
+        <div class="tags"><span class="tag">survives restarts</span><span class="tag">single-writer detection</span></div>
+      </div>
+      <div class="card rv" style="--d:.1s">
+        <div class="ic">02 · Smart retrieval</div>
+        <h3>Dependency-free BM25, CJK as a first-class citizen</h3>
+        <p>A hand-rolled Okapi BM25: conservative Latin stemming folds word forms, CJK runs emit unigrams plus adjacent bigrams — "记忆" no longer matches every entry containing "记". Three scopes (global / project / user), summary indexed alongside content, pinned entries surface first.</p>
+        <div class="tags"><span class="tag">measured, not vibes</span><span class="tag">CJK tokenization</span></div>
+      </div>
+      <div class="card rv" style="--d:.18s">
+        <div class="ic">03 · Auto-learning</div>
+        <h3>Extraction, consolidation, supersession</h3>
+        <p>Three signals (explicit intent / user correction / verified failure streaks) trigger LLM extraction; new entries face the old ones through an IDF-weighted prefilter and one batched consolidation call — duplicates merge, outdated ones supersede with a <code>supersededBy</code> mark. Optional review queue: models propose, you decide.</p>
+        <div class="tags"><span class="tag">20 extractions/session</span><span class="tag">you stay in control</span></div>
+      </div>
+      <div class="card rv" style="--d:.26s">
+        <div class="ic">04 · Context injection</div>
+        <h3>Five modes, KV-prefix stability</h3>
+        <p>The memory snapshot freezes at session creation and is reused all session — prefix unchanged, KV-cache fully warm. Five injection modes (index, the default, is an existence index) disclose progressively, with standing cost always visible (<code>≈N tokens</code> footer). Optional step-level auto-recall rides the message channel and never touches the system prompt.</p>
+        <div class="tags"><span class="tag">progressive disclosure</span><span class="tag">visible cost</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ NUMBERS ═══════════ -->
+<section id="numbers">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">MEASURED · NUMBERS, NOT VIBES</div>
+      <h2 class="sec-title">Metrics with <em>CI gates</em></h2>
+    </div>
+    <div class="statwall rv" style="--d:.1s">
+      <div class="stat"><b>9</b><span>model-facing tools</span><div class="src">memory_search → memory_forget</div></div>
+      <div class="stat"><b>100<small>%</small></b><span>success@5 · retrieval hit rate</span><div class="src">35×35 en+zh golden set · CI floor 85%</div></div>
+      <div class="stat"><b>0.902</b><span>MRR · ranking quality</span><div class="src">same golden set · CI floor 0.75</div></div>
+      <div class="stat"><b>≈344</b><span>tokens · policy-only standing injection</span><div class="src">independent of store size</div></div>
+      <div class="stat"><b>967</b><span>test cases</span><div class="src">961 passing + 6 key-gated skips · every push</div></div>
+      <div class="stat"><b>3</b><span>scopes</span><div class="src">global · project · user</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ HOW ═══════════ -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">HOW · HOW IT WORKS</div>
+      <h2 class="sec-title">Three steps: <em>distill → store → inject</em></h2>
+    </div>
+    <div class="steps">
+      <div class="step rv" style="--d:.05s">
+        <h3>In session · distill</h3>
+        <p>Three signals stream through a zero-LLM-cost accumulator: explicit intent ("remember / from now on"), user corrections ("actually, no"), and failure streaks resolved by success. Past the threshold (default 10), exactly one LLM extraction fires.</p>
+      </div>
+      <div class="step rv" style="--d:.15s">
+        <h3>Store · settle</h3>
+        <p>Every write passes 37 scanner rules and appends an audit record; entries are deduped and consolidated against the store — duplicates merge, outdated ones supersede. The BM25 index is ready as soon as the write lands, and every hit refreshes the freshness stamp.</p>
+      </div>
+      <div class="step rv" style="--d:.25s">
+        <h3>Next session · inject</h3>
+        <p>The snapshot freezes at session creation (index mode by default): the model sees what exists and pulls full text via memory_get; step-level auto-recall can add relevant memories on the fly — all with visible token cost.</p>
+      </div>
+    </div>
+
+    <div class="cta rv" style="justify-content:flex-start">
+      <a class="btn primary" href="memory-architecture.html">Follow one memory through its whole life →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ TRUST ═══════════ -->
+<section id="trust">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">TRUST · SAFETY &amp; CONTROL</div>
+      <h2 class="sec-title">Every memory is gated <em>and audited</em></h2>
+      <p class="sec-sub">Memories get re-read into future context — they are an attack surface, so defense is two-sided.</p>
+    </div>
+    <div class="grid3">
+      <div class="card rv" style="--d:.02s">
+        <div class="ic">WRITE + READ · DUAL DEFENSE</div>
+        <h3>Scanned in, redacted out</h3>
+        <p>37 rules at write time (16 secrets · 17 prompt injections incl. 8 Chinese · 4 exfiltration) — rejected content never lands; every prompt-facing read re-redacts, leaked content renders as <code>[BLOCKED: …]</code>. The original stays inspectable — silent deletion only hides the attack.</p>
+      </div>
+      <div class="card rv" style="--d:.1s">
+        <div class="ic">AUDIT · FULL AUDIT</div>
+        <h3>Who wrote it, when — forever queryable</h3>
+        <p>Every change appends an audit record: action, source (tool / review / flush / ui / janitor), content preview — 200 rolling with a monotonic seq.</p>
+      </div>
+      <div class="card rv" style="--d:.18s">
+        <div class="ic">GUARD · DANGEROUS OPS GATED</div>
+        <h3>Mass forgetting can't run away</h3>
+        <p><code>memory_forget</code> demands an explicit <code>confirm: true</code>; batches over the ceiling are refused, pinned entries are exempt and reported, every removal is individually audited.</p>
+      </div>
+      <div class="card rv" style="--d:.26s">
+        <div class="ic">HUMAN · ONE-VOTE VETO</div>
+        <h3>Models propose, humans decide</h3>
+        <p>With confirm-before-write on, every extraction and tool write degrades to a proposal; repeatedly observed proposals float to the top. Edits to existing entries never touch the original before adoption.</p>
+      </div>
+      <div class="card rv" style="--d:.34s">
+        <div class="ic">REMOTE · WRITES DENIED BY DEFAULT</div>
+        <h3>A wide trust scope never escalates</h3>
+        <p>The browser console is read-only until a deployment-level switch enables writes — what is trusted is the transport fence, not the storage face.</p>
+      </div>
+      <div class="card rv" style="--d:.42s">
+        <div class="ic">PROMPT · PROMPT DEFENSE</div>
+        <h3>Memory is context, not instructions</h3>
+        <p>Forged fence closers in stored content are neutralized at render time; every injection surface declares that the current user request, repository files, and tool output always outrank memory.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ CONSOLE ═══════════ -->
+<section id="console">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">CONSOLE · MEMORY CONSOLE</div>
+      <h2 class="sec-title">Manage everything without a terminal</h2>
+    </div>
+    <div class="mg rv" style="--d:.1s">
+      <div class="mg-tabs">
+        <span class="on">Overview</span>
+        <span>Review<span class="badge">3</span></span>
+        <span>Manage</span>
+      </div>
+      <div class="mg-body">
+        <div class="mg-col">
+          <h4>Overview · health dashboard</h4>
+          <p>The whole store at a glance, with telemetry for background-task failures.</p>
+          <ul>
+            <li>total <b>128</b> · pinned <b>7</b> · decaying <b>3</b></li>
+            <li>global <b>41</b> / project <b>62</b> / user <b>25</b></li>
+            <li>audit <b>200</b> rolling · last extraction <b>yesterday 22:41</b></li>
+          </ul>
+        </div>
+        <div class="mg-col">
+          <h4>Review · proposal queue</h4>
+          <p>The human-veto desk: hits-descending, the most-raised proposals first.</p>
+          <ul>
+            <li><b>adopt</b> after editing · <b>reject</b> in one click</li>
+            <li>badge tracks the pending count live</li>
+            <li>edits to existing entries <b>never auto-apply</b></li>
+          </ul>
+        </div>
+        <div class="mg-col">
+          <h4>Manage · full operations</h4>
+          <p>Scope + workspace filters, BM25 search, category chips, lazy-loaded list.</p>
+          <ul>
+            <li>edit · pin / unpin</li>
+            <li>archive / unarchive · delete</li>
+            <li>decay markers at a glance</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="small rv" style="margin-top:16px">The mock above illustrates the console UI (numbers are not real). The four settings cards — Memory, Project Notes, Auto Recall, Automatic Extraction — apply live with no restart; the UI is bilingual. The plugin never writes files into your repository.</p>
+  </div>
+</section>
+
+<!-- ═══════════ HONESTY ═══════════ -->
+<section id="honesty">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">HONESTY · FIT &amp; BOUNDARIES</div>
+      <h2 class="sec-title">What it's for — <em>and what it isn't</em></h2>
+    </div>
+    <div class="grid2">
+      <div class="card rv" style="--d:.05s">
+        <div class="ic">FIT · BUILT FOR</div>
+        <h3>Long-lived personal and team assets</h3>
+        <p>Cross-session personal preferences and working habits; a project's team conventions and commit norms; verified pitfalls and fixes from debugging; engineering judgment accumulated over long iterations. It helps an agent accrue experience — it is not a general knowledge base.</p>
+      </div>
+      <div class="card rv" style="--d:.15s">
+        <div class="ic">LIMITS · KNOWN LIMITS</div>
+        <h3>Said up front, honestly</h3>
+        <p>Retrieval is purely lexical: BM25 does no semantic vectors, so a paraphrased query misses (synonyms ride on summary indexing). Extraction quality tracks the session model — no extra keys. The host DeepSeek Harness is on the alpha channel (0.1.2-alpha); the plugin moves with it. The remote console is transport-trust only, writes off by default.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ STATUS ═══════════ -->
+<section id="status">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <div class="sec-kick">STATUS · PROJECT STATUS</div>
+      <h2 class="sec-title">Where the repo stands today</h2>
+    </div>
+    <div class="statusgrid rv" style="--d:.1s">
+      <div class="st-cell">
+        <div class="sl">CURRENT VERSION</div>
+        <b id="stVer">v0.9.1</b>
+        <div class="ss" id="stVerSrc">npm registry · baked snapshot</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">TOTAL COMMITS</div>
+        <b id="stCommits">207</b>
+        <div class="ss" id="stCommitsSrc">stats.json · baked snapshot</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">LAST UPDATE</div>
+        <b id="stUpdated">2026-09-07</b>
+        <div class="ss" id="stUpdatedSrc">stats.json · baked snapshot</div>
+      </div>
+      <div class="st-cell">
+        <div class="sl">TEST CASES</div>
+        <b>967</b>
+        <div class="ss">961 passing + 6 key-gated skips</div>
+      </div>
+    </div>
+    <p class="small rv" style="margin-top:16px">Version and commit figures are read live from the npm registry and the repo's stats.json (refreshed daily by CI) when you open the page; offline you see the baked snapshot above.</p>
   </div>
 </section>
 
 <!-- ═══════════ EXPLORE ═══════════ -->
 <section id="explore">
   <div class="wrap">
-    <div class="sec-head">Explore</div>
+    <div class="sec-head rv">
+      <div class="sec-kick">EXPLORE · GO DEEPER</div>
+      <h2 class="sec-title">Four paths</h2>
+    </div>
     <div class="links">
-      <a href="memory-architecture.html">
-        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M9 3v18"/></svg></span>
-        <span class="lt"><b>Interactive technical deep-dive</b><span>Extraction loop, write-path gates, BM25 kernel, decay simulator — all live in your browser</span></span>
+      <a class="rv" style="--d:.02s" href="memory-architecture.html">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
+        <span class="lt"><b>Interactive deep-dive</b><span>The life of a memory: capture, write gates, the BM25 playground, the decay simulator — live in your browser</span></span>
         <span class="ar">→</span>
       </a>
-      <a href="memory-architecture.zh-CN.html">
-        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
-        <span class="lt"><b>交互式技术解析（中文）</b><span>提取循环、写入安全闸、BM25 内核、衰减模拟器，全部在浏览器实时运行</span></span>
+      <a class="rv" style="--d:.1s" href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
+        <span class="lt"><b>GitHub repository</b><span>Source, issues, releases, and the full README — install, configuration, host contract</span></span>
         <span class="ar">→</span>
       </a>
-      <a href="https://github.com/chenhw7/dsh-memory">
-        <span class="lk"><svg width="26" height="26" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></span>
-        <span class="lt"><b>GitHub repository</b><span>Source, issues, releases, full README with install &amp; configuration docs</span></span>
+      <a class="rv" style="--d:.18s" href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 17l4 4M22 17l-4 4M12 7v6M8 10l4-3 4 3"/></svg></span>
+        <span class="lt"><b>npm package</b><span>@chenhw7/dsh-memory · version history · OIDC trusted publishing · SLSA provenance</span></span>
         <span class="ar">→</span>
       </a>
-      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory">
-        <span class="lk"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M2 17l4 4M22 17l-4 4M12 7v6M8 10l4-3 4 3"/></svg></span>
-        <span class="lt"><b>npm package</b><span>@chenhw7/dsh-memory — version history and install instructions</span></span>
+      <a class="rv" style="--d:.26s" href="https://github.com/chenhw7/dsh-memory/tree/main/docs" target="_blank" rel="noopener">
+        <span class="lk"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M9 13h6M9 17h4"/></svg></span>
+        <span class="lt"><b>Repository docs</b><span>TECH_DESIGN · sequence diagrams · the eval handbook · host contract · releasing</span></span>
         <span class="ar">→</span>
       </a>
     </div>
@@ -277,294 +359,49 @@ footer .f-links a:hover{color:var(--amber)}
 <footer>
   <div class="wrap">
     <div>
-      <div class="f-brand">Cairn <span>·</span> <span>@chenhw7/dsh-memory</span></div>
-      <p>Long-term memory for the DeepSeek Harness — an installable profile bundle. MIT licensed.</p>
+      <div class="f-brand">Cairn <span>·</span> @chenhw7/dsh-memory</div>
+      <p>Long-term memory profile bundle for the DeepSeek Harness. MIT licensed; OIDC trusted publishing.</p>
     </div>
     <div class="f-links">
-      <a href="https://github.com/chenhw7/dsh-memory">GitHub →</a>
-      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory">npm →</a>
       <a href="memory-architecture.html">Deep-dive (EN) →</a>
-      <a href="memory-architecture.zh-CN.html">技术解析 (中文) →</a>
+      <a href="index.zh-CN.html" hreflang="zh">中文站 →</a>
+      <a href="https://github.com/chenhw7/dsh-memory" target="_blank" rel="noopener">GitHub →</a>
+      <a href="https://www.npmjs.com/package/@chenhw7/dsh-memory" target="_blank" rel="noopener">npm →</a>
     </div>
   </div>
 </footer>
 
+<script src="assets/site.js"></script>
 <script>
-/* ═════════ development activity (three-lane live data: stats.json → GitHub API → baked snapshot; npm plate independent) ═════════ */
+/* ═══════ project status: two light lanes (npm registry + stats.json); on failure keep the baked snapshot ═══════ */
 (function(){
 const $=id=>document.getElementById(id);
-const pill=$('livePill'),liveTxt=$('liveTxt'),rpVer=$('rpVer'),rpChips=$('rpChips'),
-      cv=$('actCv'),sumEl=$('actSum'),noteEl=$('actNote'),tip=$('actTip');
-const OFF=new URLSearchParams(location.search).has('offline');
-
-/* offline fallback snapshot: main @ 089369c · built 2026-09-02 (refreshed with releases; forced by ?offline=1) */
-const SNAP={
-  stamp:'2026-09-02',
-  version:'0.8.0',files:105,unpacked:863300,provenance:true,
-  commits:[
-    ['089369c','2026-09-02','chore(site): refresh stats.json [skip ci]'],
-    ['cba3eac','2026-09-02','docs(site): promote doc wayfinding to a sticky top nav'],
-    ['d1d0b65','2026-09-02','chore(site): refresh stats.json [skip ci]'],
-    ['b795250','2026-09-02','docs(site): refresh the index MRR figure to the re-measured baseline'],
-    ['05b033a','2026-09-01','docs(site): port the pulse section to the EN page'],
-    ['42036db','2026-09-01','docs(site): pulse section with live daily activity'],
-    ['b25572d','2026-09-01','ci(site): daily site stats pipeline for the Pages pulse section'],
-    ['fa9462b','2026-09-01','docs(site): port the v0.8.0 facts and mobile adaptation to the English page']
-  ],
-  days:[['2026-08-17',6,4137,36],['2026-08-18',4,1992,76],['2026-08-20',36,9456,2735],['2026-08-21',4,5648,601],['2026-08-24',7,8365,1968],['2026-08-25',5,1462,2019],['2026-08-26',2,3129,89],['2026-08-27',10,4138,1599],['2026-08-28',9,553,221],['2026-08-31',7,10198,5571],['2026-09-01',48,8651,1177],['2026-09-02',4,31,11]]
-};
-
-const pad=n=>String(n).padStart(2,'0');
-const fmt=n=>Math.round(n).toLocaleString('en-US');
-function localKey(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
-function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+if(new URLSearchParams(location.search).has('offline'))return; /* ?offline=1: pure static demo */
 function fetchJson(url){
   const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),6000);
   return fetch(url,{signal:ctl.signal,cache:'no-store'})
     .then(r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
     .catch(e=>{clearTimeout(t);throw e});
 }
-/* short-TTL session cache, 5 minutes: bursts of reloads in one tab don't burn
-   the anonymous 60 req/h GitHub budget, but a refresh never shows data older
-   than five minutes either. No date key — entries simply expire, and values
-   written by the old per-day scheme lack .ts and are ignored. */
-const CACHETTL=5*60e3;
-function cached(key,load){
-  try{
-    const hit=JSON.parse(sessionStorage.getItem(key)||'null');
-    if(hit&&hit.ts&&Date.now()-hit.ts<CACHETTL)return Promise.resolve(hit.v);
-  }catch(_){/* sessionStorage unavailable or a foreign value → hit the network */}
-  return load().then(v=>{try{sessionStorage.setItem(key,JSON.stringify({ts:Date.now(),v}))}catch(_){/* cache failure must not block rendering */}return v});
-}
-
-let days=SNAP.days.map(q=>({d:q[0],c:q[1],a:q[2],del:q[3]}));
-let commits=SNAP.commits.map(r=>({h:r[0],d:r[1],s:r[2]}));
-let npm={version:SNAP.version,files:SNAP.files,unpacked:SNAP.unpacked,provenance:SNAP.provenance};
-let tier=OFF?'snap':'boot',statsDay='',pendingChurn=false;
-
-function setPill(kind,label){pill.className='live'+(kind?' '+kind:'');liveTxt.textContent=label}
-function renderPlate(live){
-  rpVer.textContent='v'+npm.version;
-  const chips=[(live?'npm · latest':'npm snapshot')+' v'+npm.version];
-  if(npm.files)chips.push(npm.files+' files');
-  if(npm.unpacked)chips.push((npm.unpacked/1024).toFixed(1)+' KiB unpacked');
-  if(npm.provenance)chips.push('✓ SLSA provenance');
-  if(npm.license)chips.push(npm.license);
-  rpChips.innerHTML=chips.map(c=>'<span class="rp-chip">'+esc(c)+'</span>').join('');
-}
-
-/* activity chart: 14-day line chart (last 14 local days; amber=added, red=deleted).
-   Hover a day point — the pinned readout below the chart shows that day's
-   churn and commits, up to 5 listed with the rest collapsed. */
-const WINDOW=14;
-let seq=[],byKey={},dayCommits={},hover=-1;
-function windowSeq(){
-  byKey={};days.forEach(d=>{if(d.c>0)byKey[d.d]=d});
-  seq=[];const now=new Date();
-  for(let i=WINDOW-1;i>=0;i--){
-    const dt=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i);
-    const k=localKey(dt);
-    seq.push({d:k,row:byKey[k]||null});
-  }
-}
-/* per-day commit lists for the day-detail readout, built from whichever
-   commit feed is active (snapshot bake → GitHub API once live) — the active
-   feed can be partial, and "… +N more" below accounts for the remainder */
-function rebuildDayCommits(){
-  dayCommits={};
-  commits.forEach(c=>{const k=localKey(new Date(c.d));(dayCommits[k]=dayCommits[k]||[]).push({h:c.h,s:c.s})});
-}
-function draw(){
-  windowSeq();
-  const dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
-  if(!W)return;
-  cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
-  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
-  g.clearRect(0,0,W,H);
-  const css=getComputedStyle(document.documentElement);
-  const AMB=(css.getPropertyValue('--amber')||'#d19a4a').trim(),
-        RED=(css.getPropertyValue('--red')||'#c25c5c').trim(),
-        TEAL=(css.getPropertyValue('--teal')||'#4ec9b0').trim(),
-        FAINT=(css.getPropertyValue('--faint')||'#7a7466').trim(),
-        MONO=css.getPropertyValue('--mono')||'monospace';
-  /* layout constants — evIndex reuses the same numbers for hit-testing */
-  const L=12,R=12,T=24,B=18,N=WINDOW;
-  const step=(W-L-R)/(N-1),base=H-B,ph=H-T-B;
-  const vmax=Math.max(1,...seq.map(q=>q.row&&!q.row.pending?Math.max(q.row.a,q.row.del):0));
-  const X=i=>L+i*step,Y=v=>base-v/vmax*ph;
-  const todayK=localKey(new Date());
-  const ti=seq.findIndex(q=>q.d===todayK);
-  if(ti>=0){g.fillStyle='rgba(78,201,176,.05)';g.fillRect(Math.max(0,X(ti)-step/2),T-10,Math.min(step,W),ph+10);}
-  g.strokeStyle='rgba(156,147,127,.3)';g.beginPath();g.moveTo(L,base+.5);g.lineTo(W-R,base+.5);g.stroke();
-  g.strokeStyle='rgba(156,147,127,.12)';g.setLineDash([3,4]);g.beginPath();g.moveTo(L,Y(vmax/2)+.5);g.lineTo(W-R,Y(vmax/2)+.5);g.stroke();g.setLineDash([]);
-  if(hover>=0&&hover<N){g.strokeStyle='rgba(236,229,213,.22)';g.beginPath();g.moveTo(X(hover)+.5,T-10);g.lineTo(X(hover)+.5,base);g.stroke();}
-  g.font='9px '+MONO;
-  /* polylines: idle days fall to the baseline; churn-pending days break the line */
-  const line=(col,pick)=>{g.strokeStyle=col;g.lineWidth=1.5;g.beginPath();let open=false;
-    seq.forEach((q,i)=>{if(q.row&&q.row.pending){open=false;return}
-      const x=X(i),y=Y(q.row?pick(q.row):0);
-      if(!open){g.moveTo(x,y);open=true}else g.lineTo(x,y)});
-    g.stroke();g.lineWidth=1};
-  line(AMB,r=>r.a);line(RED,r=>r.del);
-  /* day points: solid dots = counted day, hollow ring = churn pending, tick = no commits */
-  seq.forEach((q,i)=>{
-    const x=X(i);
-    if(!q.row){g.fillStyle='rgba(156,147,127,.28)';g.fillRect(x-2,base-1.5,4,1.5);
-      if(i===hover){g.strokeStyle='rgba(236,229,213,.55)';g.beginPath();g.arc(x,base,4.5,0,6.28);g.stroke()}
-      return}
-    if(q.row.pending){g.strokeStyle=AMB;g.beginPath();g.arc(x,base,i===hover?4:2.6,0,6.28);g.stroke();return}
-    g.fillStyle=AMB;g.beginPath();g.arc(x,Y(q.row.a),i===hover?3.4:2.2,0,6.28);g.fill();
-    g.fillStyle=RED;g.beginPath();g.arc(x,Y(q.row.del),i===hover?3.4:2.2,0,6.28);g.fill();
-    if(i===hover){g.strokeStyle='rgba(255,206,115,.9)';g.beginPath();g.arc(x,Y(q.row.a),5.4,0,6.28);g.stroke();}
-  });
-  /* x labels: today in teal; MM-DD every day the step can fit, else thinned */
-  const skip=Math.max(1,Math.ceil(34/step));
-  seq.forEach((q,i)=>{
-    if(q.d===todayK){g.fillStyle=TEAL;g.textAlign='center';g.fillText('today',X(i),H-4)}
-    else if(i===hover||i%skip===0){g.fillStyle=i===hover?'#ece5d5':FAINT;g.textAlign='center';g.fillText(q.d.slice(5),Math.max(16,Math.min(W-16,X(i))),H-4)}
-  });
-  g.textAlign='left';
-  g.fillStyle=AMB;g.fillRect(L+2,5,7,7);g.fillStyle=FAINT;g.fillText('added',L+13,12);
-  g.fillStyle=RED;g.fillRect(L+52,5,7,7);g.fillStyle=FAINT;g.fillText('deleted',L+63,12);
-}
-/* pinned day-detail readout: two grid cells — date/counts left, commits right;
-   lives below the canvas and never covers it */
-function renderDayDetail(i){
-  const q=seq[i];if(!q)return;
-  const r=q.row;
-  let top='<div class="at-d">'+q.d+(q.d===localKey(new Date())?' · today':'')+'</div>';
-  if(!r)top+='<div class="at-c">no commits</div>';
-  else if(r.pending)top+='<div class="at-c">'+r.c+' commit'+(r.c>1?'s':'')+' · churn pending next build</div>';
-  else top+='<div class="at-c"><span style="color:var(--amber)">+'+fmt(r.a)+'</span> / <span style="color:var(--red)">−'+fmt(r.del)+'</span> lines · '+r.c+' commit'+(r.c>1?'s':'')+'</div>';
-  let bottom='';
-  if(r){
-    const list=dayCommits[q.d]||[];
-    list.slice(0,5).forEach(c=>{bottom+='<div class="at-m"><span>'+esc(c.h)+'</span>'+esc(c.s)+'</div>'});
-    if(!list.length)bottom='<div class="at-more">commit list unavailable at this tier</div>';
-    else if(r.c>Math.min(5,list.length))bottom+='<div class="at-more">… +'+(r.c-Math.min(5,list.length))+' more</div>';
-  }
-  tip.innerHTML='<div>'+top+'</div><div>'+bottom+'</div>';
-}
-/* readout at rest: the latest day with commits (today in the common case) */
-function defaultIndex(){
-  for(let i=seq.length-1;i>=0;i--)if(seq[i].row)return i;
-  return seq.length-1;
-}
-function evIndex(e){
-  const r=cv.getBoundingClientRect(),L=12,R=12;
-  const i=Math.round((e.clientX-r.left-L)/((r.width-L-R)/(WINDOW-1)));
-  return i>=0&&i<WINDOW?i:-1;
-}
-cv.addEventListener('pointermove',e=>{const i=evIndex(e);if(i<0||i===hover)return;hover=i;draw();renderDayDetail(i)});
-cv.addEventListener('pointerdown',e=>{const i=evIndex(e);if(i>=0){hover=i;draw();renderDayDetail(i)}}); /* touch taps: pointermove may never fire */
-cv.addEventListener('pointerleave',()=>{hover=-1;draw();renderDayDetail(defaultIndex())});
-function renderActivity(){
-  hover=-1;
-  const nz=days.filter(d=>d.c>0);
-  const c=nz.reduce((s,d)=>s+d.c,0),a=nz.reduce((s,d)=>s+d.a,0),dl=nz.reduce((s,d)=>s+d.del,0);
-  sumEl.innerHTML='<b>'+nz.length+'</b> days with commits · <b>'+fmt(c)+'</b> commits · <b>+'+fmt(a)+'</b> / <span style="color:var(--red)">−'+fmt(dl)+'</span> lines <span style="color:var(--faint)">· all time</span>';
-  draw();
-  renderDayDetail(defaultIndex());
-}
-if('ResizeObserver' in window)new ResizeObserver(()=>draw()).observe(cv);
-else addEventListener('resize',()=>draw(),{passive:true});
-
-function setNote(){
-  const todayK=localKey(new Date());
-  const tr=days.find(d=>d.d===todayK);
-  let h='';
-  if(tier==='boot'){
-    h='<div>▸ connecting GitHub · npm · stats.json …</div>';
-  }else if(tier==='live'){
-    if(tr&&tr.c>0)h='<div><span class="teal">╰─ today LIVE · '+tr.c+' commits · +'+fmt(tr.a)+' / −'+fmt(tr.del)+' lines</span></div>';
-    else h='<div><span class="teal">╰─ no new commits today · live-synced from the GitHub API</span></div>';
-  }else if(tier==='stats'){
-    h='<div>▸ today&apos;s increment unreachable · chart as of the '+esc(statsDay||'stats.json')+' build</div>';
-  }else{
-    h='<div>▸ '+(OFF?'?offline=1 engaged · ':'live sources unreachable · ')+'showing the '+SNAP.stamp+' baked snapshot</div>';
-  }
-  if(pendingChurn)h+='<div>▸ churn for new commits lands in the next build · stats.json refreshes daily</div>';
-  noteEl.innerHTML=h;
-}
-function settle(){
-  setPill(tier==='live'?'on':tier==='stats'?'sh':'',
-    tier==='live'?'● LIVE · GitHub API':tier==='stats'?'◐ STATS · '+statsDay:tier==='boot'?'·· connecting':'○ SNAPSHOT · '+SNAP.stamp);
-  rebuildDayCommits();renderActivity();setNote();
-}
-
-/* snapshot first (instant first paint), then three lanes race to upgrade */
-renderPlate(false);settle();
-if(OFF){/* ?offline=1: issue no network requests — pure snapshot demo */}
-else (async()=>{
-  cached('cairn-npm',()=>fetchJson('https://registry.npmjs.org/@chenhw7%2fdsh-memory/latest'))
-    .then(j=>{
-      if(!j||!j.version)return;
-      npm={version:j.version,files:j.dist&&j.dist.fileCount,unpacked:j.dist&&j.dist.unpackedSize,
-           provenance:!!(j.dist&&j.dist.attestations&&j.dist.attestations.provenance),license:j.license};
-      renderPlate(true);
-    })
-    .catch(_=>{/* npm unreachable: keep the snapshot plate */});
-  /* windowed feed: the 14-day chart needs per-day commit lists, so the API
-     query is scoped to the window; the latest-8 log still comes off the top,
-     and a repo quiet for 14+ days just yields an empty list — the stats /
-     snapshot tiers keep the panel alive */
-  const sinceD=new Date();sinceD.setDate(sinceD.getDate()-(WINDOW-1));
-  const [stats,api]=await Promise.all([
-    cached('cairn-repo-stats',()=>fetchJson('stats.json')).catch(()=>null),
-    cached('cairn-repo-feed',()=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits?per_page=100&since='+localKey(sinceD))).catch(()=>null)
-  ]);
-  if(stats&&Array.isArray(stats.days)&&stats.days.length){
-    days=stats.days.map(r=>({d:String(r.d||''),c:+r.c||0,a:+r.a||0,del:+r.del||0}))
-      .filter(r=>/^\d{4}-\d{2}-\d{2}$/.test(r.d))
-      .sort((x,y)=>x.d<y.d?-1:1);
-    statsDay=(String(stats.generated||'')).slice(0,10);
-    tier='stats';
-  }
-  if(Array.isArray(api)&&api.length){
-    const list=api.map(x=>({
-      h:(x.sha||'').slice(0,7),
-      d:x.commit&&x.commit.author&&x.commit.author.date||'',
-      s:(x.commit&&x.commit.message||'').split('\n')[0]
-    })).filter(x=>x.h&&x.s&&x.d&&!isNaN(new Date(x.d)));
-    if(list.length){commits=list;tier='live';}
-    /* increment merge: group API commits by local day; per-day max against build data, new days push in */
-    const byDay={};
-    list.forEach(x=>{const k=localKey(new Date(x.d));(byDay[k]=byDay[k]||[]).push(x)});
-    const idx={};days.forEach((d,i)=>idx[d.d]=i);
-    /* collect row references up front — object references survive later push/sort */
-    const targets=Object.keys(byDay)
-      .filter(k=>idx[k]==null||days[idx[k]].c<byDay[k].length)
-      .map(k=>({k,grp:byDay[k],row:idx[k]==null?null:days[idx[k]]}));
-    const missing=targets.reduce((n,t)=>n+(t.row?t.grp.length-t.row.c:t.grp.length),0);
-    let details=null;
-    if(missing>0&&missing<=8){
-      const shas=[];
-      targets.forEach(t=>t.grp.slice(0,t.grp.length-(t.row?t.row.c:0)).forEach(x=>shas.push(x.h)));
-      try{
-        /* per-commit detail calls are the quota hot spot (up to 8 per view) — cache them by sha set */
-        details=await cached('cairn-repo-det:'+shas.join(','),()=>Promise.all(shas.map(h=>fetchJson('https://api.github.com/repos/chenhw7/dsh-memory/commits/'+h)
-          .then(j=>({h:h,a:+(j.stats&&j.stats.additions)||0,del:+(j.stats&&j.stats.deletions)||0})))));
-      }catch(_){details=null;/* details unreachable: merge counts only, mark churn pending */}
-    }
-    if(missing>0&&!details)pendingChurn=true;
-    let added=false;
-    targets.forEach(t=>{
-      const known=t.row?t.row.c:0;
-      const row=t.row||(t.row={d:t.k,c:0,a:0,del:0});
-      if(details){
-        const m={};details.forEach(x=>m[x.h]=x);
-        t.grp.slice(0,t.grp.length-known).forEach(x=>{const d2=m[x.h];if(d2&&d2.a+d2.del>0){row.a+=d2.a;row.del+=d2.del}});
-      }
-      row.c=Math.max(row.c,t.grp.length);
-      if(!details)row.pending=true; /* API-increment day without churn detail: line breaks, tooltip says pending */
-      if(days.indexOf(row)<0){days.push(row);added=true}
-    });
-    if(added)days.sort((x,y)=>x.d<y.d?-1:1);
-  }
-  /* when every lane fails, land on the real snapshot tier (else the pill hangs in "connecting") */
-  if(tier==='boot')tier='snap';
-  settle();
-})();
+fetchJson('https://registry.npmjs.org/@chenhw7%2fdsh-memory/latest')
+  .then(j=>{if(!j||!j.version)return;
+    $('stVer').textContent='v'+j.version;
+    $('stVerSrc').innerHTML='<span class="live-dot">●</span> npm registry · live';
+  })
+  .catch(_=>{/* npm unreachable: keep the baked version and the snapshot label */});
+fetchJson('stats.json')
+  .then(j=>{
+    if(!j||!Array.isArray(j.days))return;
+    const days=j.days.filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(String(d.d||'')));
+    if(!days.length)return;
+    const total=days.reduce((s,d)=>s+(+d.c||0),0);
+    if(total>0)$('stCommits').textContent=total;
+    const gen=String(j.generated||'').slice(0,10);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(gen))$('stUpdated').textContent=gen;
+    $('stCommitsSrc').innerHTML='<span class="live-dot">●</span> stats.json · daily build';
+    $('stUpdatedSrc').innerHTML='<span class="live-dot">●</span> stats.json · daily build';
+  })
+  .catch(_=>{/* stats.json unreachable: keep the baked figures and the snapshot label */});
 })();
 </script>
 
