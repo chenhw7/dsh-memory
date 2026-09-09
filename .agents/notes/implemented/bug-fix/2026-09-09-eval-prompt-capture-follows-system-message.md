@@ -18,7 +18,7 @@ The M0 chain smoke failed with "no system prompt captured from turn 1 (request/h
 
 ## Testing
 
-`npm run eval:smoke`: red before (identical on the base tree), green after — both turns report the 6400-char prompt (turn 1 from the event, turn 2 from the standing fallback), the `<memory-index>` fence carries both seed facts, and the medium keeps both entries after dispose. The vitest suite is untouched (the change lives entirely in `eval/`, which no vitest lane compiles).
+`npm run eval:smoke`: red before (identical on the base tree), green after — both turns report the 6400-char prompt (turn 1 from the event, turn 2 from the standing fallback), the `<memory-index>` fence carries both seed facts, and the medium keeps both entries after dispose. `tests/eval-harness.spec.ts` is the reducer's vitest lane — it compiles `eval/harness/sdk-client.ts` directly, and its cases assert the `system/message` fold, that a `request/header` event contributes no prompt, and that an empty system node reads as `''`.
 
 ## Alternatives considered
 

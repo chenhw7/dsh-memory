@@ -18,7 +18,7 @@ M0 链路冒烟以「no system prompt captured from turn 1 (request/header event
 
 ## Testing
 
-`npm run eval:smoke`：修复前红（在基线树上同样红），修复后绿——两轮都报告 6400 字符提示词（轮 1 来自事件，轮 2 来自 standing 回退），`<memory-index>` 围栏携带两条种子事实，dispose 后介质保留两条条目。vitest 套件不受影响（改动全部落在 `eval/`，没有任何 vitest 通道编译它）。
+`npm run eval:smoke`：修复前红（在基线树上同样红），修复后绿——两轮都报告 6400 字符提示词（轮 1 来自事件，轮 2 来自 standing 回退），`<memory-index>` 围栏携带两条种子事实，dispose 后介质保留两条条目。`tests/eval-harness.spec.ts` 是该 reducer 的 vitest 通道——它直接编译 `eval/harness/sdk-client.ts`，其用例断言 `system/message` 折叠、`request/header` 事件不贡献提示词、空 system 节点读作 `''`。
 
 ## Alternatives considered
 

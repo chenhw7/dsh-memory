@@ -163,11 +163,23 @@ describe('eval quiesce stability judgment', () => {
 })
 
 describe('eval SDK session-event reducer', () => {
-  it('captures the assembled system prompt from request/header snapshots', () => {
+  it('captures the assembled system prompt from system/message surface events', () => {
     const collector = emptyTurnCollector()
-    collectSessionEvent(collector, { type: 'request/header', seq: 1, data: { header: { system: 'You are a coding agent.\n<memory-index>\nindex lines' } } })
-    collectSessionEvent(collector, { type: 'request/header', seq: 5, data: { header: { system: 'changed header' } } })
-    expect(collector.systemPrompt).toBe('changed header')
+    const node = (text: string) => ({ message: { role: 'system', content: [{ type: 'text', text }] } })
+    collectSessionEvent(collector, { type: 'system/message', seq: 1, data: node('You are a coding agent.\n<memory-index>\nindex lines') })
+    collectSessionEvent(collector, { type: 'system/message', seq: 5, data: node('changed prompt') })
+    expect(collector.systemPrompt).toBe('changed prompt')
+  })
+
+  it('reads request/header as no prompt and an empty system node as an empty one', () => {
+    const collector = emptyTurnCollector()
+    // The prompt is surface node 0; request/header carries config and tools only.
+    collectSessionEvent(collector, { type: 'request/header', seq: 1, data: { header: { model: 'test-model', tools: [] } } })
+    expect(collector.systemPrompt).toBeUndefined()
+    // '' rather than undefined, so the boot's standing-prompt fallback cannot
+    // carry a dead prompt past a turn whose prompt went empty.
+    collectSessionEvent(collector, { type: 'system/message', seq: 2, data: { message: { role: 'system', content: [] } } })
+    expect(collector.systemPrompt).toBe('')
   })
 
   it('keeps the last assistant message text and pairs tool calls with results', () => {
