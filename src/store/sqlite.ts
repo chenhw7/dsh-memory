@@ -33,6 +33,7 @@ import {
 } from '../index.ts'
 import { scanContent } from '../scanner.ts'
 import { buildCorpusStatsFromTokens, Bm25Index, tokenizeForSearch } from './bm25.ts'
+import { nextIdentityRecord } from './identity-util.js'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -560,13 +561,10 @@ export class SqliteMemoryStore extends MemoryStore {
     return row === undefined ? undefined : asEntry(rowToRecord(row)) as unknown as MemorySuggestion
   }
 
-  /**
-   * Identity-proposal adoption (confirm-mode `identity_update` on sqlite):
-   * the human's yes rewrites the document through the identity write path and
-   * removes the queue row. Entry proposals delegate to the base no-op — the
-   * pre-existing sqlite suggestions-adopt gap for entries is recorded in the
-   * identity-layer Agent Note and stays out of this feature's scope.
-   */
+  // Entry proposals intentionally remain a no-op in sqlite mode (the base-class
+  // super.adoptSuggestion returns undefined); only identity proposals are adopted
+  // here via updateIdentity + queue deletion. See Agent Note on sqlite
+  // suggestions-adopt gap for rationale.
   override async adoptSuggestion(id: string, override?: AdoptSuggestionOverride): Promise<MemoryEntry | undefined> {
     const suggestion = this.getSuggestion(id)
     if (suggestion === undefined || suggestion.identityKind === undefined) {
@@ -856,26 +854,4 @@ function keyPrefix(key: string): string {
 /** Merged content+summary token bag per entry (the search index's unit). */
 function entryIndexTokens(entry: MemoryEntry): string[] {
   return [...tokenizeForSearch(`${entry.content}\n${entry.summary ?? ''}`)]
-}
-
-/**
- * Compute the next identity record (the DomainMemoryStore twin — duplicated
- * per this file's self-containment precedent instead of importing the sibling
- * provider module): version = current + 1 (or 1 on the first write);
- * `seedVersion` sticky after creation.
- */
-function nextIdentityRecord(
-  current: IdentityRecord | undefined,
-  kind: IdentityKind,
-  content: string,
-  input: UpdateIdentityInput,
-  now: number,
-): IdentityRecord {
-  return {
-    kind,
-    content,
-    version: (current?.version ?? 0) + 1,
-    updatedAt: now,
-    seedVersion: current?.seedVersion ?? input.seedVersion ?? 1,
-  }
 }

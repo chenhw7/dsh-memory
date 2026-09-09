@@ -21,6 +21,7 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
+import { nextIdentityRecord } from './identity-util.js'
 import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
 import {
   CrossProcessGuard,
@@ -387,6 +388,9 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
         mediumIdentity,
         [...identityHistory.entries()].map(([, record]) => record),
       )
+      // If a crash occurs after importFromDomain completes but before the medium is
+      // cleared, the next boot re-imports; this is safe because importFromDomain uses
+      // stable primary keys with INSERT OR REPLACE, making re-import idempotent.
       // The imported rows are now memory.db's rows, so the medium's data
       // tables clear before the marker lands. Left in place they would make
       // the next sqlite boot trip the both-sides guard on its own leftovers
@@ -935,6 +939,7 @@ export class DomainMemoryStore extends MemoryStore {
     // Match against existing proposals: same target entry wins outright;
     // otherwise nearest-content in the same scope above the dup threshold.
     let matched: MemorySuggestion | undefined
+    const inputTokens = uniqueTokens(input.content)
     for (const [, suggestion] of this.suggestions.entries()) {
       if (input.targetEntryId !== undefined) {
         if (suggestion.targetEntryId === input.targetEntryId) { matched = suggestion; break }
@@ -948,7 +953,7 @@ export class DomainMemoryStore extends MemoryStore {
       // the df table per row would be wasteful, but the queue is tiny — and
       // the table only needs building once per observe call, not per row.
       const stats = buildCorpusStats([input.content, suggestion.content])
-      const similarity = weightedOverlapSimilarity(stats, uniqueTokens(input.content), uniqueTokens(suggestion.content))
+      const similarity = weightedOverlapSimilarity(stats, inputTokens, uniqueTokens(suggestion.content))
       if (similarity > SUGGESTION_DUP_THRESHOLD) { matched = suggestion; break }
     }
     if (matched !== undefined) {
@@ -998,6 +1003,9 @@ export class DomainMemoryStore extends MemoryStore {
       throw new Error(`suggestion content rejected by scanner: ${scan.reasons.join('; ')}`)
     }
     const now = Date.now()
+    // Identity proposals dedup by kind alone (not content similarity like entry
+    // proposals): each identity kind has exactly one living document, so the
+    // latest proposal per kind always supersedes earlier ones.
     for (const [, suggestion] of this.suggestions.entries()) {
       if (suggestion.identityKind !== input.identityKind) continue
       const improved = input.content.length > suggestion.content.length && input.content.includes(suggestion.content)
@@ -1294,6 +1302,10 @@ export class DomainMemoryStore extends MemoryStore {
       // once-per-process guarded by the identity service and the domain's
       // single-writer guard excludes cross-process racers, so the residual
       // window is a same-process race between two simultaneous first writes.
+      // Fragile: the fallback to put() relies on error-message text from the host's
+      // KvTable.update; if the host changes its wording this branch may stop firing.
+      // Ideally the host would expose a typed MissingRecordError; until then, keep
+      // the string set narrow and update it when the host is bumped.
       if (!(error instanceof Error) || !(error.message.includes('missing-key') || error.message.includes('no record'))) throw error
       record = nextIdentityRecord(undefined, kind, content, input, now)
       await identity.put(kind, record)
@@ -1513,27 +1525,6 @@ export class DomainMemoryStore extends MemoryStore {
 function preview(content: string): string {
   const p = content.slice(0, 100)
   return scanContent(p).allowed ? p : '[content redacted]'
-}
-
-/**
- * Compute the next identity record: version = current + 1 (or 1 on the first
- * write), `seedVersion` sticky after creation (the caller's seed generation
- * only matters for the document's founding write).
- */
-function nextIdentityRecord(
-  current: IdentityRecord | undefined,
-  kind: IdentityKind,
-  content: string,
-  input: UpdateIdentityInput,
-  now: number,
-): IdentityRecord {
-  return {
-    kind,
-    content,
-    version: (current?.version ?? 0) + 1,
-    updatedAt: now,
-    seedVersion: current?.seedVersion ?? input.seedVersion ?? 1,
-  }
 }
 
 /** Importances land in 1–5 regardless of what the caller passed in. */

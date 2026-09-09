@@ -343,22 +343,31 @@ export function renderIdentityDocuments(identity: IdentityService | undefined): 
  */
 const IDENTITY_ECHO_THRESHOLD = 0.6
 
+/** Precomputed identity document input for the anti-echo prefilter. */
+interface IdentityEchoDoc {
+  readonly text: string
+  readonly tokens: ReadonlySet<string>
+}
+
 /**
- * The currently-injected identity documents as raw text (the prefilter's
+ * The currently-injected identity documents and their tokens (the prefilter's
  * comparison set). Absent service or disabled layer → no documents, so the
  * prefilter is inert.
  */
-function identityEchoDocuments(ctx: Context): string[] {
+function identityEchoDocuments(ctx: Context): IdentityEchoDoc[] {
   const snapshot = ctx.get('identity')?.snapshotFor()
   if (snapshot === undefined) return []
-  return [snapshot.soul, snapshot.user].filter(text => text.length > 0)
+  return [snapshot.soul, snapshot.user]
+    .filter(text => text.length > 0)
+    .map(text => ({ text, tokens: uniqueTokens(text) }))
 }
 
 /** Whether a normalized candidate merely restates one of the identity documents. */
-function isIdentityEcho(content: string, documents: readonly string[]): boolean {
-  for (const doc of documents) {
-    const stats = buildCorpusStats([content, doc])
-    if (weightedOverlapSimilarity(stats, uniqueTokens(content), uniqueTokens(doc)) > IDENTITY_ECHO_THRESHOLD) return true
+function isIdentityEcho(content: string, docs: readonly IdentityEchoDoc[]): boolean {
+  const contentTokens = uniqueTokens(content)
+  for (const { text, tokens } of docs) {
+    const stats = buildCorpusStats([content, text])
+    if (weightedOverlapSimilarity(stats, contentTokens, tokens) > IDENTITY_ECHO_THRESHOLD) return true
   }
   return false
 }
@@ -585,7 +594,7 @@ export async function suggestMemories(
   // Anti-echo (identity layer): candidates that merely restate an injected
   // identity document never join the queue — they are already permanently
   // injected, and queueing them would double them.
-  const identityEchos = identityEchoDocuments(ctx)
+  const identityEchoDocs = identityEchoDocuments(ctx)
   for (const entry of parsed) {
     let category = entry.category ?? attachCategory
     const stripped = stripContentTag(entry.content)
@@ -594,7 +603,7 @@ export async function suggestMemories(
     if (content.length === 0) continue
     const scan = scanContent(content)
     if (!scan.allowed) continue
-    if (identityEchos.length > 0 && isIdentityEcho(content, identityEchos)) continue
+    if (identityEchoDocs.length > 0 && isIdentityEcho(content, identityEchoDocs)) continue
     const targetEntryId = findDuplicate(content, entry.scope, existing)
     try {
       await memory.observeSuggestion({
@@ -681,7 +690,7 @@ export async function storeMemories(
   // Anti-echo (identity layer): normalized candidates that merely restate an
   // injected identity document are dropped before either write path — the
   // mechanical half of the anti-echo rule (the prompt rule is the other).
-  const identityEchos = identityEchoDocuments(ctx)
+  const identityEchoDocs = identityEchoDocuments(ctx)
   // Per-entry normalization shared by both paths: category tag resolution,
   // model-date prefix stripping, and the content scan — every surviving
   // entry is clean before either write path sees it.
@@ -699,7 +708,7 @@ export async function storeMemories(
     if (content.length === 0) continue
     const scan = scanContent(content)
     if (!scan.allowed) continue
-    if (identityEchos.length > 0 && isIdentityEcho(content, identityEchos)) continue
+    if (identityEchoDocs.length > 0 && isIdentityEcho(content, identityEchoDocs)) continue
     normalized.push({
       scope: entry.scope,
       content,
