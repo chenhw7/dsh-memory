@@ -29,7 +29,7 @@ import { parseDataset, type EvalScenario } from './schema.ts'
 
 const USAGE = `usage:
   npm run eval -- --dataset <file> --build <dir> [--mode mock|real|external] [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>]
-                  [--judge] [--memory-mode index|full] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N]
+                  [--judge] [--memory-mode index|full|digest] [--no-memory] [--filter <id>[,<id>...]] [--concurrency N]
                   [--turn-wall-seconds N] [--turn-tool-calls N] [--out <file>]
   npm run eval:ab -- --baseline <dir> --candidate <dir> [same flags; --build not allowed]
 
@@ -44,7 +44,7 @@ flags:
   --model <id>          model id for real|external (default: the deployment home's
                         agent-default-model.model, else deepseek-v4-flash; printed per run)
   --judge               enable the rubric judge when the judge environment is present
-  --memory-mode index|full       injection-mode axis (default index)
+  --memory-mode index|full|digest  injection-mode axis (default index)
   --no-memory           memory injection off — the control group
   --identity            identity-layer axis on: the soul/user-profile sections
                         inject (over an identity-seeded medium; off is the default
@@ -68,7 +68,7 @@ interface CliArgs {
   readonly baseUrl?: string
   readonly apiKey?: string
   readonly judge: boolean
-  readonly memoryMode: 'index' | 'full'
+  readonly memoryMode: 'index' | 'full' | 'digest'
   readonly noMemory: boolean
   readonly identity: boolean
   readonly filter?: string
@@ -127,8 +127,8 @@ function parseCliArgs(argv: readonly string[]): { ab: boolean; args: CliArgs } {
     throw new Error(`eval cli: --mode must be mock|real|external, got ${JSON.stringify(mode)}\n${USAGE}`)
   }
   const memoryMode = optional('memory-mode') ?? 'index'
-  if (memoryMode !== 'index' && memoryMode !== 'full') {
-    throw new Error(`eval cli: --memory-mode must be index|full, got ${JSON.stringify(memoryMode)}\n${USAGE}`)
+  if (memoryMode !== 'index' && memoryMode !== 'full' && memoryMode !== 'digest') {
+    throw new Error(`eval cli: --memory-mode must be index|full|digest, got ${JSON.stringify(memoryMode)}\n${USAGE}`)
   }
   const concurrencyRaw = optional('concurrency') ?? '4'
   const concurrency = Number.parseInt(concurrencyRaw, 10)

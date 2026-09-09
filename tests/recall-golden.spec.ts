@@ -6,9 +6,9 @@
  * weights, budgets) is judged against numbers instead of vibes.
  *
  * The same spec prints the per-mode standing injection cost table behind the
- * policy-only default-mode decision
- * (.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.md):
- * policy-only vs index vs full.
+ * digest-first default-mode decision
+ * (.agents/notes/implemented/architecture/2026-09-09-memory-digest-first-fence-and-volatility-ordering.md):
+ * policy-only vs digest vs index vs full, plus the one-time digest message.
  *
  * Set DSH_MEMORY_EVAL_VERBOSE=1 to dump per-case rankings.
  */
@@ -22,7 +22,7 @@ import {
   measureInjectionCost,
   formatCostRow,
 } from '../src/benchmark/index.ts'
-import { readMemorySnapshot, readMemoryIndex, buildMemorySectionText } from '../src/context/index.ts'
+import { readMemorySnapshot, readMemoryIndex, buildMemorySectionText, buildMemoryDigestText } from '../src/context/index.ts'
 
 /** In-memory stand-in for a storage-domain KV table. */
 function memTable<K extends string, V>(): KvTable<K, V> {
@@ -98,20 +98,25 @@ describe('recall evaluation baseline (P1-4)', () => {
     )
   })
 
-  it('prints the standing injection-cost table for the three prompt modes (P1-8)', async () => {
+  it('prints the standing injection-cost table for the prompt modes (P1-8)', async () => {
     const store = await fixtureStore()
     const CHAR_LIMIT = 5000
     const snapshot = readMemorySnapshot(store, CHAR_LIMIT, undefined, 20)
     const index = readMemoryIndex(store, CHAR_LIMIT)
-    const sectionOf = (mode: 'policy-only' | 'index' | 'full'): string =>
+    const sectionOf = (mode: 'policy-only' | 'index' | 'full' | 'digest'): string =>
       buildMemorySectionText(mode, '', mode === 'full' ? snapshot : '', mode === 'index' ? index : '')
 
     // Index awareness coverage: entries whose existence line survived the budget.
     const indexLineCount = index.split('\n').filter(line => line.includes(' · ')).length
     const fullEntryCount = (snapshot.match(/^- /gm) ?? []).length
 
+    // The digest default carries no entry data in the standing prefix; its
+    // one-time step-tail message is measured separately below.
+    const digestMessage = buildMemoryDigestText(store.list(), 800)
+
     const rows = [
       measureInjectionCost('policy-only', sectionOf('policy-only')),
+      measureInjectionCost('digest', sectionOf('digest')),
       measureInjectionCost('index', sectionOf('index'), { entriesRendered: indexLineCount, indexLines: indexLineCount }),
       measureInjectionCost('full', sectionOf('full'), { entriesRendered: fullEntryCount }),
     ]
@@ -119,18 +124,24 @@ describe('recall evaluation baseline (P1-4)', () => {
     console.log('\n[standing injection cost @35-entry fixture, charLimit=5000]')
     console.log(`mode          chars     approxTokens entriesRendered indexLines`)
     for (const row of rows) console.log(formatCostRow(row))
-    console.log(`\nindex awareness coverage: ${indexLineCount}/${GOLDEN_ENTRIES.length} entries visible as existence lines`)
+    console.log(`\none-time digest message: ${digestMessage.length} chars ≈${Math.ceil(digestMessage.length / 4)} tokens (digest mode, first step only)`)
+    console.log(`index awareness coverage: ${indexLineCount}/${GOLDEN_ENTRIES.length} entries visible as existence lines`)
 
     // Sanity anchors (not performance claims):
     // - policy-only stays flat regardless of store size (zero entry content);
+    // - digest resides guidance-only, so its section carries no entry data;
     // - both content modes render real material on this fixture;
     // - full respects its 20-entry cap while index fits all lines in budget.
-    const [policyOnly, indexCost, full] = rows
+    const [policyOnly, digest, indexCost, full] = rows
     expect(policyOnly!.approxTokens).toBeGreaterThan(50)
+    expect(digest!.approxTokens).toBeGreaterThan(50)
+    expect(digest!.entriesRendered).toBe(0)
     expect(indexCost!.approxTokens).toBeGreaterThan(50)
     expect(full!.approxTokens).toBeGreaterThan(50)
     expect(policyOnly!.entriesRendered).toBe(0)
     expect(indexCost!.entriesRendered).toBe(GOLDEN_ENTRIES.length)
     expect(full!.entriesRendered).toBeLessThan(GOLDEN_ENTRIES.length)
+    // The one-time digest message stays a fraction of index's standing cost.
+    expect(digestMessage.length).toBeGreaterThan(0)
   })
 })

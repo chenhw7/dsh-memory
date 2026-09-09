@@ -153,7 +153,10 @@ describe('memory-context hit wiring (live listeners)', () => {
     ctx.provide('systemPrompt', { section: () => () => {} })
     const store = new HitStore(2)
     ctx.provide('memory', store)
-    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    // `full` mode: the standing prefix injects entry content, so the standing
+    // ledger is seeded (the digest default injects no entry data — covered
+    // by its own test below).
+    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
     // Freeze the standing ledger (session/created fires the freeze).
     ctx.emit('session/created', session)
     // A restating answer books the hit for the standing entry.
@@ -163,13 +166,29 @@ describe('memory-context hit wiring (live listeners)', () => {
     expect(store.hitIds[0]).toEqual(['mem-0'])
   })
 
+  it('digest mode books no standing hit: a data-less prefix has no ledger to echo', async () => {
+    const ctx = new Context()
+    ctx.provide('llm', {})
+    ctx.provide('systemPrompt', { section: () => () => {} })
+    const store = new HitStore(2)
+    ctx.provide('memory', store)
+    // The factory default (`digest`) injects only counts/topics into the
+    // prefix, never entry content, so an answer must not "hit" an entry it was
+    // never shown; the per-step recall fence is the only ledger source (B2).
+    await ctx.plugin(context, { memoryMode: 'digest', autoRecallEnabled: false, hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    ctx.emit('session/created', session)
+    ctx.emit('session/event', session, { type: 'assistant/message', seq: 2, time: 0, data: { message: { content: [{ type: 'text', text: 'entry 0 的约定已确认，后续照办' }] } } })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(store.hitIds).toEqual([])
+  })
+
   it('an answer that ignores the injected entries books no hit', async () => {
     const ctx = new Context()
     ctx.provide('llm', {})
     ctx.provide('systemPrompt', { section: () => () => {} })
     const store = new HitStore(2)
     ctx.provide('memory', store)
-    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
     ctx.emit('session/created', session)
     ctx.emit('session/event', session, { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '今天天气不错去爬山吧' }] } } })
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -195,7 +214,7 @@ describe('memory-context hit wiring (live listeners)', () => {
     ctx.provide('systemPrompt', { section: () => () => {} })
     const store = new HitStore(1)
     ctx.provide('memory', store)
-    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
     ctx.emit('session/created', session)
     const answer = { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'entry 0 的约定已确认，后续照办' }] } } }
     ctx.emit('session/event', session, answer)

@@ -243,7 +243,7 @@ export function evaluateRecall(searcher: Searcher, k: number = 5): EvalReport {
 
 /** Standing injection cost of one prompt mode over the fixture store. */
 export interface InjectionCost {
-  readonly mode: 'policy-only' | 'index' | 'full'
+  readonly mode: 'policy-only' | 'index' | 'full' | 'digest'
   /** Rendered section characters. */
   readonly chars: number
   /** ≈tokens at the ~4-chars/token heuristic used by readMemorySnapshot. */

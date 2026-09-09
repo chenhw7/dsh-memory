@@ -146,8 +146,9 @@ export function buildUserProfileSectionText(content: string, charLimit: number):
 /**
  * Build the `project-notes` system-prompt section text for one assembly. Each
  * half carries its own budget at render time (entry-level selection in the
- * notes renderer); the fence-level budget here is their sum, and `fenceWithin`
- * is the final defense that keeps the section inside it with the fence closed.
+ * notes renderer); the fence-level budget here is their sum plus the fence
+ * frame, so two within-budget halves are never re-truncated, and `fenceWithin`
+ * is the final defense that keeps the section closed if a half overruns.
  * @param conventions - the frozen conventions text (possibly empty).
  * @param pitfalls - the frozen pitfalls text (possibly empty).
  * @param conventionsCharLimit - the conventions half's character budget.
@@ -163,11 +164,19 @@ export function buildNotesSectionText(
   if (conventionsCharLimit <= 0 && pitfallsCharLimit <= 0) return ''
   const body = [conventions, pitfalls].filter(text => text.trim().length > 0).join('\n\n')
   if (body.length === 0) return ''
+  // Each per-kind budget caps its half's rendered BODY (entry-level selection
+  // in the notes renderer). The whole-section cap is their sum PLUS the fence
+  // frame (opening tag + note + closing tag): a fence budget of the bare sum
+  // would subtract the frame from the body room and re-truncate two halves
+  // that each fit their own budget — letting the conventions half (rendered
+  // first) eat into the pitfalls half, the starvation the split budgets exist
+  // to prevent. fenceWithin stays the final defense for a half that overran.
+  const frameOverhead = `<project-notes>\n${PROJECT_NOTES_NOTE}\n\n`.length + '\n</project-notes>'.length
   return fenceWithin(
     'project-notes',
     PROJECT_NOTES_NOTE,
     body,
-    conventionsCharLimit + pitfallsCharLimit,
+    conventionsCharLimit + pitfallsCharLimit + frameOverhead,
     '…(truncated — notes are partial; use memory_search for the rest)',
   )
 }
@@ -447,12 +456,16 @@ export function buildMemoryDigestText(
   const topics = [...anchorCounts.entries()]
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
 
-  const countLine = stale > 0 ? `[${visible.length} entries; ${stale} stale hidden]` : `[${visible.length} entries]`
+  const entryNoun = visible.length === 1 ? 'entry' : 'entries'
+  const countLine = stale > 0
+    ? `[${visible.length} ${entryNoun}; ${stale} stale hidden]`
+    : `[${visible.length} ${entryNoun}]`
   const opening = `<memory-digest>\n${MEMORY_DIGEST_NOTE}\n\n`
   const closing = `\n</memory-digest>`
-  // Frame overhead: opening, the count line, the closing tag. Group lines and
-  // the topics line share the remainder.
-  let remaining = charLimit - (opening.length + countLine.length + 1 + closing.length)
+  // Frame overhead: opening, the count line and its leading newline, the
+  // closing tag, plus the blank line that separates the group block from the
+  // Topics line. Group lines and the topics line share the remainder.
+  let remaining = charLimit - (opening.length + countLine.length + 1 + closing.length + 2)
   if (remaining < 0) return ''
 
   const groupLines: string[] = []

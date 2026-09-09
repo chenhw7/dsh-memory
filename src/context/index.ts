@@ -149,7 +149,7 @@ const NOTES_SECTION_NAME = 'project-notes'
 const NOTES_SECTION_ORDER = 6001
 /** The `soul` system-prompt section name. */
 const SOUL_SECTION_NAME = 'soul'
-/** Soul section order: after the deployment persona (order 0), before memory (90). */
+/** Soul section order: after the deployment persona (order 0), before memory (6000). */
 const SOUL_SECTION_ORDER = 80
 /** The `user-profile` system-prompt section name. */
 const USER_PROFILE_SECTION_NAME = 'user-profile'
@@ -652,14 +652,27 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     const exclude = notes.notesEnabled
       ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
       : undefined
+    // Both snapshots are frozen mode-agnostically: the section reads only the
+    // one its live mode needs (content in `full`, index in `index`, neither in
+    // `digest`), but freezing both means a live mode switch is served from the
+    // same frozen snapshot until the next boundary rather than an empty one.
+    const content = readMemorySnapshot(memory, charLimit, exclude, maxEntries)
+    const index = readMemoryIndex(memory, charLimit, exclude)
     sessionMemory.set(session, {
-      content: readMemorySnapshot(memory, charLimit, exclude, maxEntries),
-      index: readMemoryIndex(memory, charLimit, exclude),
+      content,
+      index,
       notes: notesSnapshot,
       identity,
     })
-    // The standing round's ledger: the entries the frozen snapshot injected.
-    hitLedger.set(session, settings.hitSignalEnabled ? standingLedger(memory, exclude) : [])
+    // The standing round's ledger books hits against entries the FROZEN
+    // prefix actually injected, so only the data-resident modes seed it: in
+    // `full` the content snapshot, in `index` the existence lines. In
+    // `digest`/`policy-only`/`custom`/`off` no entry data resides, so the
+    // ledger starts empty and a fired auto-recall fence fills it per step
+    // (below) — otherwise an answer could "hit" entries it was never shown.
+    const standingInjectsEntries = (settings.memoryMode === 'full' && content.length > 0)
+      || (settings.memoryMode === 'index' && index.length > 0)
+    hitLedger.set(session, settings.hitSignalEnabled && standingInjectsEntries ? standingLedger(memory, exclude) : [])
   }
 
   /**
@@ -716,16 +729,19 @@ export function apply(ctx: Context, config: MemoryConfig): void {
 
       // The one-time digest: an inventory, not a recall — no markRecalled,
       // no hit ledger. Notes-rendered entries are excluded by the same
-      // predicate the snapshot uses, so nothing shows up twice.
+      // predicate the snapshot uses, so nothing shows up twice. The
+      // per-session flag is set only once the message is actually returned
+      // (below), so a throw in the recall branch cannot silently consume it.
       let digestBlock = ''
+      let digestEmitting = false
       if (settings.memoryMode === 'digest' && settings.memoryDigestCharLimit > 0 && session !== undefined && !digestSent.has(session)) {
         const exclude = notesResolved().notesEnabled
           ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
           : undefined
         const digest = buildMemoryDigestText(memory.list(), settings.memoryDigestCharLimit, exclude)
         if (digest.length > 0) {
-          digestSent.add(session)
           digestBlock = digest
+          digestEmitting = true
         }
       }
 
@@ -757,6 +773,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
         content: [{ type: 'text', text }],
         source: { kind: 'plugin', plugin: 'dsh-memory-context' },
       })
+      // Committed to emitting: mark the digest sent only now, so any failure
+      // above falls through with the flag intact and the digest re-tries.
+      if (digestEmitting && session !== undefined) digestSent.add(session)
       return { kind: 'enter', messages: [...payload.messages, message] }
     } catch (error) {
       // Injection must never break the step: fall through unchanged, but stay observable.
@@ -818,7 +837,7 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       const snapshot = session === undefined ? undefined : sessionMemory.get(session)
       // The frozen snapshot already applied the entry-level budgets at freeze
       // time; the live budgets here are the assembly-side final defense
-      // (fenceWithin cuts the joined body to their sum, fence closed).
+      // (fenceWithin caps the whole section at their sum plus the fence frame).
       return buildNotesSectionText(
         snapshot?.notes.conventions ?? '',
         snapshot?.notes.pitfalls ?? '',

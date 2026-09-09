@@ -165,7 +165,7 @@ describe('integration: host services (P1-3)', () => {
     const fenceText = JSON.stringify(appended[1])
     expect(fenceText).toContain('<memory-digest>')
     expect(fenceText).toContain('digest-topic')
-    expect(fenceText).toContain('[1 entries]')
+    expect(fenceText).toContain('[1 entry]')
   })
 
   it('index mode renders one id-addressed existence line per entry, preferring summaries', async () => {

@@ -27,8 +27,8 @@ Status: implemented
 |---|---|---|---|
 | `soul`（order 80） | SOUL.md：人格、底线规则、安全框架、核心价值观 | 出厂种子 + 代理对话中改写 | 版本化；无 decay / consolidation / conflict |
 | `user-profile`（order 81） | USER.md：用户基本信息与沟通偏好 | 出厂骨架 + 代理对话中积累 | 同上 |
-| `memory`（order 90） | 学到的原子事实 | 工具 / 评审管线 | decay / consolidation / conflict |
-| `project-notes`（order 91） | conventions / pitfalls 投影 | store | 跟随 store |
+| `memory`（order 6000） | 学到的原子事实 | 工具 / 评审管线 | decay / consolidation / conflict |
+| `project-notes`（order 6001） | conventions / pitfalls 投影 | store | 跟随 store |
 
 - **存储**：`memoryDomainSpec` 六表（域 version 保持 0，零迁移先例第四次复用）——`identity`（key 为 kind）与 `identity_history`（key 为 `${kind}#${version}`，全量快照，每类封顶 20 版、最旧先淘汰；身份写的审计面就是历史表，主 `audit` 表的 entryId 键位不适用）。`DomainMemoryStore` 与 `SqliteMemoryStore` **双后端全量实现**；json→sqlite 一次性迁移导入并清空五张数据表，双侧守卫对 identity 计数同样生效。抽象 `MemoryStore` 的 identity 默认：读降级、写 **throw**「no identity layer」——静默 no-op 会让 `identityEnabled` 看似工作实则不持久。
 - **种子（seed-once）**：中文出厂种子（维护者参考文案为基底；SOUL 含「几条真话/边界/气质/延续」骨架与告知条款，USER 含空骨架与分寸条款；**不预填任何 PII、不加防陈旧条款**——2026-09-08 裁定）。缺记录的文档当会话即以种子内容供给（首会话 prompt 完整），持久写 fire-and-forget 落 v1；此后插件永不覆盖。`identitySeedDir` 可选覆盖（存在的文件须过 scanner，缺文件按类别保留内置种子＝部分覆盖）。**装载期 loud 门在 `memory-context` 的 apply**（`memory` 命名空间拥有者校验自己的组合层配置：目录不存在或种子文件违规即挂载失败）；设置叠层改动走可观测降级——cordis 会吞 `ctx.inject` 回调的 throw（实测），门不能放 identity 插件里。

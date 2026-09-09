@@ -80,7 +80,7 @@ export interface RunOptions {
   /** `external` only: key for `DEEPSEEK_API_KEY` (default `eval-fake-key`). */
   readonly apiKey?: string
   /** Injection-mode axis (default `index`), applied via configPatches. */
-  readonly memoryMode: 'index' | 'full'
+  readonly memoryMode: 'index' | 'full' | 'digest'
   /** Control group: memory injection `off`; overrides `memoryMode`. */
   readonly noMemory: boolean
   /** Identity-layer axis (default off): the `soul`/`user-profile` sections + identity_update gate. */

@@ -109,6 +109,22 @@ describe('renderConventions / renderPitfalls', () => {
     expect(renderConventions(many, 0, 0)).toBe('')
   })
 
+  it('keeps the render within the char budget — fold count lines and headings included', () => {
+    // Entries spread across every conventions scope so the fold path emits a
+    // heading AND a count line per scope: the rendered text (bullets, those
+    // headings, and the fold lines) must still fit the budget — the B1
+    // regression, where the appended fold lines overran it.
+    const spread = [
+      ...Array.from({ length: 15 }, (_, i) => entry({ scope: 'project', category: 'preference', projectName: 'app', content: `project convention ${i} with a body long enough to matter here`, updatedAt: 300 + i })),
+      ...Array.from({ length: 15 }, (_, i) => entry({ scope: 'global', category: 'preference', content: `global convention ${i} with a body long enough to matter here`, updatedAt: 200 + i })),
+      ...Array.from({ length: 15 }, (_, i) => entry({ scope: 'user', category: 'preference', content: `personal habit ${i} with a body long enough to matter here`, updatedAt: 100 + i })),
+    ]
+    for (const budget of [300, 450, 800, 1600]) {
+      const text = renderConventions(spread, 0, budget)
+      expect(text.length).toBeLessThanOrEqual(budget)
+    }
+  })
+
   it('orders selection by pinned, then importance, then use signal', () => {
     const pinnedLow = entry({ scope: 'global', category: 'preference', content: 'pinned wins', pinned: true, updatedAt: 0 })
     const highImportanceOld = entry({ scope: 'global', category: 'preference', content: 'critical convention', importance: 5, updatedAt: 1 })
@@ -187,17 +203,30 @@ describe('buildNotesSectionText', () => {
     expect(text).toContain('# Conventions')
     expect(text.endsWith('</project-notes>')).toBe(true)
   })
-  it('truncates to the combined budget with the fence closed and a retrieval-hint footnote', () => {
-    // The combined budget covers the frame (opening + note + footnote +
-    // closing ≈ 260 chars) but not the 8000-char body.
+  it('truncates a per-kind body that overruns, with the fence closed and a retrieval-hint footnote', () => {
+    // The section cap is the two budgets PLUS the fence frame, so a half that
+    // overruns its own budget still closes its fence and degrades to a hint.
     const text = buildNotesSectionText('x'.repeat(8000), '', 200, 200)
     expect(text).toContain('notes are partial; use memory_search for the rest')
     expect(text.endsWith('</project-notes>')).toBe(true)
-    expect(text.length).toBeLessThanOrEqual(400)
+    // Bounded by the two budgets plus the frame (never the raw 8000-char body).
+    expect(text.length).toBeLessThanOrEqual(700)
   })
-  it('drops the section when the budget cannot carry the frame', () => {
+  it('two within-budget halves are both kept — conventions never eats the pitfalls half', () => {
+    // Both halves near their own budget: their sum plus the frame is the cap,
+    // so neither is truncated and the pitfalls heading survives (the B1
+    // regression — a bare-sum fence cap used to cut the pitfalls tail).
+    const conv = '# Conventions\n\n## Global practices\n\n' + '- convention line that is fairly long\n'.repeat(30)
+    const pit = '# Pitfalls\n\n## Project pitfalls\n\n' + '- (2026-01-01) pitfall line that is fairly long\n'.repeat(12)
+    const text = buildNotesSectionText(conv.slice(0, 1580), pit.slice(0, 780), 1600, 800)
+    expect(text).not.toContain('notes are partial; use memory_search for the rest')
+    expect(text).toContain('## Global practices')
+    expect(text).toContain('## Project pitfalls')
+    expect(text.endsWith('</project-notes>')).toBe(true)
+  })
+  it('drops the section when the summed budget cannot seat the fence frame', () => {
     expect(buildNotesSectionText('x'.repeat(8000), '', 10, 10)).toBe('')
-    expect(buildNotesSectionText('x'.repeat(8000), '', 100, 100)).toBe('')
+    expect(buildNotesSectionText('x'.repeat(8000), '', 30, 30)).toBe('')
   })
 })
 

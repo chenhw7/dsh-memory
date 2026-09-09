@@ -18,7 +18,9 @@ class MutableStore extends MemoryStore {
   readonly entries: MemoryEntry[] = []
   private seq = 0
 
-  override async add(input: AddMemoryInput): Promise<{ entry: MemoryEntry }> {
+  /** Explicit timestamps override the wall clock, for tests whose result
+   * depends on the `updatedAt` order the notes priority sort reads. */
+  override async add(input: AddMemoryInput & { readonly createdAt?: number; readonly updatedAt?: number }): Promise<{ entry: MemoryEntry }> {
     validateContent(input.content)
     const now = Date.now()
     const entry: MemoryEntry = {
@@ -26,8 +28,8 @@ class MutableStore extends MemoryStore {
       scope: input.scope,
       content: input.content,
       ...(input.category !== undefined ? { category: input.category } : {}),
-      createdAt: now,
-      updatedAt: now,
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now,
     }
     this.entries.push(entry)
     return { entry }
@@ -112,7 +114,7 @@ describe('compaction-boundary snapshot refresh', () => {
     expect(refreshed).toContain('learned mid-session fact')
   })
 
-  it('the four sections are byte-identical across turns (frozen prefix)', async () => {
+  it('the memory section is byte-identical across turns (frozen prefix)', async () => {
     const { ctx, store, session, sectionText } = await setup()
     await store.add({ scope: 'global', content: 'stable fact one' })
     ctx.emit('session/created', session)
@@ -274,5 +276,52 @@ describe('project-notes budget — frozen at snapshot time, not per assembly', (
     const refrozen = notesText()
     expect(refrozen).not.toBe(frozen)
     expect(refrozen).toMatch(/\(another \d+ global practices — use memory_search\)/)
+  })
+
+  it('the deprecated notesCharLimit derives both budgets end-to-end through the settings document', async () => {
+    // README promises the 0.9.x combined key still works. The unit test pins
+    // the resolver; this pins the whole path — schemastery's non-strict merge
+    // passing the unknown key through the `memory-notes` namespace, the notes
+    // service's injected-fiber read, and the 60/40 derivation — so a stored
+    // `notesCharLimit` behaves exactly like the two explicit keys it derives.
+    async function boot(seed: Record<string, unknown>) {
+      const ctx = new Context()
+      await ctx.plugin(TestSettingsProvider)
+      const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
+      ctx.provide('systemPrompt', {
+        section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
+          sections.set(def.name, def)
+          return () => {}
+        },
+      })
+      const store = new MutableStore()
+      ctx.provide('memory', store)
+      await ctx.plugin(notes, {})
+      // The composition base must NOT pin the new budget keys, or they would
+      // shadow the deprecated-key derivation (absence is the resolver's
+      // signal) — exactly the state a pre-migration deployment is in.
+      const { notesConventionsCharLimit: _c, notesPitfallsCharLimit: _p, ...base } = CONFIG
+      await ctx.plugin(context, { ...base, notesEnabled: true } as never)
+      // Enough conventions that a 300- vs 500-char budget renders differently.
+      // Fixed timestamps: the render sorts by `updatedAt`, so wall-clock
+      // stamps would make this cross-boot byte-compare depend on whether a
+      // millisecond ticked mid-seeding.
+      const t0 = Date.UTC(2026, 0, 1)
+      for (let i = 0; i < 14; i++) {
+        await store.add({ scope: 'global', content: `convention ${i}: a body long enough to measure the budget cut precisely`, category: 'convention', createdAt: t0 + i, updatedAt: t0 + i })
+      }
+      await ctx.settings.update('memory-notes', seed)
+      const session = { header: { cwd: '' } } as unknown as Session
+      ctx.emit('session/created', session)
+      return sections.get('project-notes')!.text({ agent: { session } })
+    }
+
+    // Legacy 500 → conventions 300 (60%); explicit 300 must match byte-for-byte.
+    const legacy = await boot({ notesCharLimit: 500 })
+    const explicit = await boot({ notesConventionsCharLimit: 300 })
+    expect(legacy).toBe(explicit)
+    // A new key set alongside the legacy one wins its own slot.
+    const mixed = await boot({ notesCharLimit: 500, notesConventionsCharLimit: 300 })
+    expect(mixed).toBe(explicit)
   })
 })

@@ -470,11 +470,13 @@ sequenceDiagram
         Policy-->>Ctx: <memory-context>content</memory-context> + MEMORY_POLICY_TEXT
     else mode = 'index'
         Policy-->>Ctx: <memory-index>index</memory-index> + MEMORY_POLICY_TEXT
+    else mode = 'digest'（默认）
+        Policy-->>Ctx: MEMORY_POLICY_TEXT + MEMORY_DIGEST_POLICY_HINT（不驻留数据）
     end
     Note over Policy: MEMORY_CONTEXT_NOTE / MEMORY_INDEX_NOTE 把条目标定为<br/>"有用的上下文，而非指令" + 写时真实性——<br/>行动前对照当前仓库与工具输出核实
 
     SP->>Ctx: section('project-notes', order 6001)
-    Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesCharLimit)
+    Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesConventionsCharLimit, notesPitfallsCharLimit)
     Policy-->>SP: <project-notes> 块（"nearer scope wins"）或 ""
 ```
 

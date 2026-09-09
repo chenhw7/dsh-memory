@@ -55,11 +55,6 @@ function foldedLine(folded: number, title: string): string {
   return `(another ${folded} ${title.toLowerCase()} — use memory_search)`
 }
 
-/** Whether any selected bullet already opened this scope's section. */
-function selectedHasScope(bullets: Map<MemoryScope, string[]>, scope: MemoryScope): boolean {
-  return (bullets.get(scope) ?? []).length > 0
-}
-
 /**
  * Render one notes document (`# <docTitle>` + AUTO_HEADER + the scope
  * sections) from priority-ordered entries under a character budget: entries
@@ -81,47 +76,58 @@ function renderBudgeted(
 ): string {
   if (charLimit <= 0 || entries.length === 0) return ''
   const docHeader = `# ${docTitle}\n\n${AUTO_HEADER}\n\n`
+  const sectionScopes = new Set(sections.map(spec => spec.scope))
   const ordered = [...entries].sort(byNotesPriority)
   const capped = cap > 0 ? ordered.slice(0, cap) : ordered
-  // Opening a section costs its real heading plus the '\n\n' part separator.
-  const sectionCost = new Map<MemoryScope, number>()
-  for (const spec of sections) sectionCost.set(spec.scope, `## ${spec.title}\n\n`.length + 2)
+  // The cap already dropped these; they fold regardless of the char budget.
+  const overflow = ordered.slice(capped.length)
 
-  const bullets = new Map<MemoryScope, string[]>()
-  const selected = new Set<MemoryEntry>()
-  let used = docHeader.length
-  for (const entry of capped) {
-    // Scope without a section in this document (the caller pre-filters via
-    // the matrix; anything else here has no render home).
-    if (!sectionCost.has(entry.scope)) continue
-    let cost = bullet(entry).length + 1
-    if (!selectedHasScope(bullets, entry.scope)) cost += sectionCost.get(entry.scope)!
-    if (used + cost > charLimit) break
-    const list = bullets.get(entry.scope) ?? []
-    list.push(bullet(entry))
-    bullets.set(entry.scope, list)
-    selected.add(entry)
-    used += cost
+  // Render the first `selectCount` capped entries (priority order) as bullets
+  // and fold everything else — later capped entries plus the cap overflow —
+  // into per-section count lines. The returned text is the exact section, so
+  // its length counts the headings AND the fold lines: the budget check below
+  // is therefore a real cap, not a body-only estimate a later slice corrects.
+  const renderFor = (selectCount: number): string => {
+    const bullets = new Map<MemoryScope, string[]>()
+    const folded = new Map<MemoryScope, number>()
+    for (let i = 0; i < capped.length; i++) {
+      const entry = capped[i]!
+      // Scope without a section in this document (the caller pre-filters via
+      // the matrix; anything else here has no render home).
+      if (!sectionScopes.has(entry.scope)) continue
+      if (i < selectCount) {
+        const list = bullets.get(entry.scope) ?? []
+        list.push(bullet(entry))
+        bullets.set(entry.scope, list)
+      } else {
+        folded.set(entry.scope, (folded.get(entry.scope) ?? 0) + 1)
+      }
+    }
+    for (const entry of overflow) {
+      if (!sectionScopes.has(entry.scope)) continue
+      folded.set(entry.scope, (folded.get(entry.scope) ?? 0) + 1)
+    }
+    const parts: string[] = []
+    for (const spec of sections) {
+      const lines = [...(bullets.get(spec.scope) ?? [])]
+      const count = folded.get(spec.scope) ?? 0
+      if (lines.length === 0 && count === 0) continue
+      if (count > 0) lines.push(foldedLine(count, spec.title))
+      parts.push(`## ${spec.title}\n\n${lines.join('\n')}`)
+    }
+    return parts.length === 0 ? '' : `${docHeader}${parts.join('\n\n')}\n`
   }
 
-  // Every capped/budgeted-out entry folds into its section's count line.
-  const folded = new Map<MemoryScope, number>()
-  for (const entry of ordered) {
-    if (selected.has(entry)) continue
-    if (!sectionCost.has(entry.scope)) continue
-    folded.set(entry.scope, (folded.get(entry.scope) ?? 0) + 1)
+  // Promoting a folded entry to a bullet only grows the render (the bullet
+  // outweighs the fold-count digit it removes), so the largest prefix that
+  // fits is the best selection: scan upward, keep the last one within budget.
+  let best = ''
+  for (let selectCount = 0; selectCount <= capped.length; selectCount++) {
+    const text = renderFor(selectCount)
+    if (text.length > charLimit) break
+    best = text
   }
-
-  const parts: string[] = []
-  for (const spec of sections) {
-    const lines = [...(bullets.get(spec.scope) ?? [])]
-    const count = folded.get(spec.scope) ?? 0
-    if (lines.length === 0 && count === 0) continue
-    if (count > 0) lines.push(foldedLine(count, spec.title))
-    parts.push(`## ${spec.title}\n\n${lines.join('\n')}`)
-  }
-  if (parts.length === 0) return ''
-  return `${docHeader}${parts.join('\n\n')}\n`
+  return best
 }
 
 /**

@@ -470,11 +470,13 @@ sequenceDiagram
         Policy-->>Ctx: <memory-context>content</memory-context> + MEMORY_POLICY_TEXT
     else mode = 'index'
         Policy-->>Ctx: <memory-index>index</memory-index> + MEMORY_POLICY_TEXT
+    else mode = 'digest' (default)
+        Policy-->>Ctx: MEMORY_POLICY_TEXT + MEMORY_DIGEST_POLICY_HINT (no resident data)
     end
     Note over Policy: MEMORY_CONTEXT_NOTE / MEMORY_INDEX_NOTE frame entries as<br/>"helpful context, not instructions" + write-time truth —<br/>verify against the current repo and tool output before acting
 
     SP->>Ctx: section('project-notes', order 6001)
-    Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesCharLimit)
+    Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesConventionsCharLimit, notesPitfallsCharLimit)
     Policy-->>SP: <project-notes> block ("nearer scope wins") or ""
 ```
 

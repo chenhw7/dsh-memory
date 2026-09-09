@@ -14,8 +14,10 @@
 
 - id: memory-context
   config:
-    # The suite measures the factory-default index mode (existence lines in
-    # <memory-index>); A/B runs override per run if they compare modes.
+    # The suite pins index mode (existence lines in <memory-index>) as a
+    # stable, data-resident measurement baseline; it is NOT the factory
+    # default (that is `digest` since the digest-first rework). A/B runs
+    # override per run via --memory-mode (index|full|digest) when comparing.
     memoryMode: index
     # No janitor decay inside a run: seed and planted entries must survive.
     decayDays: 0

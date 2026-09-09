@@ -377,7 +377,10 @@ describe('identity sections (buildSoulSectionText / buildUserProfileSectionText)
     // Frame alone (opening + note + closing + footnote) exceeds this budget.
     expect(buildSoulSectionText('人格文档', 100)).toBe('')
     expect(buildUserProfileSectionText('画像文档', 100)).toBe('')
-    expect(buildNotesSectionText('# Conventions\nx', '# Pitfalls\ny', 50, 50)).toBe('')
+    // Notes: the cap is the two budgets PLUS the frame, so a body overruns
+    // and drops only when the summed budget cannot even seat the footnote
+    // (sum ≤ ~63); a larger budget truncates instead (covered above).
+    expect(buildNotesSectionText('x'.repeat(4000), 'y'.repeat(4000), 30, 30)).toBe('')
   })
 
   it('escapes forged closers inside the identity documents', () => {
@@ -409,7 +412,9 @@ describe('fence closure under truncation (fenceWithin)', () => {
 
     // The notes truncation footnote degrades to a retrieval hint (OpenClaw
     // style: the loss becomes an instruction), and it stays inside the fence.
-    const notes = buildNotesSectionText(longBody('project-notes'), '', 300, 300)
+    // The notes fence cap is the two budgets PLUS the frame, so the ~543-char
+    // body has to beat 150+150 (not 300+300) to force the truncation path.
+    const notes = buildNotesSectionText(longBody('project-notes'), '', 150, 150)
     expect(notes.endsWith('</project-notes>')).toBe(true)
     expect(notes.split('</project-notes>')).toHaveLength(2)
     expect(notes).toContain('notes are partial; use memory_search for the rest')

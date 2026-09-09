@@ -11,7 +11,7 @@ import { duplicatePairCount, type InjectionCost } from './mechanical.ts'
 
 export type QuestionType = 'single-hop' | 'multi-hop' | 'paraphrase' | 'negative'
 export type ScenarioKind = 'plant' | 'seed'
-export type EffectiveMemoryMode = 'index' | 'full' | 'off'
+export type EffectiveMemoryMode = 'index' | 'full' | 'digest' | 'off'
 
 /** One scored question's outcome (mechanical + judged items, raw values kept). */
 export interface QuestionResult {

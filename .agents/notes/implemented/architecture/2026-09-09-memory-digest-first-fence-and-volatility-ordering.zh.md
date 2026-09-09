@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-09-09-memory-digest-first-fence-and-volatility-ordering.md) | 中文
 
-本笔记**改写而非推翻**[index 默认档晋升](2026-09-01-index-default-promotion.zh.md)。那次晋升保护的价值——模型无需先"猜记忆可能存在"就知道库里*有*东西——由一次性清单的类目计数与 anchors 主题词继承。被削掉的是每条 80 字符的存在明细行与它们在冻结前缀里的常驻：存在性感知的成本从随 store 增长的常驻段落，变为每会话一次、约 114–250 token 的消息。
+本笔记**改写而非推翻**[index 默认档晋升](2026-09-01-index-default-promotion.zh.md)。那次晋升保护的价值——模型无需先"猜记忆可能存在"就知道库里*有*东西——由一次性清单的类目计数与 anchors 主题词继承。被削掉的是每条 80 字符的存在明细行与它们在冻结前缀里的常驻：存在性感知的成本从随 store 增长的常驻段落，变为每会话一次、约 126–250 token 的消息。
 
 ## Problem
 
@@ -38,7 +38,7 @@ index 默认档把整个 store 的存在行驻留在冻结的 system-prompt 前�
 
 ## Consequences
 
-- **常驻前缀：** digest 档段落在 golden 夹具上实测 434 ≈tokens（policy + 追加指引）、双预算 notes 段 466 ≈tokens——对照 index 档 1102 token 的常驻段——且两者整会话逐字节稳定（`tests/context-refresh.spec.ts` 直接断言）。一次性清单消息在 35 条夹具上约 114 ≈tokens（anchors 密集的库约 250）；表格可经 `DSH_MEMORY_EVAL_VERBOSE=1 npx vitest run tests/recall-golden.spec.ts` 重出。
+- **常驻前缀：** digest 档段落在 golden 夹具上实测 434 ≈tokens（policy + 追加指引）、双预算 notes 段 466 ≈tokens——对照 index 档 1102 token 的常驻段——且两者整会话逐字节稳定（`tests/context-refresh.spec.ts` 直接断言）。一次性清单消息在 35 条夹具上约 126 ≈tokens（anchors 密集的库约 250）；表格可经 `DSH_MEMORY_EVAL_VERBOSE=1 npx vitest run tests/recall-golden.spec.ts` 重出。
 - **召回信号三条后果，记录在案：**（1）hit ledger 的 standing 轮改为反映召回集——围栏发射时，其命中替换该轮的 standing ledger，作答只能回声它真实看到的内容；`hitSignalEnabled` 保持默认关，sweep 行为不变。（2）janitor 的衰减计时被词法围栏命中刷新（`lastRecalledAt`），仅碰巧匹配查询词的休眠条目可因此活得更久——按"近期被呈现过"为真而接受。（3）notes 排序的 `lastRecalledAt` 信号由这些围栏戳供给，碰巧匹配查询的约定会在 notes 预算中上浮——importance 与置顶仍排在它前面。
 - **notes 预算冻结时应用：** 预算的实时修改于下一次 `session/created` / 干净 `compaction/end` 落地，而非逐次组装——组装侧 `fenceWithin` 上限是最终防线。卡片提示与 TECH_DESIGN §7.4 已声明。
 - **`notesCharLimit` 弃用：** 该键随 v0.9.1 发布，故降级而非删除——旧键为唯一预算键时 resolver 按 60/40 派生；每设置一个新键即接管对应半区。面向用户的迁移说明在 README 设置迁移小节。
