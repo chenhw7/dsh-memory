@@ -47,7 +47,7 @@ function makeStore(): { store: DomainMemoryStore; warns: string[] } {
 async function setup(settingsValue: Record<string, unknown>, opts: { withStore?: boolean; withSettings?: boolean } = {}) {
   const ctx = new Context()
   if (opts.withSettings !== false) {
-    ctx.provide('settings', { get: (ns: string) => ns === 'memory' ? settingsValue : undefined })
+    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? settingsValue : undefined })
   }
   const { store, warns } = makeStore()
   if (opts.withStore !== false) ctx.provide('memory', store)
@@ -184,7 +184,7 @@ describe('identity seeds — gating', () => {
 describe('identity service — degradation', () => {
   it('a throwing store read degrades to the empty snapshot and reports the failure', async () => {
     const ctx = new Context()
-    ctx.provide('settings', { get: () => ({ identityEnabled: true }) })
+    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? { identityEnabled: true } : undefined })
     const warns: string[] = []
     class ThrowingIdentityStore extends DomainMemoryStore {
       override getIdentity(_kind: IdentityKind): IdentityRecord | undefined { throw new Error('boom') }

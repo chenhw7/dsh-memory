@@ -600,9 +600,9 @@ sequenceDiagram
 
 ---
 
-## 12. Client Settings UI (Four Cards + Memory Section)
+## 12. Client Settings UI (Five Cards + Memory Section)
 
-The browser registers four cards into Settings → Plugins → Plugin configuration, plus the standalone **Memory** section (`settings.section`, id `memory`, order 25) with its three tabs (Overview / Review / Manage); card users edit staged drafts that commit as durable revision-fenced field writes.
+The browser registers five cards into Settings → Plugins → Plugin configuration, plus the standalone **Memory** section (`settings.section`, id `memory`, order 25) with its three tabs (Overview / Review / Manage); card users edit staged drafts that commit as durable revision-fenced field writes.
 
 ```mermaid
 sequenceDiagram
@@ -621,7 +621,7 @@ sequenceDiagram
     Browser->>Client: apply(ctx) [inject: slots, locale, settingsScope, connection]
     Client->>Client: ctx.locale.register('settings.memory', { zh, en })
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
-    loop 4 cards: memory (… memoryMaxEntries) · memory-notes(ns memory) · memory-autorecall(ns memory) · memory-review (… confirmBeforeWrite)
+    loop 5 cards, one served namespace each: memory · memory-notes · memory-autorecall · memory-identity · memory-review (… confirmBeforeWrite)
         Client->>Scope: ctx.settingsScope.bind({ namespace })
         Client->>Browser: slots.inject('settings.plugin.item', key, component)
     end

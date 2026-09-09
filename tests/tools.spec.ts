@@ -961,14 +961,14 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
 })
 
 describe('identity_update (the identity-layer write tool)', () => {
-  /** Boot the tools with a fake `memory` settings namespace and the identity stand-in store. */
+  /** Boot the tools with a fake `memory-identity` settings namespace and the identity stand-in store. */
   async function setupIdentity(settingsValue: Record<string, unknown> = { identityEnabled: true }): Promise<{ ctx: Context; store: TestMemoryStore }> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     const store = new TestMemoryStore()
     ctx.provide('memory', store)
-    ctx.provide('settings', { get: (ns: string) => ns === 'memory' ? settingsValue : undefined })
+    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? settingsValue : undefined })
     await ctx.plugin(tool, { maxSearchResults: 50 })
     return { ctx, store }
   }

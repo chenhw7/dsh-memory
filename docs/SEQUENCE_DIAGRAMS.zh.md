@@ -600,9 +600,9 @@ sequenceDiagram
 
 ---
 
-## 12. 客户端设置界面（四张卡片 + Memory 区）
+## 12. 客户端设置界面（五张卡片 + Memory 区）
 
-浏览器向「设置 → 插件 → 插件配置」注册四张卡片，外加独立的 **Memory** 区（`settings.section`，id `memory`，order 25）及其三个 tab（Overview / Review / Manage）；卡片用户编辑本地暂存的草稿，保存时提交为持久 revision-fenced 字段写入。
+浏览器向「设置 → 插件 → 插件配置」注册五张卡片，外加独立的 **Memory** 区（`settings.section`，id `memory`，order 25）及其三个 tab（Overview / Review / Manage）；卡片用户编辑本地暂存的草稿，保存时提交为持久 revision-fenced 字段写入。
 
 ```mermaid
 sequenceDiagram
@@ -621,7 +621,7 @@ sequenceDiagram
     Browser->>Client: apply(ctx) [inject: slots, locale, settingsScope, connection]
     Client->>Client: ctx.locale.register('settings.memory', { zh, en })
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
-    loop 4 张卡片：memory（… memoryMaxEntries）· memory-notes(ns memory) · memory-autorecall(ns memory) · memory-review（… confirmBeforeWrite）
+    loop 5 张卡片，各占一个已注册命名空间：memory · memory-notes · memory-autorecall · memory-identity · memory-review（… confirmBeforeWrite）
         Client->>Scope: ctx.settingsScope.bind({ namespace })
         Client->>Browser: slots.inject('settings.plugin.item', key, component)
     end

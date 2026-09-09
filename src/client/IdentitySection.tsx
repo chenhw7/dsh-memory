@@ -123,7 +123,7 @@ function DocumentPanel(props: {
         ? <p className={css.empty}>{emptyHint}</p>
         : (
           <>
-            <pre className={css.contentOpen}>{record.content}</pre>
+            <pre className={`${css.content} ${css.contentOpen}`}>{record.content}</pre>
             <div className={css.list}>
               <div className={css.meta}>{translate('identityHistoryTitle')}</div>
               {history.length === 0

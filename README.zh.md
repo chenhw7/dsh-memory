@@ -48,7 +48,7 @@
 - **步级自动召回（可选）** — 每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息；不触碰 system prompt，保持 KV-cache 前缀稳定。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
 - **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
-- **前端可配置** — 所有设置通过 dsh 设置界面的四张卡片暴露，实时生效。
+- **前端可配置** — 所有设置通过 dsh 设置界面的五张卡片暴露，实时生效。
 - **可选的写入前人工确认** — 打开一个开关（`confirmBeforeWrite`）后，自动提取*与*工具调用产生的写入一律先进入待确认队列（同一提议反复出现会累计次数并置顶）；采纳才落库（可先编辑），拒绝即丢弃。模型永不自我提升：对既有条目的修改提议在你采纳前不会改动原文。
 - **记忆管理中心** — dsh 设置界面新增独立「记忆」区，三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、懒加载条目列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
 - **时间窗浏览 + 智能列表视图** — `memory_list` 默认按最新在前返回，附带 `earliest`/`latest`/`hasStale` 元数据，支持 `since`/`until` 毫秒时间戳边界（「上周学了什么」这类查询直接在窗口内分页）；过滤条件命中 0 条但库非空时，会提示放宽过滤条件。
@@ -219,9 +219,12 @@ dsh web
 
 ## 配置
 
-本 bundle 拥有**两个设置命名空间**，在「设置 → 插件 → 插件配置」中显示为四张卡片，且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启：
+本 bundle 拥有**五个设置命名空间**——每个插件配置卡片一个（宿主的 Plugins 页签只在卡片 slot key 指向一个已注册 settings namespace 时才分发该卡片），且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启：
 
-- **`memory`**（卡片：*Memory*、*Project Notes*、*Auto Recall*）——注入模式、字符预算、生命周期、项目笔记、自动召回。由 `memory-context` 持有。
+- **`memory`**（卡片：*Memory*）——注入模式与记忆预算。由 `memory-context` 持有。
+- **`memory-notes`**（卡片：*Project Notes*）——项目笔记 prompt 段开关与预算。由 `memory-context` 持有。
+- **`memory-autorecall`**（卡片：*Auto Recall*）——步级召回围栏与使用命中信号。由 `memory-context` 持有。
+- **`memory-identity`**（卡片：*Identity*）——身份层开关、预算与种子目录。由 `memory-context` 持有。
 - **`memory-review`**（卡片：*Automatic Extraction*）——提取管线、模型路由、去重裁决、失败序列踩坑、curator pass。由 `memory-review` 插件持有。
 
 每个命名空间按分层 resolve：schema 默认 → 组合 `config:` 条目（base）→ `$DSH_HOME/settings.yaml` 中的用户文档。用户层缺失的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。当无 settings 服务挂载时（如 headless profile），各插件回退到组合条目，行为与组合配置完全一致。
@@ -236,12 +239,33 @@ dsh web
 | `memoryMaxEntries` | `20` | 同一冻结快照的条目数上限（`0` = 无限制）。快照尾部附 `≈N tokens` 估算，注入成本始终可见。 |
 | `maxSearchResults` | `50` | `memory_search` / `memory_list` 在调用未传 `limit` 时的默认返回条数上限，由工具插件实时读取。`0` = 无限制。 |
 | `decayDays` | `30` | N 天内未召回条目的生命周期窗口，由 review 插件的 janitor 实时读取。`0` = 禁用。过期的 `project` 条目被**移除**（硬衰减）；过期的 `global`/`user` 条目改为**软衰减**——打上 `stale` 戳，从注入面和笔记文件中隐藏但仍可搜索，再次召回即自动解除。固定（pin）条目始终豁免。 |
+
+### `memory-notes` 命名空间
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
 | `notesEnabled` | `true` | 注入项目笔记 prompt 段落（约定 + 踩坑日志）。已渲染进该段落的条目会从 memory 段落中排除，避免重复注入。不写任何仓库文件。 |
 | `notesCharLimit` | `4000` | 注入的 `project-notes` 段落字符上限。 |
 | `notesMaxEntriesPerFile` | `100` | 渲染进项目笔记段落的最大条目数（保留最新）。 |
+
+### `memory-autorecall` 命名空间
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
 | `autoRecallEnabled` | `false` | 步级自动召回：每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息。不触碰 system prompt，保持 KV-cache 前缀稳定。 |
 | `autoRecallLimit` | `5` | 单次自动召回围栏内的最大条数（最小 1）。围栏本身上限 1200 字符。 |
 | `autoRecallMinChars` | `12` | 该步用户文本短于该字符数时跳过召回（最小 1）。 |
+| `hitSignalEnabled` | `false` | 启用使用命中信号：回答对注入条目 token 的覆盖超过 `hitSignalThreshold` 时累积 `hitCount`；仅选择信号，不驱动删除。 |
+| `hitSignalThreshold` | `0.25` | 回答对条目 token 的 IDF 加权覆盖率达到该值才记一次命中。 |
+
+### `memory-identity` 命名空间
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
+| `identityEnabled` | `false` | 启用身份层：注入 `soul` 与 `user-profile` 段，开放 `identity_update` 工具。详见 [TECH_DESIGN §7.10](docs/TECH_DESIGN.zh.md)。 |
+| `soulCharLimit` | `2000` | `soul` 注入段的字符预算（`0` = 禁用）。 |
+| `userCharLimit` | `3000` | `user-profile` 注入段的字符预算（`0` = 禁用）。 |
+| `identitySeedDir` | `""` | 身份种子覆盖目录（`SOUL.md` / `USER.md`）；为空使用内置种子。 |
 
 ### `memory-review` 命名空间
 
@@ -266,7 +290,7 @@ dsh web
 
 ### 组合配置与 UI 设置
 
-两个命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
+各命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。四个 memory 家族命名空间共享一个组合行（`memory-context` 的 `config:` 承载它们全部键），而用户文档为每个命名空间保留独立的 section。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
 
 ```yaml
 memory:
@@ -283,7 +307,7 @@ memory-review:
     extractionModelModel: deepseek-chat
 ```
 
-`$DSH_HOME/settings.yaml` 示例（两个命名空间）：
+`$DSH_HOME/settings.yaml` 示例（全部命名空间）：
 
 ```yaml
 memory:
@@ -293,12 +317,21 @@ memory:
   memoryMaxEntries: 20
   maxSearchResults: 50
   decayDays: 30
+memory-notes:
   notesEnabled: true
   notesCharLimit: 4000
   notesMaxEntriesPerFile: 100
+memory-autorecall:
   autoRecallEnabled: false
   autoRecallLimit: 5
   autoRecallMinChars: 12
+  hitSignalEnabled: false
+  hitSignalThreshold: 0.25
+memory-identity:
+  identityEnabled: false
+  soulCharLimit: 2000
+  userCharLimit: 3000
+  identitySeedDir: ""
 memory-review:
   reviewEnabled: true
   reviewCandidateThreshold: 10
@@ -376,7 +409,7 @@ memory:
 - **无语义/向量检索** — `memory_search` 是对结构化 KV 条目的 BM25 词法排序（Latin 逐词、CJK 一元 + 二元分词），不是 embeddings；不含相同词元的同义表述无法命中。
 - **提取质量跟随会话模型** — review/flush/curator 复用会话当前路由的 provider/model，除非显式覆盖。
 - **会话中途的提取在下次压缩或新会话前不会出现在提示里** — 注入快照为 KV-cache 稳定性而冻结；步级自动召回（可选）提供逐步新鲜度。
-- **记忆的读写只在传输层设闸** — 管理 UI 的 RPC 方法没有方法级鉴权，因此任何被 dsh 宿主 `trustedHosts` 放行的主机都能读写整个记忆库，而写入的内容会进入后续会话的 system prompt。除非放行的每台主机都可信，否则把围栏保持在 loopback（见[威胁模型](docs/TECH_DESIGN.zh.md)）。
+- **远程管理访问同时依赖传输信任与部署开关** — 任何被 dsh 宿主 `trustedHosts` 放行的主机都能调用读取 RPC；普通远程记忆写入默认拒绝（`remoteWritesEnabled: false`），只有显式启用后才开放，且 `identityRevert` 在写开关之上还要求独立的 `identityRevertEnabled` 开关（默认 `true`）——它恢复的是通过 scanner 的历史版本，而非接受任意新内容。应收紧 `trustedHosts`，且除非放行的每台主机都可信，否则保持远程写入关闭（见[威胁模型](docs/TECH_DESIGN.zh.md)）。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
 - **要求 alpha 渠道（0.1.2-alpha.x）** — 本 bundle 使用 0.1.2-alpha 的 settings API（`ctx.settings.installSection`、host-only 投影注册），peer 范围为 `^0.1.2-alpha.2`。rc（`next`）线仍是旧的模块级 `installSettingsSection` helper，无法加载本 bundle；请从 `alpha` dist-tag 安装 dsh。client bundle 同样对齐 alpha 客户端包（`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`），它们取代了已移除的 `dsh-client-runtime`。
 

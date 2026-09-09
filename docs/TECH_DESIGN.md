@@ -510,14 +510,17 @@ Fully-automatic extraction has a structural flaw: a wrong extraction is written 
 
 #### Settings namespaces
 
-Two namespaces, both live:
+Five namespaces — one per plugin-configuration card, all live. The host's plugins tab dispatches a card only when its slot key names a served namespace, so the four memory-family namespaces are all registered by `memory-context` (one namespace per card; the composition config stays one full shape and each namespace's base projects its slice):
 
 | Namespace | Owner | Keys (default) |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25), `identityEnabled` (false), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` ("") |
+| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30) |
+| `memory-notes` | `memory-context` | `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100) |
+| `memory-autorecall` | `memory-context` | `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
+| `memory-identity` | `memory-context` | `identityEnabled` (false), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` ("") |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
-Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`) and `confirmBeforeWrite` (from `memory-review`), `memory-review` pulls `decayDays` (from `memory`), `memory-notes` pulls the `notes*` slice (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored).
+Each resolves in layers: schema defaults → composition `config:` base → user document (`$DSH_HOME/settings.yaml`); handlers re-read the resolved value per event. Cross-namespace consumers read defensively: `tool-memory` pulls `maxSearchResults` (from `memory`), `confirmBeforeWrite` (from `memory-review`), and the identity gate/budgets (from `memory-identity`); `memory-review` pulls `decayDays` (from `memory`); `memory-notes` pulls the `memory-notes` namespace (via `resolveNotesSettings`; pre-0.6 `notesDir`/`notesAgentsPointer` values are silently ignored); the identity plugin pulls `memory-identity` (via `resolveIdentitySettings`).
 
 #### Project-notes projection (`src/notes/`, prompt-only since 0.6)
 
@@ -613,28 +616,29 @@ A no-op `InvariantInstaller` claiming the package name `@chenhw7/dsh-memory` in 
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | newest tail, default 100 |
 | `identityList` | — | `{ soul?, user? }` | both documents' current records; absent fields = never written (identity disabled or unseeded). Read, ungated |
 | `identityHistory` | `MemoryIdentityHistoryRequest` (kind) | `{ history[] }` | the retained version snapshots, newest first (≤20 per kind). Read, ungated |
-| `identityRevert` | `MemoryIdentityRevertRequest` (kind, version) | `{ reverted?, error? }` | async; **the governance valve** — restores one retained version as a NEW version (history never destroyed), gated by its own `identityRevertEnabled` (default **on**), NOT by `remoteWritesEnabled` |
+| `identityRevert` | `MemoryIdentityRevertRequest` (kind, version) | `{ reverted?, error? }` | async; **the governance valve** — restores one retained version as a NEW version (history never destroyed), gated by `remoteWritesEnabled` plus its own `identityRevertEnabled` (default **on**) |
 
 Entry projection `MemoryEntryJson` carries `summary?` and `staleSince?` (soft-decay/archive timestamp); the suggestion projection `MemorySuggestionJson` carries `hits`, `firstSeenAt`/`lastSeenAt`, `targetEntryId?`, `identityKind?`, and provenance (`source`, `sessionId?`); identity adoption surfaces as `{ identity: { kind, version } }` with no `entry` (the row's kind is read before adopting so the store's `undefined` return — success for identity, absent-row for entries — disambiguates on the wire).
 
 Wire types live in `src/remote/index.ts`; client-side mirrors are the hand-written `typert.remote-client.*` artifacts (exported as `./remote`, synced manually on every method change).
 
-**Deployment security (verified against harness sources):** the service carries a deployment-level write switch — `remoteWritesEnabled` (the `memory-remote` row's Config, schemastery default `false`): the seven write methods (`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`) check it before touching the store and refuse in each method's wire shape. `identityRevert` deliberately sits OUTSIDE that switch under its own `identityRevertEnabled` (default **on**): revert restores content that already existed (every retained version passed the scanner and was once current), and folding it under the default-off switch would leave the human no governance valve at all on the read-only identity surface (§7.10) (`{ error }` where the wire defines one, the no-op form otherwise) while reads are unaffected; the client surfaces the refusal through its `actionError` path. This is not per-request auth — `trustedHosts` is host-side configuration this bundle cannot read, and the gateway passes no request headers into `@Remote` methods — so the transport-level `api-request-trust` fence (loopback / deployment-derived LAN literals / declared `trustedHosts`, defending DNS rebinding and cross-site requests) remains the first gate, and the write switch the second: in a default deployment a non-loopback caller that passes the transport fence still cannot write the store.
+**Deployment security (verified against harness sources):** the service carries a deployment-level write switch — `remoteWritesEnabled` (the `memory-remote` row's Config, schemastery default `false`): the eight write methods (`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`/`identityRevert`) check it before touching the store and refuse in each method's wire shape (`{ error }` where the wire defines one, the no-op form otherwise) while reads are unaffected. `identityRevert` additionally carries its own `identityRevertEnabled` (default **on**) on top of that switch (§7.10's governance valve): revert restores content that already existed (every retained version passed the scanner and was once current), so the dedicated valve defaults to on and exists to deny reverts even on a write-enabled deployment; the client surfaces the refusal through its `actionError` path. This is not per-request auth — `trustedHosts` is host-side configuration this bundle cannot read, and the gateway passes no request headers into `@Remote` methods — so the transport-level `api-request-trust` fence (loopback / deployment-derived LAN literals / declared `trustedHosts`, defending DNS rebinding and cross-site requests) remains the first gate, and the write switch the second: in a default deployment a non-loopback caller that passes the transport fence still cannot write the store.
 
 ### 7.8 Client UI — `/client` (`src/client/`)
 
-The client ships two kinds of surface: **four configuration cards** inside the Plugins tab, and the **Memory content-management section** as its own Settings nav entry (phase 2: full write path — three tabs covering the health dashboard, the pending-proposal review queue, and entry management with write actions). The **Identity governance section** (id `identity`, order 26, right after Memory) is the identity layer's read-only surface: both documents rendered with their version history, the two-step revert valve, and a markdown export — no editor anywhere; the agent writes the documents through conversation, the human only governs (§7.10).
+The client ships two kinds of surface: **five configuration cards** inside the Plugins tab, and the **Memory content-management section** as its own Settings nav entry (phase 2: full write path — three tabs covering the health dashboard, the pending-proposal review queue, and entry management with write actions). The **Identity governance section** (id `identity`, order 26, right after Memory) is the identity layer's read-only surface: both documents rendered with their version history, the two-step revert valve, and a markdown export — no editor anywhere; the agent writes the documents through conversation, the human only governs (§7.10). The identity layer's *configuration* is not part of that section: it rides the Plugins tab's `memory-identity` card below.
 
 #### Configuration cards (`settings.plugin.item` slot)
 
-Contributes **four cards** into Settings → Plugins → Plugin configuration, all bound through `ctx.settingsScope.bind({ namespace })` and applying live:
+Contributes **five cards** into Settings → Plugins → Plugin configuration, all bound through `ctx.settingsScope.bind({ namespace })` and applying live. The host's dispatch contract is **one card per served namespace**: a card's slot key must name a settings namespace the Host registers (visible through `settings.describe`), so `memory-context` registers all five host-side:
 
-| Card (slot key) | Namespace | Component | Fields |
-|---|---|---|---|
-| `memory` | `memory` | curated `MemoryPluginCard` | `memoryMode` select (policy-only/full/index/custom/off), conditional custom-policy textarea, `memoryCharLimit`, `memoryMaxEntries` (min 0), `maxSearchResults`, `decayDays` |
-| `memory-notes` | `memory` | spec-driven `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
-| `memory-autorecall` | `memory` | spec-driven `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit` (min 1), `autoRecallMinChars` (min 1), `hitSignalEnabled`, `hitSignalThreshold` (min 0) |
-| `memory-review` | `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `consolidation` (two-tier/legacy-judge select), `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
+| Card (slot key = namespace) | Component | Fields |
+|---|---|---|
+| `memory` | curated `MemoryPluginCard` | `memoryMode` select (policy-only/full/index/custom/off), conditional custom-policy textarea, `memoryCharLimit`, `memoryMaxEntries` (min 0), `maxSearchResults`, `decayDays` |
+| `memory-notes` | spec-driven `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
+| `memory-autorecall` | spec-driven `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit` (min 1), `autoRecallMinChars` (min 1), `hitSignalEnabled`, `hitSignalThreshold` (min 0) |
+| `memory-identity` | spec-driven `NamespaceCard` | `identityEnabled`, `soulCharLimit` (min 0), `userCharLimit` (min 0), `identitySeedDir` |
+| `memory-review` | spec-driven `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel` (catalog-driven selects), `extractionBudget`, `judgeEnabled`, `consolidation` (two-tier/legacy-judge select), `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
 
 Mechanics:
 
@@ -675,11 +679,11 @@ The agent's self-documents: **SOUL.md** (its character) and **USER.md** (its wor
 
 - **Layer split (declared vs learned):** the soul/user-profile prompt sections (orders 80/81, §7.4) carry the *self-authored* identity — never decayed, never consolidated, never conflict-annotated, never indexed/searched/auto-recalled (always-on by definition); the memory section keeps the *learned* facts. Precedence on the prompt: conversation instructions > the host's `deployment:persona` > the identity sections > learned memories.
 - **Service (`src/identity/`):** `IdentityService.snapshotFor()` returns both documents' raw content (budgets apply at section assembly, the notes precedent). **Seed-once:** a missing document is served from the builtin Chinese seed for THAT session while the durable write lands fire-and-forget; the plugin never overwrites an existing document. Seeds carry no personal information and no anti-staleness clause (the profile grows naturally, per the 2026-09-08 ruling).
-- **Settings:** `identityEnabled` (default **false**), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` (optional override directory holding `SOUL.md`/`USER.md`; partial override keeps the builtin for the missing kind). The load-time loud gate lives in **`memory-context`'s apply** — the `memory` namespace's owner validates its composition-layer config (a wrong directory or a scanner-rejected seed file fails the mount); settings-overlay changes degrade observably instead (reported failure + builtin fallback, surfaced through `health()`), because cordis swallows throws from `ctx.inject` callbacks (verified against the installed runtime).
+- **Settings:** the `memory-identity` namespace (registered by `memory-context`, §7.4) — `identityEnabled` (default **false**), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` (optional override directory holding `SOUL.md`/`USER.md`; partial override keeps the builtin for the missing kind). The settings UI entry is the Plugins tab's **Identity card** (`memory-identity`, §7.8); the Identity settings section stays read-only governance. The load-time loud gate lives in **`memory-context`'s apply** — the namespace's owner validates its composition-layer config (a wrong directory or a scanner-rejected seed file fails the mount); settings-overlay changes degrade observably instead (reported failure + builtin fallback, surfaced through `health()`), because cordis swallows throws from `ctx.inject` callbacks (verified against the installed runtime).
 - **Cross-namespace reads ride `ctx.inject`:** cordis service properties throw `cannot get property "settings" without inject` on a fiber that has not injected the service — the identity plugin reads the `memory` namespace through a settings-injected fiber with a stable per-call indirection (the tool plugin's `defaultLimit` pattern). A plain `ctx.settings` access on the plugin's own fiber silently degrades to the disabled default; the notes module's direct read carries this same latent defect (a named coverage gap — its budgets silently fall back to defaults in settings-provided deployments).
 - **Write path (`identity_update`, §7.2):** whole-document replace through three gates — `identityEnabled`, the per-kind character budget, the scanner — then the store's atomic version write (version+1 via the table's read-modify-write so racing rewrites never mint one version) plus a full history snapshot per version. In confirm mode the proposal queues as an identity suggestion (`identityKind`, §6.4) and writes nothing until a human adopts. The announce discipline — "when you rewrite this file, tell the user" — lives in the tool description and result text.
 - **Anti-echo:** extraction never persists identity restatements — the review/flush prompts carry the rule plus the rendered identity documents as referent, and both extraction write seams run a mechanical prefilter (IDF-weighted overlap > 0.6 against the injected documents; a memory ABOUT the persona stays far below). Without the identity layer the prefilter is inert (no injected documents, nothing to echo).
-- **Governance surface (§7.8):** the read-only Identity settings section — documents + version history + the revert valve (`identityRevert` under `identityRevertEnabled`, §7.7) + export; no content editor, no import.
+- **Governance surface (§7.8):** the read-only Identity settings section — documents + version history + the revert valve (`identityRevert` under `remoteWritesEnabled` plus `identityRevertEnabled`, §7.7) + export; no content editor, no import.
 - **Events:** `identity/updated {kind, version}` is declared vocabulary only (§6.5) — no emitter; the announcement rides the tool result, the durable audit is `identity_history`.
 - **Eval:** the identity-v0 slice (`eval/datasets/identity-v0.jsonl`) + the `--identity` CLI axis measure the injection surface deterministically in the mock lane (soul/user-profile fences + chars, on vs off); the anti-echo prefilter's end-to-end contrast needs a scripted extraction reply (the noise-pilot lane) or a real-model judged run — the prefilter itself is pinned by `tests/extract.spec.ts` fixtures, and the pilot-lane evidence is a recorded gap. Decisions and alternatives: [Agent Note](../.agents/notes/implemented/feature/2026-09-08-identity-layer-soul-and-user-profile.md).
 
@@ -687,7 +691,7 @@ The agent's self-documents: **SOUL.md** (its character) and **USER.md** (its wor
 
 ## 8. Configuration
 
-Both namespaces resolve identically: schema defaults → composition `config:` base → user layer in `$DSH_HOME/settings.yaml` (or the settings UI). Everything applies live — the next event or assembly picks it up.
+The namespaces resolve identically: schema defaults → composition `config:` base → user layer in `$DSH_HOME/settings.yaml` (or the settings UI). Everything applies live — the next event or assembly picks it up. There is one namespace per plugin-configuration card: the host's plugins tab dispatches a card only when its slot key names a served namespace, so the four memory-family namespaces below are all registered by `memory-context` from the one full composition config, each namespace's `base` layer projecting its slice.
 
 ### `memory` namespace (owned by `memory-context`)
 
@@ -701,9 +705,21 @@ memory:
   maxSearchResults: 50           # default memory_search / memory_list cap (0 = unlimited)
   decayDays: 30                  # janitor window (0 = disabled); hard-decays project,
                                  #   soft-decays global/user
+```
+
+### `memory-notes` namespace (owned by `memory-context`)
+
+```yaml
+memory-notes:
   notesEnabled: true             # project-notes prompt-section injection master switch
   notesCharLimit: 4000           # injected project-notes section budget
-  notesMaxEntriesPerFile: 100    # rendered-entry cap (newest kept; key kept for 0.5.x compat)
+  notesMaxEntriesPerFile: 100    # rendered-entry cap (newest kept)
+```
+
+### `memory-autorecall` namespace (owned by `memory-context`)
+
+```yaml
+memory-autorecall:
   autoRecallEnabled: false       # step-level <recalled-memory> fence (opt-in)
   autoRecallLimit: 5             # max entries per fence
   autoRecallMinChars: 12         # skip recall below this user-text length
@@ -712,11 +728,17 @@ memory:
                                  #   feeds the sweep's selection, never deletion
   hitSignalThreshold: 0.25       # IDF-weighted coverage of the entry's tokens
                                  #   above which the answer counts as a hit
-  identityEnabled: false          # identity layer (soul + user-profile sections,
+```
+
+### `memory-identity` namespace (owned by `memory-context`)
+
+```yaml
+memory-identity:
+  identityEnabled: false         # identity layer (soul + user-profile sections,
                                  #   identity_update tool surface); opt-in
-  soulCharLimit: 2000             # injected soul-section budget (0 = disabled)
-  userCharLimit: 3000             # injected user-profile-section budget (0 = disabled)
-  identitySeedDir: ""             # optional seed-override directory (SOUL.md / USER.md);
+  soulCharLimit: 2000            # injected soul-section budget (0 = disabled)
+  userCharLimit: 3000            # injected user-profile-section budget (0 = disabled)
+  identitySeedDir: ""            # optional seed-override directory (SOUL.md / USER.md);
                                  #   empty uses the builtin Chinese seeds; a missing file
                                  #   keeps that kind's builtin seed (partial override)
 ```
@@ -733,7 +755,7 @@ memory-store:
 
 - `reviewCandidateThreshold: 0` is not reachable from this namespace; the review-side schema enforces `.min(1)`.
 - `memoryCharLimit: 0` disables content injection while `full` mode still emits the policy block.
-- Cross-namespace consumers: `tool-memory` reads `maxSearchResults` live from `memory` and `confirmBeforeWrite` live from `memory-review`; `memory-review` reads `decayDays` live from `memory`.
+- Cross-namespace consumers: `tool-memory` reads `maxSearchResults` live from `memory`, `confirmBeforeWrite` live from `memory-review`, and the identity gate/budgets live from `memory-identity`; `memory-review` reads `decayDays` live from `memory`.
 
 ### `memory-review` namespace (owned by the review plugin)
 
@@ -800,7 +822,7 @@ When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as 
 | Conversation content leaving for a third-party provider | `extractionModelProvider`/`extractionModelModel` route extraction, consolidation, and curator calls — and therefore conversation excerpts and stored entries — to whatever provider they name. Both default to `""`, which reuses the session's own route, so an override is the only way this data path appears; treat naming a provider as granting it conversation content |
 | Another host on the network reading or writing the store | Two gates (§7.7): the host's transport trust fence (`trustedHosts`) stays first, and behind it `remoteWritesEnabled` (default `false`) makes the remote **write** methods deny by default — with a wide `trustedHosts`, the write channel is closed unless the deployment explicitly enables it, while reads pass (browser management requires opting in). The persistent injection channel — writes reaching later sessions' system prompts — therefore needs both conditions at once: fence admission and an explicit write-enable |
 | Retrieval quality regressing unnoticed | Golden-set CI floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) — a tokenizer/weight/budget regression fails the build |
-| An induced `identity_update` rewrite persists into every later session's system prompt (SEC-04 class, an intentionally bounded channel) | Scanner gate on every identity write; the character budgets bound the blast radius; version history makes every rewrite revertible (`identityRevertEnabled`, default on) and visible in the read-only UI; the announce discipline surfaces changes in-conversation; the optional confirm mode routes proposals through the human queue; eval scenarios pin the injection surface |
+| An induced `identity_update` rewrite persists into every later session's system prompt (SEC-04 class, an intentionally bounded channel) | Scanner gate on every identity write; the character budgets bound the blast radius; version history makes every rewrite revertible (`identityRevert`, gated by `remoteWritesEnabled` plus `identityRevertEnabled`) and visible in the read-only UI; the announce discipline surfaces changes in-conversation; the optional confirm mode routes proposals through the human queue; eval scenarios pin the injection surface |
 
 ### 9.2 Failure matrix
 

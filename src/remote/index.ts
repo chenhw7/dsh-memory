@@ -62,7 +62,8 @@ export const inject = ['memory']
 export interface RemoteConfig {
   /**
    * Whether the `@Remote` write methods (`add`, `update`, `removeEntry`,
-   * `pin`, `archive`, `suggestAdopt`, `suggestReject`) may mutate the store.
+   * `pin`, `archive`, `suggestAdopt`, `suggestReject`, `identityRevert`)
+   * may mutate the store.
    * Default `false` (deny by default): the transport fence admits every
    * configured `trustedHosts` host — including a deployment that widened the
    * fence to serve the UI over LAN — and those hosts then reach these
@@ -73,13 +74,9 @@ export interface RemoteConfig {
   remoteWritesEnabled: boolean
   /**
    * Whether the identity governance valve — `identityRevert`, the read-only
-   * identity surface's only write — may run. Default `true`, deliberately
-   * apart from `remoteWritesEnabled`: revert restores content that already
-   * existed (every retained version passed the scanner and was once current),
-   * while `remoteWritesEnabled` guards arbitrary new content; and folding it
-   * under the default-off knob would leave the human no governance path at
-   * all on a default deployment. Set `false` to make the identity surface
-   * fully read-only.
+   * identity surface's only write — may run after the unified
+   * `remoteWritesEnabled` gate admits writes. Default `true`; set `false` to
+   * keep identity reverts disabled even on a write-enabled deployment.
    */
   identityRevertEnabled: boolean
 }
@@ -418,7 +415,7 @@ export interface MemoryIdentityRevertResult {
 /**
  * Message carried in the `error` field when a write method is refused under
  * the default `remoteWritesEnabled: false` policy. One constant so the wire
- * answer stays identical across all seven guarded methods.
+ * answer stays identical across the guarded methods.
  */
 const REMOTE_WRITES_DISABLED = 'remote writes are disabled on this deployment'
 
@@ -677,12 +674,14 @@ export class MemoryRemoteService extends TypertRemoteService {
 
   /**
    * The governance valve: restore one historical version as the newest
-   * version (history is never destroyed). Gated by its own flag —
-   * `identityRevertEnabled`, default ON; see {@link RemoteConfig}.
+   * version (history is never destroyed). Requires both the unified write
+   * gate and its own `identityRevertEnabled` flag; see {@link RemoteConfig}.
    */
   @Remote('identityRevert')
   async identityRevert(request: MemoryIdentityRevertRequest): Promise<MemoryIdentityRevertResult> {
-    if (!this._identityRevertEnabled) return { error: 'identity revert is disabled on this deployment' }
+    if (!this.writesAllowed() || !this._identityRevertEnabled) {
+      return { error: 'identity revert is disabled on this deployment' }
+    }
     const store = this.memory()
     if (store === undefined) return { error: 'memory service not available' }
     try {

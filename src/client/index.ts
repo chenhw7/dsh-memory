@@ -3,10 +3,13 @@
  *
  * Two surfaces over one store:
  *
- * 1. **Configuration** (unchanged since v0.3.0): four cards inside Settings →
- *    Plugins → Plugin configuration (`settings.plugin.item`) — injection mode,
- *    project notes, auto recall, automatic extraction. All write through the
- *    standard `ctx.settingsScope` transport and apply live.
+ * 1. **Configuration**: five cards inside Settings → Plugins → Plugin
+ *    configuration (`settings.plugin.item`) — injection mode, project notes,
+ *    auto recall, identity, automatic extraction. The host's plugins tab
+ *    dispatches a card only when its slot key names a settings namespace the
+ *    Host serves, so each card's key IS its namespace and `memory-context`
+ *    registers all five host-side. All write through the standard
+ *    `ctx.settingsScope` transport and apply live.
  * 2. **Content management** (phase 1): a dedicated "Memory" settings section
  *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
  *    memory store — an Overview tab with the health dashboard and a Manage tab
@@ -113,6 +116,18 @@ const AUTORECALL_SPEC: NamespaceCardSpec = {
   ],
 }
 
+/** The identity card: the identity layer's knobs, from the `memory` namespace. */
+const IDENTITY_SPEC: NamespaceCardSpec = {
+  titleKey: 'identityCardTitle',
+  descriptionKey: 'identityCardDescription',
+  fields: [
+    { key: 'identityEnabled', kind: 'checkbox' },
+    { key: 'soulCharLimit', kind: 'number', minValue: 0 },
+    { key: 'userCharLimit', kind: 'number', minValue: 0 },
+    { key: 'identitySeedDir', kind: 'text' },
+  ],
+}
+
 /** Settings key of the provider field — lives with its resolvers in model-catalog. */
 const PROVIDER_FIELD = 'extractionModelProvider'
 
@@ -170,23 +185,23 @@ const SECTION_ORDER = 25
 const IDENTITY_SECTION_ORDER = 26
 
 /**
- * One `settings.plugin.item` registration. `namespace` is the settings
- * scope to bind (defaults to `key`); it differs when two cards share a
- * namespace (Memory + Project Notes both bind `memory`).
+ * One `settings.plugin.item` registration. The slot is keyed by the settings
+ * namespace the card edits — the host's plugins tab pairs card keys with the
+ * Host's served namespaces, so the key and the bound namespace are the same
+ * string for every card.
  */
 interface CardEntry {
-  /** Slot key — unique per card. */
+  /** Slot key — the card's settings namespace. */
   readonly key: string
-  /** Settings namespace to bind; defaults to `key`. */
-  readonly namespace?: string
   /** Spec for NamespaceCard; absent → curated MemoryPluginCard. */
   readonly spec?: NamespaceCardSpec
 }
 
 const CARDS: readonly CardEntry[] = [
   { key: 'memory' },
-  { key: 'memory-notes', namespace: 'memory', spec: NOTES_SPEC },
-  { key: 'memory-autorecall', namespace: 'memory', spec: AUTORECALL_SPEC },
+  { key: 'memory-notes', spec: NOTES_SPEC },
+  { key: 'memory-autorecall', spec: AUTORECALL_SPEC },
+  { key: 'memory-identity', spec: IDENTITY_SPEC },
   { key: 'memory-review', spec: REVIEW_SPEC },
 ]
 
@@ -318,8 +333,7 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('settings.plugin.item', function* () {
     for (const card of CARDS) {
-      const ns = card.namespace ?? card.key
-      const scope = ctx.settingsScope.bind({ namespace: ns })
+      const scope = ctx.settingsScope.bind({ namespace: card.key })
       if (card.spec === undefined) {
         const typed = scope as SettingsScope<MemoryConfig>
         const injected = (): MemoryPluginCardInjected => ({

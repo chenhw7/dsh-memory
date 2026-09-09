@@ -38,8 +38,8 @@ export const name = 'memory-notes'
 /** Nothing is required: `memory` and `settings` are accessed optionally. */
 export const inject: string[] = []
 
-/** The settings namespace owned by `memory-context`, read here defensively. */
-const MEMORY_NS = 'memory'
+/** The notes settings namespace (owned by `memory-context`), read here defensively. */
+const NOTES_NS = 'memory-notes'
 
 /**
  * Frozen project-notes content for one project root: the rendered section
@@ -147,7 +147,7 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
 export function apply(ctx: Context): void {
   const settings = (): NotesSettings => {
     try {
-      return resolveNotesSettings(ctx.settings.get(MEMORY_NS))
+      return resolveNotesSettings(ctx.settings.get(NOTES_NS))
     } catch {
       return resolveNotesSettings(undefined)
     }

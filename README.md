@@ -51,7 +51,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Step-level auto recall (opt-in)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
-- **Frontend-configurable** — all settings exposed through four cards in the dsh settings UI, apply live.
+- **Frontend-configurable** — all settings exposed through five cards in the dsh settings UI, apply live.
 - **Optional human review before write** — flip one setting (`confirmBeforeWrite`) and every extraction *and* tool write becomes a *proposal* in a pending queue (repeated signals accumulate hits and float up); adopting applies it (with your edits), rejecting discards it. The model never self-promotes: a proposed change to an existing entry rewrites nothing until you accept it.
 - **Memory manager UI** — a dedicated "Memory" section in the dsh settings UI with three tabs: Overview (health dashboard), Review (the pending-proposal queue), and Manage — scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, plus full write actions (edit / pin / archive / delete) — in English and Chinese.
 - **Time-window browsing + smart list view** — `memory_list` returns newest-first with `earliest`/`latest`/`hasStale` metadata, accepts `since`/`until` epoch-ms bounds so "what did we learn last week" pages within the window, and suggests widening the filter when a narrowed query comes back empty over a non-empty store.
@@ -222,9 +222,12 @@ dsh web
 
 ## Configuration
 
-The bundle owns **two settings namespaces**, shown as four cards in Settings → Plugins → Plugin configuration and **applied live** — a change takes effect on the next event or call, no restart:
+The bundle owns **five settings namespaces** — one per plugin-configuration card (the host's plugins tab dispatches a card only when its slot key names a served settings namespace) — and they all **apply live**: a change takes effect on the next event or call, no restart:
 
-- **`memory`** (cards: *Memory*, *Project Notes*, *Auto Recall*) — injection modes, budgets, lifecycle, notes export, auto recall. Owned by `memory-context`.
+- **`memory`** (card: *Memory*) — injection modes and the memory budgets. Owned by `memory-context`.
+- **`memory-notes`** (card: *Project Notes*) — the project-notes prompt-section switch and budgets. Owned by `memory-context`.
+- **`memory-autorecall`** (card: *Auto Recall*) — the step-level recall fence and the usage-hit signal. Owned by `memory-context`.
+- **`memory-identity`** (card: *Identity*) — the identity layer's switch, budgets, and seed directory. Owned by `memory-context`.
 - **`memory-review`** (card: *Automatic Extraction*) — extraction pipeline, model routing, dedup judge, pitfall streaks, curator pass. Owned by the `memory-review` plugin.
 
 Every namespace resolves in layers: schema defaults → the composition `config:` entry (the `base`) → the user document in `$DSH_HOME/settings.yaml`. A field absent from the user layer inherits the composition value, so a deployment can pin a default and users override only what they need. With no settings service mounted (e.g. a headless profile), each plugin falls back to its composition entry exactly as composed.
@@ -239,12 +242,33 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `memoryMaxEntries` | `20` | Entry-count cap for the same frozen snapshot (`0` = no limit). The snapshot ends with a `≈N tokens` estimate so injection cost stays visible. |
 | `maxSearchResults` | `50` | Default cap for `memory_search` / `memory_list` when the call omits `limit`; read live by the tool plugin. `0` = no limit. |
 | `decayDays` | `30` | Lifecycle window for entries not recalled within N days; read live by the review plugin's janitor. `0` = disabled. Overdue `project` entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
+
+### `memory-notes` namespace
+
+| Setting | Default | Meaning |
+|---|---|---|
 | `notesEnabled` | `true` | Inject the project-notes prompt section (conventions + pitfall log) into the system prompt. Entries rendered into the section are excluded from the memory section to avoid double injection. No repo files are written. |
 | `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
 | `notesMaxEntriesPerFile` | `100` | Max entries rendered into the project-notes section (newest kept). |
+
+### `memory-autorecall` namespace
+
+| Setting | Default | Meaning |
+|---|---|---|
 | `autoRecallEnabled` | `false` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable. |
 | `autoRecallLimit` | `5` | Max entries in one auto-recall fence (min 1). The fence itself is capped at 1200 characters. |
 | `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters (min 1). |
+| `hitSignalEnabled` | `false` | Enable the usage-hit signal: answers echoing injected entries above `hitSignalThreshold` bump `hitCount`; purely a selection signal, never deletion. |
+| `hitSignalThreshold` | `0.25` | IDF-weighted token coverage above which an answer counts as a hit. |
+
+### `memory-identity` namespace
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `identityEnabled` | `false` | Enable the identity layer: inject `soul` and `user-profile` prompt sections and expose the `identity_update` tool. See [TECH_DESIGN §7.10](docs/TECH_DESIGN.md). |
+| `soulCharLimit` | `2000` | Character budget for the `soul` section (`0` = disabled). |
+| `userCharLimit` | `3000` | Character budget for the `user-profile` section (`0` = disabled). |
+| `identitySeedDir` | `""` | Directory holding custom `SOUL.md` / `USER.md` seeds; empty uses builtin seeds. |
 
 ### `memory-review` namespace
 
@@ -269,7 +293,7 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 
 ### Setting via composition vs. UI
 
-Both namespaces accept the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
+Every namespace accepts the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. The four memory-family namespaces share one composition row (`memory-context`'s `config:` carries all their keys), while the user document keeps one section per namespace. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
 
 ```yaml
 memory:
@@ -286,7 +310,7 @@ memory-review:
     extractionModelModel: deepseek-chat
 ```
 
-Example `$DSH_HOME/settings.yaml` (both namespaces):
+Example `$DSH_HOME/settings.yaml` (all namespaces):
 
 ```yaml
 memory:
@@ -296,12 +320,21 @@ memory:
   memoryMaxEntries: 20
   maxSearchResults: 50
   decayDays: 30
+memory-notes:
   notesEnabled: true
   notesCharLimit: 4000
   notesMaxEntriesPerFile: 100
+memory-autorecall:
   autoRecallEnabled: false
   autoRecallLimit: 5
   autoRecallMinChars: 12
+  hitSignalEnabled: false
+  hitSignalThreshold: 0.25
+memory-identity:
+  identityEnabled: false
+  soulCharLimit: 2000
+  userCharLimit: 3000
+  identitySeedDir: ""
 memory-review:
   reviewEnabled: true
   reviewCandidateThreshold: 10
@@ -379,7 +412,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 - **No semantic/vector retrieval** — `memory_search` is BM25 lexical ranking over structured KV entries (Latin word tokens, CJK unigrams + bigrams), not embeddings; synonyms that share no tokens will not match.
 - **Extraction quality tracks the session model** — review/flush/curator reuse the session's routed provider/model unless explicitly overridden.
 - **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected snapshot is frozen for KV-cache stability; step-level auto recall (opt-in) covers per-step freshness instead.
-- **Memory read/write is gated only at the transport layer** — the management UI's RPC methods carry no per-method authorization, so any host the dsh host admits through its `trustedHosts` setting can read and write the whole memory store, and written content reaches later sessions' system prompts. Keep the fence at loopback unless every admitted host is trusted ([threat model](docs/TECH_DESIGN.md)).
+- **Remote management access relies on transport trust plus deployment valves** — any host admitted by the dsh host's `trustedHosts` setting can call read RPCs, but ordinary remote memory writes are denied by default (`remoteWritesEnabled: false`) and are exposed only when explicitly enabled, and `identityRevert` requires its own `identityRevertEnabled` valve (default `true`) on top of the write gate because it restores scanner-approved history rather than accepting arbitrary new content. Keep `trustedHosts` narrow and leave remote writes disabled unless every admitted host is trusted ([threat model](docs/TECH_DESIGN.md)).
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
 - **Alpha channel (0.1.2-alpha.x) required** — the bundle uses the 0.1.2-alpha settings API (`ctx.settings.installSection`, host-only projection registrations) and declares `^0.1.2-alpha.2` peers. The rc (`next`) line still ships the removed module-level `installSettingsSection` helper and cannot load this bundle; install dsh from the `alpha` dist-tag. The client bundle likewise targets the alpha client packages (`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`), which replaced the removed `dsh-client-runtime`.
 

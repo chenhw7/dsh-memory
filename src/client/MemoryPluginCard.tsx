@@ -1,9 +1,10 @@
 /**
  * Memory plugin configuration card — shown inside Settings → Plugins →
  * Plugin configuration. Binds to the `memory` settings namespace through the
- * standard `ctx.settingsScope` transport and edits the injection mode, the
- * character budget, and the project-notes export. The review and tool knobs
- * live on their own namespace cards (NamespaceCard).
+ * standard `ctx.settingsScope` transport and edits the injection mode and the
+ * memory budgets. The project-notes, auto-recall, identity, and review knobs
+ * live on their own namespace cards (NamespaceCard) — the host's plugins tab
+ * dispatches one card per served settings namespace.
  *
  * The card is a self-contained port of the deployment's own plugin-card
  * design (PluginCard from ui-settings-plugins): a collapsible header naming
@@ -39,15 +40,6 @@ export interface MemoryConfig {
   memoryMaxEntries?: number
   maxSearchResults?: number
   decayDays?: number
-  notesEnabled?: boolean
-  notesCharLimit?: number
-  notesMaxEntriesPerFile?: number
-  /** Step-level auto recall toggle; rendered on the dedicated Auto Recall card. */
-  autoRecallEnabled?: boolean
-  /** Max entries in one auto-recall fence; rendered on the Auto Recall card. */
-  autoRecallLimit?: number
-  /** Skip recall below this user-text length; rendered on the Auto Recall card. */
-  autoRecallMinChars?: number
 }
 
 /** The registration-side face the card's slot entry injects. */
@@ -78,14 +70,11 @@ const DEFAULTS: MemoryConfig = {
   memoryMaxEntries: 20,
   maxSearchResults: 50,
   decayDays: 30,
-  notesEnabled: true,
-  notesCharLimit: 4000,
-  notesMaxEntriesPerFile: 100,
 }
 
 /** Numeric fields validated by {@link numericInvalid}. */
-type NumericField = 'memoryCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays' | 'notesCharLimit' | 'notesMaxEntriesPerFile'
-const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays', 'notesCharLimit', 'notesMaxEntriesPerFile']
+type NumericField = 'memoryCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays'
+const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays']
 
 /** A field is overridden when the user layer carries it (presence, not value). */
 function isOverridden(snap: SettingsScopeSnapshot<MemoryConfig>, field: keyof MemoryConfig): boolean {

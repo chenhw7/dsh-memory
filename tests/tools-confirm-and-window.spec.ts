@@ -225,8 +225,8 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
   })
 
   it('identity_update queues an identity proposal (identityKind) instead of writing', async () => {
-    // Dedicated composition: the shared setup's `memory` namespace carries no
-    // identity keys, and identity_update refuses before confirm mode without
+    // Dedicated composition: the shared setup's namespaces carry no identity
+    // keys, and identity_update refuses before confirm mode without
     // identityEnabled — so this case wires its own settings fake.
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
@@ -236,7 +236,7 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
     ctx.provide('settings', {
       get: (ns: string) => ns === 'memory-review'
         ? { confirmBeforeWrite: true }
-        : { maxSearchResults: 50, identityEnabled: true },
+        : ns === 'memory-identity' ? { identityEnabled: true } : { maxSearchResults: 50 },
     })
     await ctx.plugin(tool, { maxSearchResults: 50 })
 

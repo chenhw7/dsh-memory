@@ -11,9 +11,13 @@
  * stability. The section text is rebuilt at each assembly from the live
  * settings mode and the session's frozen snapshot.
  *
- * The `memory` settings namespace is registered through `ctx.settings` so the
- * frontend settings UI auto-renders a form; `applies: 'live'` means a mode
- * change takes effect on the next assembly without a restart.
+ * The memory-family settings namespaces are registered through `ctx.settings`,
+ * one per plugin-configuration card (`memory`, `memory-notes`,
+ * `memory-autorecall`, `memory-identity`): the harness's plugins tab dispatches
+ * a card only when its slot key names a namespace the Host serves, so each
+ * card's key IS its namespace here. All are `applies: 'live'` — a change takes
+ * effect on the next assembly without a restart. The composition config stays
+ * one full shape, and each namespace's base layer projects its slice from it.
  *
  * @module @chenhw7/dsh-memory/context
  */
@@ -72,8 +76,15 @@ export const name = 'memory-context'
 /** The prompt registry is required; settings and memory are optional. */
 export const inject = ['systemPrompt']
 
-/** The settings namespace this plugin owns. */
+/**
+ * The settings namespaces this plugin owns — one per plugin-configuration
+ * card: the harness's plugins tab dispatches a card only when its slot key
+ * names a namespace the Host serves, so each card's key IS its namespace.
+ */
 const NS = 'memory'
+const NOTES_NS = 'memory-notes'
+const AUTORECALL_NS = 'memory-autorecall'
+const IDENTITY_NS = 'memory-identity'
 
 // Factory default is `index`: every entry is visible to the model as an
 // existence line without it having to guess that a memory might exist. The
@@ -123,12 +134,21 @@ const USER_PROFILE_SECTION_ORDER = 81
 const SNAPSHOT_SCOPES: readonly MemoryScope[] = ['global', 'project', 'user']
 
 /**
- * The `memory` settings-namespace shape, validated by the same-named
- * schemastery schema and doubling as the plugin's `cordis.yml` config. Every
- * field is optional in yml; the composition entry supplies the `base` layer
- * and the user settings document overlays it.
+ * The memory-family settings shape, validated by the same-named schemastery
+ * schemas and doubling as the plugin's `cordis.yml` config. The composition
+ * config stays ONE full shape; the four settings namespaces project their
+ * slices from it as each namespace's `base` layer, and the user settings
+ * document overlays each slice in its own section. Every field is optional in
+ * yml; the schema defaults supply the rest.
+ *
+ * The split follows the host's plugin-card contract (one card per served
+ * namespace), so the slice boundaries are the card boundaries:
+ * `MemoryInjectionConfig` → the curated memory card / `memory` namespace,
+ * `MemoryNotesConfig` → the Project Notes card / `memory-notes`,
+ * `MemoryAutoRecallConfig` → the Auto Recall card / `memory-autorecall`,
+ * `MemoryIdentityConfig` → the Identity card / `memory-identity`.
  */
-export interface MemoryConfig {
+export interface MemoryInjectionConfig {
   /** How recalled memory reaches the system prompt; defaults to `policy-only`. */
   memoryMode: MemoryMode
   /** User-supplied custom policy text, used only when `memoryMode` is `custom`. */
@@ -145,29 +165,18 @@ export interface MemoryConfig {
   maxSearchResults: number
   /** Days without recall before a project-scoped entry is decayed by the janitor. `0` = disabled. Defaults to `30`. */
   decayDays: number
+}
+
+export interface MemoryNotesConfig {
   /** Enable the `project-notes` prompt section; defaults to `true`. */
   notesEnabled: boolean
   /** Character budget for the injected project-notes section; defaults to `4000`. */
   notesCharLimit: number
   /** Max entries rendered into the project-notes section; defaults to `100`. */
   notesMaxEntriesPerFile: number
-  /**
-   * Enable the identity layer: the `soul` and `user-profile` prompt sections
-   * plus the `identity_update` agent tool's write surface. Opt-in; defaults
-   * to `false`.
-   */
-  identityEnabled: boolean
-  /** Character budget for the injected soul section; defaults to `2000`. */
-  soulCharLimit: number
-  /** Character budget for the injected user-profile section; defaults to `3000`. */
-  userCharLimit: number
-  /**
-   * Optional directory holding custom identity seed files (`SOUL.md` /
-   * `USER.md`); empty uses the builtin Chinese seeds. Validated loudly at
-   * load when identity is enabled; a missing file for one kind keeps that
-   * kind's builtin seed (partial override).
-   */
-  identitySeedDir?: string
+}
+
+export interface MemoryAutoRecallConfig {
   /** Append a fenced auto-recall block to each step's messages (BM25 over the store). Defaults to `false`. */
   autoRecallEnabled: boolean
   /** Max entries in one auto-recall fence; defaults to `5`. */
@@ -191,27 +200,117 @@ export interface MemoryConfig {
   hitSignalThreshold: number
 }
 
-/** Runtime schema for the `memory` settings namespace and plugin config. */
-export const Config: z<MemoryConfig> = z.object({
+export interface MemoryIdentityConfig {
+  /**
+   * Enable the identity layer: the `soul` and `user-profile` prompt sections
+   * plus the `identity_update` agent tool's write surface. Opt-in; defaults
+   * to `false`.
+   */
+  identityEnabled: boolean
+  /** Character budget for the injected soul section; defaults to `2000`. */
+  soulCharLimit: number
+  /** Character budget for the injected user-profile section; defaults to `3000`. */
+  userCharLimit: number
+  /**
+   * Optional directory holding custom identity seed files (`SOUL.md` /
+   * `USER.md`); empty uses the builtin Chinese seeds. Validated loudly at
+   * load when identity is enabled; a missing file for one kind keeps that
+   * kind's builtin seed (partial override).
+   */
+  identitySeedDir?: string
+}
+
+/** The full memory-family settings shape: the composition config and the merged runtime view. */
+export type MemoryConfig = MemoryInjectionConfig & MemoryNotesConfig & MemoryAutoRecallConfig & MemoryIdentityConfig
+
+/**
+ * Schema fragments shared between the four namespace schemas and the plugin
+ * config — one home per default, so the composition layer and the settings
+ * namespaces cannot drift.
+ */
+const INJECTION_FIELDS = {
   memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index'] as const).default(DEFAULT_MEMORY_MODE),
   memoryPolicyCustomText: z.string(),
   memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
   memoryMaxEntries: z.number().step(1).min(0).default(DEFAULT_MEMORY_MAX_ENTRIES),
   maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
   decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
+}
+
+const NOTES_FIELDS = {
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
   notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
   notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
-  identityEnabled: z.boolean().default(DEFAULT_IDENTITY_ENABLED),
-  soulCharLimit: z.number().step(1).min(0).default(DEFAULT_SOUL_CHAR_LIMIT),
-  userCharLimit: z.number().step(1).min(0).default(DEFAULT_USER_CHAR_LIMIT),
-  identitySeedDir: z.string(),
+}
+
+const AUTORECALL_FIELDS = {
   autoRecallEnabled: z.boolean().default(false),
   autoRecallLimit: z.number().step(1).min(1).default(5),
   autoRecallMinChars: z.number().step(1).min(1).default(12),
   hitSignalEnabled: z.boolean().default(false),
   hitSignalThreshold: z.number().min(0).max(1).default(0.25),
+}
+
+const IDENTITY_FIELDS = {
+  identityEnabled: z.boolean().default(DEFAULT_IDENTITY_ENABLED),
+  soulCharLimit: z.number().step(1).min(0).default(DEFAULT_SOUL_CHAR_LIMIT),
+  userCharLimit: z.number().step(1).min(0).default(DEFAULT_USER_CHAR_LIMIT),
+  identitySeedDir: z.string(),
+}
+
+/** Runtime schema for the composition config: the union of the four namespace slices. */
+export const Config: z<MemoryConfig> = z.object({
+  ...INJECTION_FIELDS,
+  ...NOTES_FIELDS,
+  ...AUTORECALL_FIELDS,
+  ...IDENTITY_FIELDS,
 })
+
+/** Per-namespace schemas — each plugin-configuration card's settings slice. */
+const MemorySectionSchema: z<MemoryInjectionConfig> = z.object(INJECTION_FIELDS)
+const NotesSectionSchema: z<MemoryNotesConfig> = z.object(NOTES_FIELDS)
+const AutoRecallSectionSchema: z<MemoryAutoRecallConfig> = z.object(AUTORECALL_FIELDS)
+const IdentitySectionSchema: z<MemoryIdentityConfig> = z.object(IDENTITY_FIELDS)
+
+/** Base-layer projections: each namespace's composition slice of the plugin config. */
+function injectionEntry(config: MemoryConfig): MemoryInjectionConfig {
+  return {
+    memoryMode: config.memoryMode,
+    // Optional composition keys are carried only when set (exactOptionalPropertyTypes).
+    ...config.memoryPolicyCustomText === undefined ? {} : { memoryPolicyCustomText: config.memoryPolicyCustomText },
+    memoryCharLimit: config.memoryCharLimit,
+    memoryMaxEntries: config.memoryMaxEntries,
+    maxSearchResults: config.maxSearchResults,
+    decayDays: config.decayDays,
+  }
+}
+
+function notesEntry(config: MemoryConfig): MemoryNotesConfig {
+  return {
+    notesEnabled: config.notesEnabled,
+    notesCharLimit: config.notesCharLimit,
+    notesMaxEntriesPerFile: config.notesMaxEntriesPerFile,
+  }
+}
+
+function autoRecallEntry(config: MemoryConfig): MemoryAutoRecallConfig {
+  return {
+    autoRecallEnabled: config.autoRecallEnabled,
+    autoRecallLimit: config.autoRecallLimit,
+    autoRecallMinChars: config.autoRecallMinChars,
+    hitSignalEnabled: config.hitSignalEnabled,
+    hitSignalThreshold: config.hitSignalThreshold,
+  }
+}
+
+function identityEntry(config: MemoryConfig): MemoryIdentityConfig {
+  return {
+    identityEnabled: config.identityEnabled,
+    soulCharLimit: config.soulCharLimit,
+    userCharLimit: config.userCharLimit,
+    ...config.identitySeedDir === undefined ? {} : { identitySeedDir: config.identitySeedDir },
+  }
+}
 
 /**
  * Render one scope's entries as a bulleted list under a `## <scope>` heading.
@@ -381,10 +480,22 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     validateSeedDir(seedDir)
   }
 
-  // Source thunk for the current resolved settings: the settings scope while
-  // one is attached, the composition entry otherwise. Reassigned by
-  // `installSection` on attach and detach.
-  let current = (): MemoryConfig => config
+  // Source thunks for the current resolved settings slices: the settings
+  // scopes while one is attached, the composition projections otherwise
+  // (reassigned by `installSection` on attach and detach). The merged view
+  // keeps every consumer reading the one MemoryConfig shape.
+  let memorySource = (): MemoryInjectionConfig => injectionEntry(config)
+  let notesSource = (): MemoryNotesConfig => notesEntry(config)
+  let recallSource = (): MemoryAutoRecallConfig => autoRecallEntry(config)
+  let identitySource = (): MemoryIdentityConfig => identityEntry(config)
+
+  /** The merged runtime view across the four namespaces, re-read per event/call. */
+  const current = (): MemoryConfig => ({
+    ...memorySource(),
+    ...notesSource(),
+    ...recallSource(),
+    ...identitySource(),
+  })
 
   // Per-session frozen memory snapshots (content + index), read once at session/created.
   const sessionMemory = new WeakMap<Session, FrozenSnapshot>()
@@ -397,12 +508,34 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   const hitLedger = new WeakMap<Session, LedgerEntry[]>()
 
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+    // One namespace per plugin-configuration card; each base layer projects
+    // its slice of the composition config. A card whose slot key is not a
+    // served namespace is never dispatched by the host's plugins tab, so
+    // these registrations are what make the four cards visible.
+    settingsCtx.settings.installSection(ctx, NS, MemorySectionSchema, injectionEntry(config), {
       setSource: (source) => {
-        current = source
+        memorySource = source
       },
       // The section text provider reads settings live at each assembly, so a
       // committed change is picked up without re-judging registration-level facts.
+      onChange: () => {},
+    })
+    settingsCtx.settings.installSection(ctx, NOTES_NS, NotesSectionSchema, notesEntry(config), {
+      setSource: (source) => {
+        notesSource = source
+      },
+      onChange: () => {},
+    })
+    settingsCtx.settings.installSection(ctx, AUTORECALL_NS, AutoRecallSectionSchema, autoRecallEntry(config), {
+      setSource: (source) => {
+        recallSource = source
+      },
+      onChange: () => {},
+    })
+    settingsCtx.settings.installSection(ctx, IDENTITY_NS, IdentitySectionSchema, identityEntry(config), {
+      setSource: (source) => {
+        identitySource = source
+      },
       onChange: () => {},
     })
   })

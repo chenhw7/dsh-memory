@@ -1,19 +1,23 @@
 /**
  * Live settings tests: every bundle plugin re-reads its namespace per
  * event/call, so a frontend settings change applies without a restart, with
- * layering schema defaults < composition entry < user document.
+ * layering schema defaults < composition entry < user document. The
+ * memory-family namespaces (one per plugin-configuration card) are covered in
+ * their own describe: the plugins tab dispatches a card only when its slot
+ * key names a served namespace.
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId as CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { MemoryStore } from '../src/index.ts'
 import type { MemoryEntry, MemoryId, MemorySearchQuery } from '../src/types.ts'
 import * as tool from '../src/tool/index.ts'
 import * as review from '../src/review/index.ts'
 import * as context from '../src/context/index.ts'
+import * as identity from '../src/identity/index.ts'
 
 /** In-memory settings provider: a raw-document store with no IO. */
 class TestSettingsProvider extends SettingsProvider {
@@ -150,5 +154,73 @@ describe('decayDays — live via the memory namespace, consumed by memory-review
     await ctx.plugin(review, {})
     ctx.emit('session/created', {})
     expect(store.janitorDays).toEqual([30])
+  })
+})
+
+describe('plugin-card namespaces — one served namespace per card', () => {
+  async function setup() {
+    const ctx = new Context()
+    await ctx.plugin(TestSettingsProvider)
+    await ctx.plugin(SystemPrompt)
+    ctx.provide('memory', new MiniStore(3))
+    await ctx.plugin(context, {} as never)
+    return ctx
+  }
+
+  it('memory-context serves the four memory-family namespaces with their slices', async () => {
+    const ctx = await setup()
+    const descriptors = ctx.settings.describe()
+    const namespaces = new Set(descriptors.map(d => d.ns))
+    // The plugins tab pairs card keys with served namespaces — every card key
+    // must name one, or the card is never dispatched.
+    for (const card of ['memory', 'memory-notes', 'memory-autorecall', 'memory-identity']) {
+      expect(namespaces.has(card), card).toBe(true)
+    }
+    // The curated `memory` namespace keeps the injection keys only; the moved
+    // keys live in their own namespaces' schemas.
+    const memory = descriptors.find(d => d.ns === 'memory')!
+    const memorySchema = JSON.stringify(memory.schema)
+    expect(memorySchema).not.toContain('notesEnabled')
+    expect(memorySchema).not.toContain('identityEnabled')
+    expect(memorySchema).not.toContain('autoRecallEnabled')
+    const identity = descriptors.find(d => d.ns === 'memory-identity')!
+    expect(JSON.stringify(identity.schema)).toContain('identityEnabled')
+  })
+
+  it('a user write to memory-autorecall arms the pre-step fence live', async () => {
+    const ctx = await setup()
+    const messages = [createUserMessage({ content: [{ type: 'text', text: 'how do I run the deploy script for staging?' }], source: { kind: 'user' } })]
+    const payload = { agent: { session: undefined }, messages, turn: 0, step: 0, signal: new AbortController().signal }
+    const innerNext = async (): Promise<{ kind: string; messages: unknown[] }> => ({ kind: 'enter', messages })
+    // Factory default off: the fence falls through.
+    const before = await ctx.waterfall('agent/pre-step', payload, innerNext)
+    expect((before as { messages: unknown[] }).messages).toHaveLength(1)
+    // Card write in the `memory-autorecall` namespace applies to the next step.
+    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: true })
+    const after = await ctx.waterfall('agent/pre-step', payload, innerNext)
+    const appended = (after as { messages: unknown[] }).messages
+    expect(appended).toHaveLength(2)
+    expect(JSON.stringify(appended[1])).toContain('<recalled-memory>')
+    // Back off: the next step falls through again.
+    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: false })
+    const off = await ctx.waterfall('agent/pre-step', payload, innerNext)
+    expect((off as { messages: unknown[] }).messages).toHaveLength(1)
+  })
+
+  it('identity enablement rides the memory-identity namespace live', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TestSettingsProvider)
+    await ctx.plugin(SystemPrompt)
+    ctx.provide('memory', new MiniStore(0))
+    await ctx.plugin(context, {} as never)
+    await ctx.plugin(identity, {})
+    const service = ctx.get('identity')!
+    // Disabled by default: the empty snapshot.
+    expect(service.snapshotFor()).toEqual({ soul: '', user: '' })
+    // The card write in `memory-identity` arms the layer for the next read.
+    await ctx.settings.update('memory-identity', { identityEnabled: true })
+    expect(service.snapshotFor().soul.length).toBeGreaterThan(0)
+    await ctx.settings.update('memory-identity', { identityEnabled: false })
+    expect(service.snapshotFor()).toEqual({ soul: '', user: '' })
   })
 })

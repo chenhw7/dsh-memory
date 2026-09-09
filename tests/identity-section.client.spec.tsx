@@ -98,6 +98,12 @@ describe('identity section (read-only governance)', () => {
     expect(await screen.findByText(en.identitySectionIntro)).toBeDefined()
     expect(screen.getByText('第二版人格文档')).toBeDefined()
     expect(screen.getByText(en.identityUserEmpty)).toBeDefined()
+    // The document preview carries the wrapping pair — the bare modifier class
+    // would leave <pre> non-wrapping and long lines spill past the panel.
+    const preview = screen.getByText('第二版人格文档')
+    expect(preview.tagName).toBe('PRE')
+    expect(preview.className).toContain('dsm-s-content')
+    expect(preview.className).toContain('dsm-s-content-open')
     // Both retained versions offer the (first-step) revert button.
     expect(await screen.findAllByRole('button', { name: en.identityRevertBtn })).toHaveLength(2)
   })

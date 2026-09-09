@@ -36,8 +36,8 @@ export const name = 'memory-identity'
 /** Nothing is required: `memory` and `settings` are accessed optionally. */
 export const inject: string[] = []
 
-/** The settings namespace owned by `memory-context`, read here defensively. */
-const MEMORY_NS = 'memory'
+/** The identity settings namespace (owned by `memory-context`), read here defensively. */
+const IDENTITY_NS = 'memory-identity'
 
 /**
  * The raw (unbudgeted) contents of the two identity documents for one
@@ -174,7 +174,7 @@ export function apply(ctx: Context): void {
   ctx.inject(['settings'], (sctx) => {
     readSettings = (): IdentitySettings => {
       try {
-        return resolveIdentitySettings(sctx.settings.get(MEMORY_NS))
+        return resolveIdentitySettings(sctx.settings.get(IDENTITY_NS))
       } catch {
         // Namespace not registered yet (or the provider tore down) — the
         // disabled default stands until it registers.

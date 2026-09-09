@@ -491,6 +491,7 @@ describe('memoryRemote write guard (SEC-04)', () => {
     { method: 'archive', call: (s: MemoryRemoteService) => s.archive({ id: 'mem-1', archived: true }), expectError: false },
     { method: 'suggestAdopt', call: (s: MemoryRemoteService) => s.suggestAdopt({ id: 'sug-1' }), expectError: true },
     { method: 'suggestReject', call: (s: MemoryRemoteService) => s.suggestReject({ id: 'sug-1' }), expectError: false },
+    { method: 'identityRevert', call: (s: MemoryRemoteService) => s.identityRevert({ kind: 'soul', version: 1 }), expectError: true },
   ] as const
 
   it('the deployed schema default denies remote writes even with no config row', async () => {
@@ -579,7 +580,7 @@ describe('memoryRemote write guard (SEC-04)', () => {
 })
 
 // The identity governance surface (the identity layer): ungated reads, the
-// dedicated default-ON revert valve, and the identity adoption result shape.
+// write-gated revert valve, and the identity adoption result shape.
 describe('memoryRemote identity governance surface', () => {
   it('reads are ungated: identityList and identityHistory work under the default write fence', async () => {
     const { store, service } = setup()
@@ -595,8 +596,32 @@ describe('memoryRemote identity governance surface', () => {
     expect(history.history[0]?.source).toBe('tool')
   })
 
-  it('identityRevert runs under its DEFAULT-ON flag even with remoteWritesEnabled false', async () => {
-    const { store, service } = setup([], { remoteWritesEnabled: false })
+  it('the deployed schema default for identityRevertEnabled is true', () => {
+    const result = (RemoteServiceConfig as { '~standard': { validate(v: unknown): { value?: RemoteConfig } } })['~standard'].validate(undefined)
+    expect(result.value?.identityRevertEnabled).toBe(true)
+  })
+
+  it('remoteWritesEnabled: false refuses identityRevert even when its dedicated flag is enabled', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: false, identityRevertEnabled: true })
+    await store.updateIdentity('user', '画像 v1', { source: 'seed' })
+    await store.updateIdentity('user', '画像 v2', { source: 'tool' })
+
+    const result = await service.identityRevert({ kind: 'user', version: 1 })
+    expect(result).toEqual({ error: 'identity revert is disabled on this deployment' })
+    expect(store.getIdentity('user')?.version).toBe(2)
+    expect(store.listIdentityHistory('user')).toHaveLength(2)
+  })
+
+  it('identityRevertEnabled: false refuses the valve with the wire-shaped error', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true, identityRevertEnabled: false })
+    await store.updateIdentity('soul', '人格', { source: 'seed' })
+    const result = await service.identityRevert({ kind: 'soul', version: 1 })
+    expect(result).toEqual({ error: 'identity revert is disabled on this deployment' })
+    expect(store.getIdentity('soul')?.version).toBe(1)
+  })
+
+  it('identityRevert restores history when both write gates are enabled', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true, identityRevertEnabled: true })
     await store.updateIdentity('user', '画像 v1', { source: 'seed' })
     await store.updateIdentity('user', '画像 v2', { source: 'tool' })
 
@@ -604,19 +629,6 @@ describe('memoryRemote identity governance surface', () => {
     expect(result.reverted?.content).toBe('画像 v1')
     expect(result.reverted?.version).toBe(3)
     expect(store.listIdentityHistory('user')[0]?.source).toBe('ui')
-  })
-
-  it('the deployed schema default for identityRevertEnabled is true', () => {
-    const result = (RemoteServiceConfig as { '~standard': { validate(v: unknown): { value?: RemoteConfig } } })['~standard'].validate(undefined)
-    expect(result.value?.identityRevertEnabled).toBe(true)
-  })
-
-  it('identityRevertEnabled: false refuses the valve with the wire-shaped error', async () => {
-    const { store, service } = setup([], { remoteWritesEnabled: false, identityRevertEnabled: false })
-    await store.updateIdentity('soul', '人格', { source: 'seed' })
-    const result = await service.identityRevert({ kind: 'soul', version: 1 })
-    expect(result).toEqual({ error: 'identity revert is disabled on this deployment' })
-    expect(store.getIdentity('soul')?.version).toBe(1)
   })
 
   it('suggestAdopt returns the identity result (no entry) for an identity proposal', async () => {

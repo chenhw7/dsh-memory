@@ -37,6 +37,8 @@ export const inject = ['tools']
 const MEMORY_NS = 'memory'
 /** The `memory-review` settings namespace — read cross-namespace (owned by memory-review). */
 const REVIEW_NS = 'memory-review'
+/** The `memory-identity` settings namespace — read cross-namespace (owned by memory-context). */
+const IDENTITY_NS = 'memory-identity'
 
 /** Default for the search-result cap when the namespace value is absent. */
 const DEFAULT_MAX_SEARCH_RESULTS = 50
@@ -287,7 +289,7 @@ const IDENTITY_UPDATE_DESCRIPTION =
   + 'skeleton. Write deliberately: after a successful rewrite, ALWAYS tell the user what you changed '
   + 'and why — this is your core, and changes should be known to both sides. The new text takes '
   + 'effect from the next session. Only available when the identity layer is enabled '
-  + '(identityEnabled in the Memory settings).'
+  + '(the Identity card in plugin configuration).'
 
 export function apply(ctx: Context, config: Config): void {
   // §3.10's production path: install the composition's scanner allowlist
@@ -305,9 +307,9 @@ export function apply(ctx: Context, config: Config): void {
   // live per call so flipping the setting applies to the very next tool call;
   // a deployment without memory-review composed keeps automatic writes.
   let confirmMode = (): boolean => false
-  // The identity slice of the `memory` namespace, read live per call — the
-  // enabled gate plus the two document budgets. Defaults match the settings
-  // schema so a namespace-less deployment behaves like the disabled default.
+  // The `memory-identity` namespace, read live per call — the enabled gate
+  // plus the two document budgets. Defaults match the settings schema so a
+  // namespace-less deployment behaves like the disabled default.
   let identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => ({
     identityEnabled: false,
     soulCharLimit: DEFAULT_SOUL_CHAR_LIMIT,
@@ -331,7 +333,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => {
       try {
-        const ns = sctx.settings.get(MEMORY_NS) as { identityEnabled?: boolean; soulCharLimit?: number; userCharLimit?: number } | undefined
+        const ns = sctx.settings.get(IDENTITY_NS) as { identityEnabled?: boolean; soulCharLimit?: number; userCharLimit?: number } | undefined
         const soulCharLimit = typeof ns?.soulCharLimit === 'number' && ns.soulCharLimit >= 0 ? ns.soulCharLimit : DEFAULT_SOUL_CHAR_LIMIT
         const userCharLimit = typeof ns?.userCharLimit === 'number' && ns.userCharLimit >= 0 ? ns.userCharLimit : DEFAULT_USER_CHAR_LIMIT
         return { identityEnabled: ns?.identityEnabled === true, soulCharLimit, userCharLimit }
@@ -1182,7 +1184,7 @@ export function apply(ctx: Context, config: Config): void {
       const store = requireMemory(ctx)
       const settings = identityConfig()
       if (!settings.identityEnabled) {
-        throw new Error('identity layer is disabled: enable it in the Memory settings (identityEnabled) to use identity_update')
+        throw new Error('identity layer is disabled: enable it in the Identity card of plugin configuration (identityEnabled) to use identity_update')
       }
       const kind = args.kind as IdentityKind
       const limit = kind === 'soul' ? settings.soulCharLimit : settings.userCharLimit

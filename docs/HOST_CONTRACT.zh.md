@@ -103,7 +103,14 @@
 | bundle patch 清单字段 `dsh.bundle.patch`（cordis.patch.yml 即包本体） | `packages/bundle/base/src/index.ts:3`、`web-app/src/index.ts:3` |
 | `settings.section` slot（根级 list，id/order/label/inject） | `packages/client/ui-settings/src/client/contract/slots.ts:53` |
 | `settings.plugin.item` slot（Plugins 页卡片） | `packages/client/ui-settings-plugins/src/client/index.ts:79,83` |
+| 卡片分发规则：插件配置页按「slot key ∈ Host 已注册 settings namespace」逐 namespace 分发 | `packages/client/ui-settings-plugins/src/client/tab-store.ts:89-91`（`served.has(entry.options.key)`，served 来自 `settings.describe` mirror）、`ConfigurablePluginsTab.tsx:37`（`entryKey: ns`，一 namespace 一次分发） |
+| keyed 槽位每个 key 只渲染**第一个**匹配条目 | `packages/client/ui-renderer/src/client/scoped-slots.tsx:800-806`（`find(e => e.options.key === entryKey)`） |
 | 客户端模块扫描器只发现**根导出行**的 dsh.client（子路径跳过） | 本仓库踩坑记录：root 包 no-op 行见 `src/index.ts` 尾注 |
+
+**契约要点**：
+- `settings.plugin.item` 是 keyed 槽位，契约即"卡片 key = 它编辑的 settings namespace"（`ui-settings-plugins/src/client/slot-contract.ts:3-10`）。插件要在 Host 侧注册同名 settings namespace（`settings.installSection`），浏览器侧用同一个 key 注册卡片，tab 才会把两者配对；key 不是已注册 namespace 的卡片**静默不可见**（不报错、不进列表）。
+- 多张卡共享一个 namespace 无法工作：keyed 槽位只取第一个匹配条目，其余条目永不渲染。插件若要多卡，必须每卡注册自己的 namespace（本仓库四个 memory 家族 namespace 即此形态，见 [Agent Note](../.agents/notes/implemented/bug-fix/2026-09-09-plugin-cards-need-served-namespaces.zh.md)）。
+- 该规则自 ui-settings-plugins 的 namespace-pairing 设计起即存在（dsh-v0.1.1-rc.2 与 dsh-v0.1.2-alpha.1/2 均已强制）；harness 升级时按 §9 清单核对卡片 key 与 namespace 注册的一致性。
 
 ## 9. 日志通道：cordis 内置 `ctx.logger`
 
