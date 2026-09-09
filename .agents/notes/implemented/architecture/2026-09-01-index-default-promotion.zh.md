@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-09-01-index-default-promotion.md) | 中文
 
-本 note 超越 [注入模式保持 policy-only 默认档](2026-08-26-index-mode-stays-policy-only.zh.md)。被超越 note 的重引入条件——线上召回触发统计表明真实会话漏搜——被记录为无限期阻塞:它依赖的会话采集 30 天内产出 0 个可观测会话,且无人认领。记忆系统改进计划([proposed/architecture/2026-09-01](../../proposed/architecture/2026-09-01-memory-system-improvement-program.zh.md))裁定:无法满足的条件不应扣押默认值,举证责任反转——现在就提升,以回归地板值加显式回退开关作护栏,而非等待遥测。
+本 note 超越 [注入模式保持 policy-only 默认档](2026-08-26-index-mode-stays-policy-only.zh.md)，其本身又被 [记忆注入改走 digest 优先](2026-09-09-memory-digest-first-fence-and-volatility-ordering.zh.md) 改写（而非推翻）：本 note 晋升的存在性感知改由一次性步尾清单承载，`memoryMode` 默认变为 `digest`。被超越 note 的重引入条件——线上召回触发统计表明真实会话漏搜——被记录为无限期阻塞:它依赖的会话采集 30 天内产出 0 个可观测会话,且无人认领。记忆系统改进计划([proposed/architecture/2026-09-01](../../proposed/architecture/2026-09-01-memory-system-improvement-program.zh.md))裁定:无法满足的条件不应扣押默认值,举证责任反转——现在就提升,以回归地板值加显式回退开关作护栏,而非等待遥测。
 
 ## 问题
 

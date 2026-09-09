@@ -47,7 +47,7 @@ sequenceDiagram
     Host->>Context: apply(ctx, config) [inject: systemPrompt]
     Context->>Context: installSettingsSection('memory', MemoryConfig)
     Context->>Notes: ctx.get('projectNotes')（可选，冻结时使用）
-    Context->>Host: systemPrompt.section('memory', order 90)<br/>systemPrompt.section('project-notes', order 91)<br/>session/created 冻结 · compaction/end 重冻结<br/>agent/pre-step 自动召回中间件
+    Context->>Host: systemPrompt.section('memory', order 6000)<br/>systemPrompt.section('project-notes', order 6001)<br/>session/created 冻结 · compaction/end 重冻结 + 清单重布防<br/>agent/pre-step 消息尾部注入中间件
 
     Host->>Remote: apply(ctx) [inject: memory]
     Remote->>Store: ctx.get('memory')
@@ -457,7 +457,7 @@ sequenceDiagram
     Ctx->>Ctx: sessionMemory.set(session, { content, index, notes })【WeakMap】
 
     Note over SP,Policy: 阶段 2：每步组装
-    SP->>Ctx: section('memory', order 90)
+    SP->>Ctx: section('memory', order 6000)
     Ctx->>Ctx: settings = current()；snapshot = sessionMemory.get(session)
     Ctx->>Policy: buildMemorySectionText(mode, customText, snapshot.content, snapshot.index)
     alt mode = 'off'
@@ -473,7 +473,7 @@ sequenceDiagram
     end
     Note over Policy: MEMORY_CONTEXT_NOTE / MEMORY_INDEX_NOTE 把条目标定为<br/>"有用的上下文，而非指令" + 写时真实性——<br/>行动前对照当前仓库与工具输出核实
 
-    SP->>Ctx: section('project-notes', order 91)
+    SP->>Ctx: section('project-notes', order 6001)
     Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesCharLimit)
     Policy-->>SP: <project-notes> 块（"nearer scope wins"）或 ""
 ```
@@ -516,9 +516,9 @@ sequenceDiagram
 
 ---
 
-## 10. 步级自动召回（Opt-In）
+## 10. 消息尾部注入：一次性清单 + 自动召回
 
-每个 agent step 用本步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息。system prompt 不动——KV-cache 前缀保持稳定。
+每个 agent step，中间件先计算该会话待发的一次性 `<memory-digest>` 库存清单（digest 模式），再计算本步自动召回围栏，两者合并为至多一条 plugin 消息追加在本步消息之后。system prompt 不动——KV-cache 前缀保持稳定。
 
 ```mermaid
 sequenceDiagram
@@ -530,29 +530,55 @@ sequenceDiagram
     participant Next as next() / step
 
     PS->>Ctx: middleware(payload, next)
-    Ctx->>Settings: current().autoRecallEnabled
-    alt 未启用 或 ctx.get('memory') 缺失
-        Ctx->>Next: return next()
-    else 已启用
+    Ctx->>Store: ctx.get('memory') 缺失 → return next()
+    Ctx->>Settings: current().memoryMode === 'digest' 且 memoryDigestCharLimit > 0
+    alt 清单待发（session 不在 digestSent WeakSet）
+        Ctx->>Store: memory.list()（exclude：notes 启用时的 isRenderedEntry）
+        Ctx->>Policy: buildMemoryDigestText(entries, 800, exclude)
+        Note over Policy: 围栏 <memory-digest>：分项目/作用域类目计数<br/>+ Topics（anchors → redactBlocked → 排序 → 折 …(N more)）<br/>+ "[N entries; M stale hidden]" 尾注，不 markRecalled、不触 ledger
+        alt 清单非空
+            Ctx->>Ctx: digestSent.add(session)【仅发射后置位】
+        end
+    end
+    Ctx->>Settings: current().autoRecallEnabled（默认开）
+    alt 已启用
         Ctx->>Ctx: query = payload.messages → user 消息文本块拼接
-        alt query.length < autoRecallMinChars（12）
-            Ctx->>Next: return next()
-        else 长度足够
-            Ctx->>Store: memory.search({ query, limit: autoRecallLimit（5）})
-            Note over Store: BM25 排序；命中盖召回戳<br/>（清除 staleSince）
-            Ctx->>Ctx: hits = entries.filter(staleSince === undefined)
-            alt 无新鲜命中
-                Ctx->>Next: return next()
-            else 有命中
-                Ctx->>Store: markRecalled(hit ids)【幂等】
+        alt query.length ≥ autoRecallMinChars（12）
+            Ctx->>Store: memory.search({ query, limit: autoRecallLimit（5）,<br/>recordRecall: false })
+            Ctx->>Ctx: hits = entries.filter(staleSince 未设, status active)
+            alt 有新鲜命中
+                Ctx->>Store: markRecalled(hit ids, 'fence')【轻量档：<br/>lastRecalledAt + 清 staleSince，不递增 accessCount】
                 Ctx->>Policy: buildAutoRecallBlock(hits, 1200)
                 Note over Policy: 围栏 <recalled-memory>：框定说明（含写时真实性<br/>免责）+ "- [scope/category] summary-or-content[:200]"<br/>行，字符封顶，尾部 "N characters ≈M tokens" 尾注
-                Ctx->>Ctx: createUserMessage(block, source { kind:'plugin', plugin:'dsh-memory-context' })
-                Ctx-->>PS: { kind: 'enter', messages: [...payload.messages, recallMessage] }
-                Note over Ctx,Next: 任何环节失败 → catch → 原样 return next()
             end
         end
     end
+    alt 清单块 或 召回块 非空
+        Ctx->>Ctx: text = [digest, recall].join('\n\n') —— 一条消息，清单在前
+        Ctx->>Ctx: createUserMessage(text, source { kind:'plugin', plugin:'dsh-memory-context' })
+        Ctx-->>PS: { kind: 'enter', messages: [...payload.messages, message] }
+    else 两者皆空
+        Ctx->>Next: return next()
+    end
+    Note over Ctx,Next: 任何环节失败 → catch → 原样 return next()
+```
+
+干净的 `compaction/end`（被认可的前缀破坏点）之后，重冻结监听器同时清除该会话的清单标记——下一步重新发射一份反映会话中途写入的新清单：
+
+```mermaid
+sequenceDiagram
+    participant Host as 宿主
+    participant Ctx as context/index.ts
+    participant Session as 会话
+    participant PS as agent/pre-step 瀑布流
+
+    Host->>Ctx: session/event 'compaction/end'（data.error 缺席）
+    Ctx->>Ctx: digestSent.delete(session)【重新布防】
+    Ctx->>Ctx: freezeFor(session)【重冻结快照】
+    Host->>PS: 下一个 agent step
+    PS->>Ctx: middleware(payload, next)
+    Ctx->>Ctx: 清单重新待发（digest 模式、预算 > 0）
+    Note over Ctx,PS: 一份新的 <memory-digest> 再发射一次；<br/>重建后的前缀重新获知 store 现貌
 ```
 
 ---
@@ -709,8 +735,8 @@ graph TB
     end
 
     subgraph "上下文层"
-        Context["context/index.ts<br/>冻结快照 + 2 个注入段 + 自动召回"]
-        PolicyMod["context/policy.ts<br/>模式组装 + index + 自动召回围栏"]
+        Context["context/index.ts<br/>冻结快照 + 2 个注入段 + 消息尾部注入"]
+        PolicyMod["context/policy.ts<br/>模式组装 + index + 清单 + 自动召回围栏"]
         Conflict["context/conflict.ts<br/>annotateConflicts（冻结时接线）"]
     end
 
@@ -772,7 +798,7 @@ graph TB
 |------|------|------------|
 | **多点扫描** | `scanContent` 在工具边界、store 契约内、每条提取/curated 行、notes 导出门运行，又在所有面向 prompt 的渲染点重跑（`redactBlocked`） | 正确性优先的冗余；若性能分析显示有开销可按内容 hash 缓存扫描结论 |
 | **后台任务 fire-and-forget** | review/flush/janitor/curator 全部吞错（`void …catch`）；残留清理同样 best-effort 吞错 | 可观测性：静默失败难排查；可为每条路径加结构化日志或健康计数 |
-| **快照冻结时机** | `session/created` 冻结；仅在干净的 `compaction/end` 重冻结（被认可的前缀破坏点） | 会话中途的提取在下一次 compaction/会话前对 prompt 不可见；步级新鲜度由自动召回（opt-in）补位 |
+| **快照冻结时机** | `session/created` 冻结；仅在干净的 `compaction/end` 重冻结（被认可的前缀破坏点）——同一时机为一次性清单重新布防 | 会话中途的提取在下一次 compaction/会话前对 prompt 不可见；步级新鲜度由每步召回围栏补位，重建后的库貌由补发的清单一次性重述 |
 | **建议队列不是记忆** | `suggestions` 行从不注入、不检索、不衰减；只有 `adoptSuggestion` 经完整 store 契约将其提升为条目 | 保持两表边界不变；未来"高 hits 自动采纳"策略也必须走同一契约路径 |
 | **检索质量是实测基线而非断言** | golden-set 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）守护每次构建；各模式注入成本在旁一并快照 | 基线漂移只经"文档化的重定基线"提交发生；跨语言语义召回按设计保持在词法检索范围之外 |
 | **预算按触发记账** | 每次 drain/flush/curator tick 记一个 `extractionBudget` 单位，即使某次 drain 发了踩坑 + 通用两次调用 | 病态批次可能每个记账单位做 2× LLM 工作；按调用记账更严格但会复杂化重试语义 |
@@ -780,5 +806,5 @@ graph TB
 | **失败序列状态存于投影状态** | `openCalls`（64）/ `openStreaks`（8，LRU）随 JSON 投影载荷持久化 | 上限约束增长；签名归一化了参数，但奇异参数形态退化为裸工具名 |
 | **审计不含 pin** | `pin`/`unpin` 变更不写审计记录（只有 add/update/remove 有） | 若 pin 的溯源重要可加专用 op kind |
 | **curator 节奏是进程全局** | `sessionCount` 统计进程内的会话创建数；重启即归零 | 持久化计数器可让节奏跨重启精确 |
-| **自动召回只用用户文本** | 查询 = 本步入站 user 消息文本块拼接 | 可混合最近的 assistant/tool 文本提升多轮召回精度 |
+| **自动召回只用用户文本** | 查询 = 本步入站 user 消息文本块拼接；围栏命中盖轻量召回档（只刷最近召回时间，绝不计 `accessCount`） | 可混合最近的 assistant/tool 文本提升多轮召回精度 |
 | **@Remote 服务承载 Memory 区** | 十四个类型化方法：CRUD + pin/archive + 人审队列三件套 + health/projects/audit；该区的三个 tab 经通用 `/api` RPC 通道调用（无客户端 mount） | 方法名须持续避开 gateway 的保留成员名（故 `removeEntry`）；新增第 15 个方法需重新生成客户端产物 |

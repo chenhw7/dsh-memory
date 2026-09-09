@@ -46,9 +46,10 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **BM25 relevance search** — dependency-free Okapi BM25 over CJK-aware tokenization (Latin word tokens; CJK unigrams + bigrams), pinned entries surfaced ahead of equal-relevance matches. Retrieval quality is not vibes: a fixed golden set (35 entries × 35 query sets, English + Chinese) is evaluated in CI — success@5 = 100%, MRR = 0.902 — with injection-cost numbers per prompt mode (see [TECH_DESIGN §7.9](docs/TECH_DESIGN.md)).
 - **Automatic learning** — a projection accumulator watches the conversation for explicit remember-intent, corrections, and *verified failure streaks* (repeated same-signature tool failures resolved by a success), then runs LLM extraction when enough candidates accumulate. Admission rules exclude anything the repository already records (code structure, git history, fixed-bug narratives), and model-handwritten date prefixes are stripped so timestamps always come from the program.
 - **Project notes prompt section** — coding conventions and a pitfall log render into every session's system prompt (`project-notes` section). Nothing is written into your repository: memory lives entirely in the host-side store, is managed in the Memory settings UI, and upgrades automatically clean up notes files left by ≤0.5.x installs.
+- **Digest-first injection (default)** — the system prompt carries only frozen guidance; the data rides step-tail messages instead: a one-time `<memory-digest>` inventory of the store (category counts + anchor topic words, re-appended once after compaction) on the session's first step, and per-step `<recalled-memory>` fences when the step's text matches stored entries. The prompt prefix stays byte-stable all session, and nothing resident has to be evicted on re-freeze.
 - **Dedup pipeline** — two-stage deduplication (stop-word-filtered Jaccard prefilter + optional LLM judge with bounded merges) prevents near-duplicate accumulation; a low-frequency curator pass re-summarizes oversized entries.
 - **Two-tier memory lifecycle** — pin important memories; overdue project-scoped entries are removed while overdue `global`/`user` entries are soft-decayed (hidden from standing injections, still searchable, un-stamped on recall); entries can also be manually archived from the UI; every write is audited.
-- **Step-level auto recall (opt-in)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable.
+- **Step-level auto recall (on by default)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable. Fence hits refresh an entry's recency clock but never its access count, so query-word luck cannot inflate the eviction signal.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
 - **Frontend-configurable** — all settings exposed through five cards in the dsh settings UI, apply live.
@@ -236,9 +237,10 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `memoryMode` | `index` | `full`: inject memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
+| `memoryMode` | `digest` | `digest`: guidance-only prompt sections; the data rides step-tail messages — a one-time `<memory-digest>` store inventory (counts + topic words) plus per-step `<recalled-memory>` fences. `full`: inject frozen memory content + guidance. `policy-only`: inject guidance only, model searches on demand. `custom`: inject user-defined policy text. `off`: no injection. `index`: inject an existence index (one line per entry) so the model can see what is stored and route to `memory_get`/`memory_search`. |
 | `memoryPolicyCustomText` | — | Custom policy text used when `memoryMode` is `custom`. |
 | `memoryCharLimit` | `5000` | Character budget for the frozen per-session memory snapshot injected in `full` mode (`0` = no content). |
+| `memoryDigestCharLimit` | `800` | Character budget for the one-time `<memory-digest>` inventory message in `digest` mode (≈250 tokens; CJK topics run higher). `0` turns the digest message off. |
 | `memoryMaxEntries` | `20` | Entry-count cap for the same frozen snapshot (`0` = no limit). The snapshot ends with a `≈N tokens` estimate so injection cost stays visible. |
 | `maxSearchResults` | `50` | Default cap for `memory_search` / `memory_list` when the call omits `limit`; read live by the tool plugin. `0` = no limit. |
 | `decayDays` | `30` | Lifecycle window for entries not recalled within N days; read live by the review plugin's janitor. `0` = disabled. Overdue `project` entries are **removed** (hard decay); overdue `global`/`user` entries are instead **soft-decayed** — stamped `stale`, hidden from injection surfaces and notes files, still searchable, un-stamped automatically once recalled. Pinned entries are always exempt. |
@@ -248,14 +250,17 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | Setting | Default | Meaning |
 |---|---|---|
 | `notesEnabled` | `true` | Inject the project-notes prompt section (conventions + pitfall log) into the system prompt. Entries rendered into the section are excluded from the memory section to avoid double injection. No repo files are written. |
-| `notesCharLimit` | `4000` | Character budget for the injected `project-notes` prompt section. |
-| `notesMaxEntriesPerFile` | `100` | Max entries rendered into the project-notes section (newest kept). |
+| `notesConventionsCharLimit` | `1600` | Character budget for the conventions half of the notes section. Entries the budget squeezes out fold into a count line pointing at `memory_search` — never silently dropped. The budget applies at freeze time; live changes take effect at the next session/compaction boundary. |
+| `notesPitfallsCharLimit` | `800` | Character budget for the pitfall-log half of the notes section, so conventions can no longer starve it. Same freeze-time semantics and count-line folding. |
+| `notesMaxEntriesPerFile` | `100` | Max entries selected into the notes section (pinned first, then importance, then recency); the rest fold into count lines. |
+
+> **Settings migration**: the 0.9.x combined key `notesCharLimit` still works — when it is the only budget key set, both halves derive from it (conventions 60% / pitfalls 40%); each new key you set wins its own half. Rename the key in `$DSH_HOME/settings.yaml` (or the composition `config:`) to migrate.
 
 ### `memory-autorecall` namespace
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `autoRecallEnabled` | `false` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable. |
+| `autoRecallEnabled` | `true` | Step-level auto recall: on every agent step, run a BM25 search over the store keyed on the step's user text and append a fenced `<recalled-memory>` message. The system prompt is untouched, so the KV-cache prefix stays stable; fence hits stamp recency only, never the access count. |
 | `autoRecallLimit` | `5` | Max entries in one auto-recall fence (min 1). The fence itself is capped at 1200 characters. |
 | `autoRecallMinChars` | `12` | Skip recall when the step's user text is shorter than this many characters (min 1). |
 | `hitSignalEnabled` | `false` | Enable the usage-hit signal: answers echoing injected entries above `hitSignalThreshold` bump `hitCount`; purely a selection signal, never deletion. |
@@ -314,18 +319,20 @@ Example `$DSH_HOME/settings.yaml` (all namespaces):
 
 ```yaml
 memory:
-  memoryMode: index
+  memoryMode: digest
   memoryPolicyCustomText: ""
   memoryCharLimit: 5000
+  memoryDigestCharLimit: 800
   memoryMaxEntries: 20
   maxSearchResults: 50
   decayDays: 30
 memory-notes:
   notesEnabled: true
-  notesCharLimit: 4000
+  notesConventionsCharLimit: 1600
+  notesPitfallsCharLimit: 800
   notesMaxEntriesPerFile: 100
 memory-autorecall:
-  autoRecallEnabled: false
+  autoRecallEnabled: true
   autoRecallLimit: 5
   autoRecallMinChars: 12
   hitSignalEnabled: false
@@ -387,7 +394,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (confirm-mode writes queue as proposals) |
 | `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection (render conventions/pitfalls into the `project-notes` section; no repo files), registers `ctx.projectNotes`; cleans up ≤0.5.x file-export artifacts on session start |
-| `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @90 + `project-notes` @91), step-level auto recall, owns the `memory` settings namespace |
+| `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @6000 + `project-notes` @6001, after tool guidance), step-tail messages (one-time digest + per-step recall fence), owns the `memory` settings namespace |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (consumed over the `/api` channel) |
 
 **Storage**: this bundle does **not** insert `storage-json` / `storage-domain` rows. The `dsh-web-app` bundle already provides them (with the correct root path under `$DSH_HOME/storages`). Inserting them here would clobber that config (patches replace whole rows, last-write-wins). The memory store provider consumes the `storageDomain` service as a peer dependency.
@@ -411,7 +418,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 
 - **No semantic/vector retrieval** — `memory_search` is BM25 lexical ranking over structured KV entries (Latin word tokens, CJK unigrams + bigrams), not embeddings; synonyms that share no tokens will not match.
 - **Extraction quality tracks the session model** — review/flush/curator reuse the session's routed provider/model unless explicitly overridden.
-- **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected snapshot is frozen for KV-cache stability; step-level auto recall (opt-in) covers per-step freshness instead.
+- **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected sections are frozen for KV-cache stability; step-level auto recall (on by default) covers per-step freshness instead, and the one-time digest re-appends once after compaction.
 - **Remote management access relies on transport trust plus deployment valves** — any host admitted by the dsh host's `trustedHosts` setting can call read RPCs, but ordinary remote memory writes are denied by default (`remoteWritesEnabled: false`) and are exposed only when explicitly enabled, and `identityRevert` requires its own `identityRevertEnabled` valve (default `true`) on top of the write gate because it restores scanner-approved history rather than accepting arbitrary new content. Keep `trustedHosts` narrow and leave remote writes disabled unless every admitted host is trusted ([threat model](docs/TECH_DESIGN.md)).
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
 - **Alpha channel (0.1.2-alpha.x) required** — the bundle uses the 0.1.2-alpha settings API (`ctx.settings.installSection`, host-only projection registrations) and declares `^0.1.2-alpha.2` peers. The rc (`next`) line still ships the removed module-level `installSettingsSection` helper and cannot load this bundle; install dsh from the `alpha` dist-tag. The client bundle likewise targets the alpha client packages (`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`), which replaced the removed `dsh-client-runtime`.

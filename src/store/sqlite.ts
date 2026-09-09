@@ -47,6 +47,7 @@ import type {
   MemoryId,
   MemorySearchQuery,
   MemorySuggestion,
+  RecallSource,
   SearchMemoryResult,
   UpdateIdentityInput,
   UpdateMemoryInput,
@@ -59,6 +60,16 @@ type Row = Record<string, unknown>
 /** Cast a row to the MemoryEntry contract (the row carries exactly its fields). */
 function asEntry(row: Row): MemoryEntry {
   return row as unknown as MemoryEntry
+}
+
+/**
+ * Filter one anchor list for storage: anchors first became a prompt surface
+ * (the digest's topic words), so each one passes the write-time scanner;
+ * violating (or empty) anchors drop silently — they are derived tokens, not
+ * the entry body. Same contract as the domain backend's add/update paths.
+ */
+function filterAnchors(anchors: readonly string[]): string[] {
+  return anchors.filter(anchor => anchor.length > 0 && scanContent(anchor).allowed)
 }
 
 /** The columns the entries table carries (MemoryEntry's persisted fields). */
@@ -229,7 +240,7 @@ export class SqliteMemoryStore extends MemoryStore {
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
-      ...(input.anchors !== undefined ? { anchors: input.anchors } : {}),
+      ...(input.anchors !== undefined ? { anchors: filterAnchors(input.anchors) } : {}),
     }
     this.transaction(() => {
       this.insertEntry(entry)
@@ -285,6 +296,9 @@ export class SqliteMemoryStore extends MemoryStore {
       updatedAt: Date.now(),
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
+      // Same absent-means-keep semantics as the domain backend; supplied
+      // anchors are scanner-filtered (they are prompt-surface tokens).
+      ...(input.anchors !== undefined ? { anchors: filterAnchors(input.anchors) } : {}),
     }
     this.transaction(() => {
       this.insertEntry(updated)
@@ -341,7 +355,10 @@ export class SqliteMemoryStore extends MemoryStore {
     let all = ranked.map(r => r.entry)
     const total = all.length
     all = limit > 0 ? all.slice(0, limit) : all
-    if (query.recordRecall !== false) void this.stampRecalled(all.map(entry => entry.id))
+    // Same tiering as the domain backend: the tool surface stamps full; the
+    // auto-recall fence opts out via recordRecall: false and stamps its own
+    // lightweight tier through markRecalled.
+    if (query.recordRecall !== false) void this.stampRecalled(all.map(entry => entry.id), 'tool')
     return { entries: all, total }
   }
 
@@ -367,9 +384,12 @@ export class SqliteMemoryStore extends MemoryStore {
    * Stamp entries with a recall timestamp (fire-and-forget): one UPDATE per
    * changed entry, reading the row current at write time — a concurrent
    * edit landing first is never rolled back by the stamp. `updatedAt` is
-   * intentionally left untouched.
+   * intentionally left untouched. The tier follows {@link RecallSource}:
+   * `'tool'` bumps `accessCount`, `'fence'` stamps `lastRecalledAt` only —
+   * same contract as the domain backend.
    */
-  private async stampRecalled(ids: readonly MemoryId[]): Promise<void> {
+  private async stampRecalled(ids: readonly MemoryId[], source: RecallSource): Promise<void> {
+    const bumpAccess = source !== 'fence'
     const now = Date.now()
     for (const id of ids) {
       try {
@@ -378,7 +398,11 @@ export class SqliteMemoryStore extends MemoryStore {
           if (current === undefined) return
           if (current.lastRecalledAt === now && current.staleSince === undefined) return
           const { staleSince: _cleared, ...rest } = current
-          this.insertEntry({ ...rest, lastRecalledAt: now, accessCount: (rest.accessCount ?? 0) + 1 })
+          this.insertEntry({
+            ...rest,
+            lastRecalledAt: now,
+            ...(bumpAccess ? { accessCount: (rest.accessCount ?? 0) + 1 } : {}),
+          })
         })
       } catch (error) {
         if (error instanceof Error && !error.message.includes('no record')) {
@@ -388,9 +412,9 @@ export class SqliteMemoryStore extends MemoryStore {
     }
   }
 
-  override markRecalled(ids: readonly string[]): void {
+  override markRecalled(ids: readonly string[], source: RecallSource = 'tool'): void {
     if (ids.length === 0) return
-    void this.stampRecalled(ids.filter(id => this.get(id as MemoryId) !== undefined) as MemoryId[])
+    void this.stampRecalled(ids.filter(id => this.get(id as MemoryId) !== undefined) as MemoryId[], source)
   }
 
   override async markHits(ids: readonly MemoryId[]): Promise<void> {

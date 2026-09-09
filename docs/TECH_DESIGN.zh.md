@@ -23,7 +23,7 @@
 | `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（`memory_search/add/replace/remove/list/get/pin/unpin/forget`）；人审模式下 `add`/`replace` 改为在队列中登记提议而非直接写入 |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动学习：信号累加器（含失败序列踩坑配对）+ LLM 提取 + 压缩/销毁 flush + two-tier 批量整合（kill-switch：legacy 去重裁决）+ janitor 衰减 + 低频 curator pass + **人审队列**（`confirmBeforeWrite`）；持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务；`session/created` 时清理 ≤0.5.x 文件导出残留 |
-| `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @90、`project-notes` @91）+ 步级自动召回中间件；持有 `memory` 设置命名空间 |
+| `memory-context` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`memory` @6000、`project-notes` @6001）+ 消息尾部注入中间件（一次性清单 + 每步召回围栏）；持有 `memory` 设置命名空间 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
 记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。全部行为可通过两个实时设置命名空间（`memory`、`memory-review`）配置，无需重启即生效。检索质量不是靠断言而是有证据：一个固定的 golden set（35 条 × 35 组查询，中英混合，含同义改写切片与词形变化切片）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.902），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
@@ -77,7 +77,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 4. **写入时 + 读取时的纵深防御。** 内容在每个关键边界都被扫描——工具边界（模型可读的拒绝）、store 契约内（后台路径无法绕过）、每条提取行入库前——以及每个面向 prompt 的渲染点（`redactBlocked` 把违规存量内容替换为 `[BLOCKED: …]` 占位符而非静默删除）。存量内容也无法伪造围栏闭合：每条注入围栏（`<memory-context>`、`<memory-index>`、`<recalled-memory>`、`<project-notes>`）在渲染时经 `neutralizeFenceBreaks` 对被包裹正文中的插件自有闭合标签做中性化转义，含 `</memory-context>` 的条目无法越出围栏发言。
 5. **绝不阻塞 agent 循环。** review/flush/curation/janitor/自动召回全部尽力而为；一个失败或缓慢的 LLM 调用永远不能卡住 step、compaction 或 dispose。自动召回整体包裹 try/catch，任何失败都原样落到 `next()`。
 6. **该响的地方响，该静的地方静。** 缺失服务在用户最早能看见的点（工具调用）响亮失败，而后台提取静默降级为 no-op。
-7. **prompt 预算纪律与缓存稳定性。** 注入内容有上限（`memoryCharLimit` **以及 `memoryMaxEntries`**、notes 的 `notesCharLimit`、自动召回围栏固定 1200 字符），且其 ≈token 成本直接报告在表面上。召回快照按会话冻结（稳定 KV-cache 前缀）；**compaction 是唯一被认可的重新冻结时机**——前缀本来就要重建。
+7. **prompt 预算纪律与缓存稳定性——指令驻留，数据不驻留。** 冻结段落只承载指令语域文本（policy 指引、框定说明）；数据（记忆内容、索引、清单）走一次性步尾清单消息或每步召回围栏，store 变化时无需逐出任何常驻内容。每个注入块都有上限（`memoryCharLimit` **以及 `memoryMaxEntries`**、notes 的分半区预算 `notesConventionsCharLimit`/`notesPitfallsCharLimit`、清单 `memoryDigestCharLimit`、自动召回围栏固定 1200 字符），且其 ≈token 成本直接报告在表面上。四段按易变度排序——`soul` @80 / `user-profile` @81（整会话冻结），`memory` @6000 / `project-notes` @6001 位于宿主工具指引（TOOL_* 1000–2900、TOOLS_SDK 5000）之后、`DELIVERABLE_FILE_REFERENCES`（9000）之前——compaction 重冻结只牵连前缀尾部，绝不牵连工具指引中段。召回快照按会话冻结（稳定 KV-cache 前缀）；**compaction 是唯一被认可的重新冻结时机**——前缀本来就要重建，同一时机也为一次性清单消息重新布防。
 8. **零重复注入。** 渲染进 `project-notes` 段的条目在 notes 启用期间被排除出 memory 快照/索引；两个表面的成员资格来自同一个共享谓词（`isRenderedEntry`）。
 9. **零配置起步、实时可调。** 出厂即有合理默认；每个旋钮都能在设置界面编辑，下一次事件或组装即生效。
 
@@ -111,7 +111,7 @@ flowchart TB
       review["memory-review · /review<br/>累加器 + LLM 提取 + two-tier 整合<br/>+ janitor + curator + 人审队列 · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt 投影 · ctx.projectNotes<br/>≤0.5.x 文件残留清理"]
       identity["memory-identity · /identity<br/>自我文档服务 · ctx.identity<br/>seed-once + 读快照（§7.10）"]
-      context["memory-context · /context<br/>memory @90 + project-notes @91 段<br/>自动召回中间件 · memory ns"]
+      context["memory-context · /context<br/>memory @6000 + project-notes @6001 段<br/>消息尾部注入中间件 · memory ns"]
       remote["memory-remote · /remote-service<br/>UI 用 @Remote 服务（18 个方法）"]
     end
   end
@@ -136,11 +136,11 @@ flowchart TB
   - `memory/added | memory/updated | memory/removed` 只记日志事件（`@deepseek-ai/dsh-session` 的 `SessionEventMap`）；
   - `memory-review-candidates` 投影键（`@deepseek-ai/dsh-session-projection` 的 `SessionProjectionMap`）。
 - **事件钩子：**
-  - `agent/pre-step` — review drain（阈值触发的 LLM 提取）、notes 脏检查（2 秒去抖 reconcile）、自动召回瀑布流（可选的围栏式召回消息）；
+  - `agent/pre-step` — review drain（阈值触发的 LLM 提取）、notes 脏检查（2 秒去抖 reconcile）、消息尾部注入瀑布流（一次性清单消息 + 每步自动召回围栏，合并为至多一条 plugin 消息）；
   - `session/event` → `compaction/end` — 被遮蔽片段的 flush 提取**以及** context 重冻结；
   - `session/disposed` — 派生消息的 flush 提取（上限 5 秒）;
   - `session/created`（全局）— 冻结会话上下文快照、`decayDays > 0` 时运行 janitor、推进 curator 计数。
-- **Prompt 注册表：** 两个注入段——`memory` 位于顺序 **90**、`project-notes` 位于顺序 **91**，均在工具指引（100–199）之前。
+- **Prompt 注册表：** 两个注入段——`memory` 位于顺序 **6000**、`project-notes` 位于顺序 **6001**，均在宿主工具指引（SECTION_ORDERS：TOOL_* 1000–2900、TOOLS_SDK 5000）之后、`DELIVERABLE_FILE_REFERENCES`（9000）之前。
 - **设置：** 两个实时命名空间——`memory`（`memory-context` 持有）与 `memory-review`（review 插件持有）；跨插件读取走 `ctx.settings.get(settingsNamespace('memory'))`。
 
 ### 5.3 端到端数据流
@@ -353,8 +353,8 @@ interface MemorySuggestion {
 - **`DomainMemoryStore`** 基于 storage-domain 表实现：
   - `add`：校验 project 作用域 → 校验非空内容 → 扫描 → 铸造 `MemoryId` → `entries.put` → `appendAudit`。
   - `update`：合并字段（content / category / summary——空字符串 summary 即清除），校验并扫描合并后内容；id 不存在返回 `undefined`。
-  - `search`：先结构化过滤，再做 **BM25 排序**（见下）；结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位）→ `updatedAt` 降序；默认 limit = 实时上限，`0` = 不限；返回 `{ entries, total }`。fire-and-forget 的 `stampRecalled` 对每个有变化的命中项经**表的原子 read-modify-write**（宿主 `KvTable.update`，transform 在写入链槽位上重读当前记录）刷新 `lastRecalledAt`、递增 `accessCount` 并**清除 `staleSince`**（召回证明有用，恢复注入可见性），刻意不动 `updatedAt`——并发 `memory_replace` 与召回戳交错时先落地的内容不会被戳回滚。同毫秒内已盖章且无衰减戳的条目在快照预检处跳过，不进写入链。查询里的 `recordRecall: false` 抑制这一切——管理 UI 经此标志浏览，读取绝不改写元数据。
-  - `markRecalled(ids)`：`memory_list` 返回页与 `memory_get` 走同一盖章路径，同时递增 `accessCount`。
+  - `search`：先结构化过滤，再做 **BM25 排序**（见下）；结果按 分数降序 → 固定优先 → 重要性降序（缺省读作中位）→ `updatedAt` 降序；默认 limit = 实时上限，`0` = 不限；返回 `{ entries, total }`。fire-and-forget 的 `stampRecalled` 对每个有变化的命中项经**表的原子 read-modify-write**（宿主 `KvTable.update`，transform 在写入链槽位上重读当前记录）刷新 `lastRecalledAt`、递增 `accessCount` 并**清除 `staleSince`**（召回证明有用，恢复注入可见性），刻意不动 `updatedAt`——并发 `memory_replace` 与召回戳交错时先落地的内容不会被戳回滚。同毫秒内已盖章且无衰减戳的条目在快照预检处跳过，不进写入链。查询里的 `recordRecall: false` 抑制这一切——管理 UI 与自动召回围栏经此标志浏览/检索，其读取绝不改写召回元数据（围栏改走自己的轻量盖章档）。
+  - `markRecalled(ids, source = 'tool')`：`memory_list` 返回页与 `memory_get` 走的盖章路径——`'tool'` 档递增 `accessCount`（主动读取即使用信号）；`'fence'` 档（步级自动召回围栏）只写 `lastRecalledAt`，BM25 词法命中绝不膨胀逐出/排序信号。
   - `markHits(ids)`：使用反馈写入（Step 2）——经同一原子读改写递增 `hitCount`、盖章 `lastHitAt`，每批每条目至多一次命中（`ids` 内的重复 id 折叠），审计为 `update`，`updatedAt` 保持不动（命中是读取信号，不是变更）。未知 id 与中途被删的条目同陈旧 recall 盖章一样跳过。抽象 `MemoryStore` 默认为 no-op，无使用追踪的 provider 保持契约合规。
   - `archiveEntry` / `unarchiveEntry`：**手动休眠开关**——直接盖章/清除 `staleSince`，复用软衰减的表示，使一切既有表面（注入过滤、stale 徽标、召回复活）行为一致。按调用方 source 记 `update` 审计。
   - `list`：可选 scope + project 过滤，按 `createdAt` 升序。
@@ -511,13 +511,13 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30) |
-| `memory-notes` | `memory-context` | `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100) |
-| `memory-autorecall` | `memory-context` | `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
+| `memory` | `memory-context` | `memoryMode` (`digest`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryDigestCharLimit` (800), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30) |
+| `memory-notes` | `memory-context` | `notesEnabled` (true), `notesConventionsCharLimit` (1600), `notesPitfallsCharLimit` (800), `notesMaxEntriesPerFile` (100) |
+| `memory-autorecall` | `memory-context` | `autoRecallEnabled` (true), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
 | `memory-identity` | `memory-context` | `identityEnabled` (false), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` ("") |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
-两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`、从 `memory-identity` 拉身份门与预算；`memory-review` 从 `memory` 拉 `decayDays`；`memory-notes` 经 `resolveNotesSettings` 拉 `memory-notes` 命名空间（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）；identity 插件经 `resolveIdentitySettings` 拉 `memory-identity`。
+两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`、从 `memory-identity` 拉身份门与预算；`memory-review` 从 `memory` 拉 `decayDays`；`memory-notes` 经 `resolveNotesSettings` 拉 `memory-notes` 命名空间——该 resolver 是 notes 默认值**与弃用键回退**的唯一归属（存量 `notesCharLimit` 在两个新键都缺席时按 60/40 派生两半区预算；0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）；identity 插件经 `resolveIdentitySettings` 拉 `memory-identity`。
 
 #### 项目笔记投影（`src/notes/`，0.6 起 prompt-only）
 
@@ -527,21 +527,21 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
   - pitfalls 分节 ← 仅 `project` + `global` 作用域的 `failure`/`procedure`/`tool-quirk` 条目；
   - 无类别或其他类别的条目永不渲染；project 条目要求 `projectName` 匹配（cwd basename）。
 - **加载时防护：** 未通过扫描的内容绝不进入注入段（直接省略而非脱敏）；软衰减条目退出一切常驻视图。
-- **渲染：** `renderConventions` 输出 `## Project conventions` / `## Global practices` / `## Personal habits`；`renderPitfalls` 输出 `## Project pitfalls` / `## Environment & cross-project pitfalls`；两者带来源说明行并按 `notesMaxEntriesPerFile` 封顶（按 `updatedAt` 保留最新）。
+- **渲染：** `renderConventions` 输出 `## Project conventions` / `## Global practices` / `## Personal habits`；`renderPitfalls` 输出 `## Project pitfalls` / `## Environment & cross-project pitfalls`；两者带来源说明行。选择在渲染（冻结）时刻按分半区预算（`notesConventionsCharLimit` / `notesPitfallsCharLimit`）逐条目进行，排序为**置顶优先 → `importance` 降序（缺省按 0）→ `lastRecalledAt ?? updatedAt` 降序**，条目数受 `notesMaxEntriesPerFile` 封顶；被预算或条目数挤出的条目折成所属分节的计数行（`(another N <分节> — use memory_search)`）——绝不静默丢弃。预算的实时修改于下一次冻结生效，而非逐次组装生效。
 - **不落盘：** 0.6 起插件对用户仓库零写入（理由与保守清理规则见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；0.5.x 的渲染文件与 AGENTS.md 指针块机制已移除（writer/drift guard 随之删除）。
 - **踩坑条目形态：** 一条自动踩坑渲染为三个短句——症状（错误信息）、根因、已验证的修复方法——由提取 prompt 限定篇幅，冗长日志或 diff 不会撑爆注入段。
 - **迁移清理（`cleanup.ts`）：** `session/created` 时每项目根执行一次、幂等、best-effort：剥离 AGENTS.md 托管块（标记外内容不动；pointer-only 文件删除）；删除 `docs/agent-memory/` 下插件生成的 `CONVENTIONS.md` / `PITFALLS.md` / `*.bak.*`（目录含外来文件则保留目录）；不改 `.gitignore`。
 
 #### System prompt 注入段（`src/context/`）
 
-- 四个注入段：身份层启用时为顺序 80 的 **`soul`** 与顺序 81 的 **`user-profile`**（位于宿主 `deployment:persona`（order 0）之后、memory 之前），随后是顺序 90 的 **`memory`** 与顺序 91 的 **`project-notes`**（都在工具指引 100–199 之前）。
+- 四个注入段：身份层启用时为顺序 80 的 **`soul`** 与顺序 81 的 **`user-profile`**（位于宿主 `deployment:persona`（order 0）之后、memory 之前），随后是顺序 6000 的 **`memory`** 与顺序 6001 的 **`project-notes`**——位于宿主工具指引（SECTION_ORDERS：TOOL_* 1000–2900、TOOLS_SDK 5000）之后、`DELIVERABLE_FILE_REFERENCES`（9000）之前：最易变的数据段贴近提示词尾部，compaction 重冻结只牵连缓存前缀的尾部，绝不牵连工具指引中段。
 - **冻结快照：** `session/created` 时（干净的 `compaction/end` 上重跑——被认可的前缀破坏点）`freezeFor(session)` 构建：
   - `content` —— `readMemorySnapshot`：健康条目的分作用域 `## <scope>` bullet 列表，逐行 `redactBlocked`、冲突标注（见下）、折叠掉软衰减条目时的尾部计数说明、截断到 `memoryCharLimit` **以及条目数上限 `memoryMaxEntries`（默认 20，0 = 无限制）**，末尾以 `≈N tokens` 估算收尾，使注入成本始终可见（4 字符/token 启发式）；
   - `index` —— `readMemoryIndex`：`renderMemoryIndex` 存在性行（`<scope/category> · <project> · <id> · <summary-or-content[:80]>`——条目的 `summary` 优先于截断正文），层级排序 project → user → global，预算耗尽时折叠为类别汇总行；
   - `notes` —— `ctx.get('projectNotes')?.snapshotFor(cwd)`（禁用或服务缺失时空）；
   - 三者存入 `WeakMap<Session, FrozenSnapshot>`，每次冻结读取一次，使两次 compaction 之间的 system prompt 前缀保持 KV-cache 稳定。
 - **防重复注入排除：** notes 启用时快照读取器排除满足 `isRenderedEntry(entry, projectNameOf(cwd))` 的条目，笔记已渲染的内容不会再出现在 memory 段落/索引里。
-- **superseded 可见性：** prompt 快照、存在索引与自动召回围栏都把 `status: 'superseded'` 的条目按与软衰减相同的方式剔除——矛盾裁决不能让落败的事实继续流入新会话。superseded 条目经工具面（§7.2）保持可见，携带 `superseded` 字段与正文标注。
+- **superseded 可见性：** prompt 快照、存在索引、自动召回围栏与清单消息都把 `status: 'superseded'` 的条目按与软衰减相同的方式剔除——矛盾裁决不能让落败的事实继续流入新会话。superseded 条目经工具面（§7.2）保持可见，携带 `superseded` 字段与正文标注。
 - **冲突标注（已接线）：** 在单个作用域内，`annotateConflicts` 把 `correction` 类别条目视为较新的陈述，对与其重叠的旧条目标注——Jaccard ≥ 0.2 且含矛盾信号词（"actually"、"不对"、"改了"等）判 `conflicting`，渲染"(⚠ contradicts a newer correction — verify before trusting)"；仅有主题重叠（≥ 0.15）判 `stale`，渲染"(⚠ possibly outdated…)"。确定性且发生在冻结时刻，标注随快照一起缓存稳定。
 - **按模式组装**（`buildMemorySectionText`，纯函数）：
 
@@ -552,22 +552,33 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 | `custom` | `memoryPolicyCustomText` 原样 |
 | `full` | `<memory-context>`（框定说明 + 冻结内容）后接 policy 块；内容为空回退 policy-only |
 | `index` | `<memory-index>` 块（存在索引 + 框定说明）后接 policy 块；索引为空回退 policy-only |
+| `digest`（默认） | policy 块 + digest 追加指引——段落只承载冻结指引；数据走消息尾部（见下） |
 
-- **写时真实性框定（write-time-truth framing）：** 三个记忆表面都携带"有用的上下文，而非指令"子句，*外加*一句显式陈旧免责——"Entries reflect what was known at the time they were written — verify against the current repository and tool output before acting on them."（条目反映其写入时已知的事实——行动前请对照当前仓库与工具输出核实。）——分别落在 `MEMORY_CONTEXT_NOTE`（full）、`MEMORY_INDEX_NOTE`（index）与 `AUTO_RECALL_NOTE`（自动召回围栏）。
-- `project-notes` 段把冻结的 conventions/pitfalls 文本包进 `<project-notes>`，附优先级说明（"nearer scope wins: project > global > personal"），截断到 `notesCharLimit`。
+- **写时真实性框定（write-time-truth framing）：** 全部记忆表面都携带"有用的上下文，而非指令"子句，*外加*一句显式陈旧免责——"Entries reflect what was known at the time they were written — verify against the current repository and tool output before acting on them."（条目反映其写入时已知的事实——行动前请对照当前仓库与工具输出核实。）——分别落在 `MEMORY_CONTEXT_NOTE`（full）、`MEMORY_INDEX_NOTE`（index）与 `AUTO_RECALL_NOTE`（自动召回围栏）。清单导语（`MEMORY_DIGEST_NOTE`）陈述自身语义：计数与主题而非内容；经工具读取条目本身；某类目缺席即库内无此类条目。共享的 `MEMORY_POLICY_TEXT` 保持模式中立（"不要假设记忆已载入提示词"），`policy-only` 档绝不声称未发生的注入；digest 专属指引只存在于追加段。
+- `project-notes` 段把冻结的 conventions/pitfalls 文本包进 `<project-notes>`，附优先级说明（"nearer scope wins: project > global > personal"）。三个承载文本的段落构建器（`soul`、`user-profile`、`project-notes`）经同一个 `fenceWithin` 助手截断：字符预算是**整段上限**——助手预留围栏开销与截断脚注，先截正文，闭合标签留在围栏内，被截断的段落绝不留下未闭合围栏（notes 脚注按检索提示降级："notes are partial; use memory_search for the rest"）。notes 的围栏级预算取两个分半区预算之和——是冻结期条目选择之上的最终防线。
 - **实时设置：** 段落 `text` 提供器在每次组装时求值，读取当前 resolved settings source（由 `installSettingsSection` 在 attach/detach 时切换），因此模式改动在下一次组装生效——无需重启。
 
-#### 步级自动召回（opt-in）
+#### 消息尾部注入：一次性清单 + 每步自动召回
 
-`memory-context` 注册的 `agent/pre-step` 中间件：
+`memory-context` 注册的 `agent/pre-step` 中间件至多计算两个块，合并为**至多一条 plugin 来源 user 消息**追加在本步消息之后——system prompt 不动，KV-cache 前缀保持稳定。任何失败都原样落到 `next()`。
 
-1. 读实时设置；`autoRecallEnabled` 未开直接跳过。
-2. 用本步入站 user 消息文本块（拼接）作为查询；短于 `autoRecallMinChars`（默认 12）跳过。
-3. 同步执行 BM25 store 搜索，`limit: autoRecallLimit`（默认 5），过滤软衰减与 superseded 命中，对幸存者盖召回戳。
-4. 渲染 `buildAutoRecallBlock`：带围栏的 `<recalled-memory>` 块——框定说明加 `- [scope/category] summary-or-content[:200]` 行（条目的 `summary` 优先），总长封顶 `AUTO_RECALL_CHAR_LIMIT`（**1200 字符**），末尾附 `fence: N characters ≈M tokens` 尾注，使每步注入成本始终可见。
-5. 以 plugin 来源追加为一条 user 消息：返回 `{ kind: 'enter', messages: [...payload.messages, recallMessage] }`。
+**一次性清单（digest 模式，默认）：** `memoryMode === 'digest'` 且 `memoryDigestCharLimit > 0` 时，会话首步（以及干净的 `compaction/end` 后的首步——前缀反正重建，该处清除已发标记）渲染 `buildMemoryDigestText(memory.list(), memoryDigestCharLimit, exclude)`：
 
-system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀保持稳定。任何失败都原样落到 `next()`。
+- 带围栏的 `<memory-digest>` 库存清单：分项目/分作用域的类目计数（`project · dsh-memory: convention ×3, insight ×5`）、由 anchors 主题词构成的 `Topics:` 行（逐 anchor 过 `redactBlocked`、去重、按条目频次降序、预算内折 `…(N more)`），以及 `[N entries; M stale hidden]` 尾注；
+- 过滤与其他注入面一致：`superseded` 退出计数，软衰减条目隐藏在 stale 脚注之后，notes 已渲染条目经快照同款 `isRenderedEntry` 谓词排除；
+- 每会话标记（`WeakSet<Session>`）**仅在非空发射后置位**——预算为 0 或空库不置位，实时调大预算下一步即生效；
+- 清单是清单不是召回：绝不调 `markRecalled`、绝不触 hit ledger。
+
+**每步自动召回（`autoRecallEnabled`，默认开）：** 用户文本达到 `autoRecallMinChars`（默认 12）的步骤上：
+
+1. 同步执行 BM25 store 搜索，`limit: autoRecallLimit`（默认 5）且**`recordRecall: false`**——搜索本身不计为工具读取。
+2. 过滤软衰减与 superseded 命中，幸存者经 `markRecalled(ids, 'fence')` 盖**轻量档**戳：只刷新 `lastRecalledAt`（并清除衰减戳），绝不递增 `accessCount`——BM25 查询词的运气不污染逐出/排序信号；工具面（`memory_get`/`memory_list`、默认档搜索）保持全量盖章。
+3. 渲染 `buildAutoRecallBlock`：带围栏的 `<recalled-memory>` 块——框定说明加 `- [scope/category] summary-or-content[:200]` 行（条目的 `summary` 优先），总长封顶 `AUTO_RECALL_CHAR_LIMIT`（**1200 字符**），末尾附 `fence: N characters ≈M tokens` 尾注。
+4. `hitSignalEnabled` 开启时，围栏命中替换该轮命中计算的 standing ledger（见写路径改造）。
+
+清单独立于召回开关：短文本步骤仍发射清单，无待发清单的召回步骤只有围栏，两个块同乘一条消息（清单在前），消息数不膨胀。
+
+**anchors 写时扫描：** anchors 经清单主题词首次成为 prompt 表面，两个 store 后端在写路径（`add`/`update`）对每个 anchor 过 `scanContent`，违规或空 anchor 静默丢弃——它们是派生 token，清单构建器内读取时的 `redactBlocked` 是第二层防线。
 
 ### 7.5 安全扫描器（`src/scanner.ts`）
 
@@ -631,8 +642,8 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 | 卡片（slot key = namespace） | 组件 | 字段 |
 |---|---|---|
-| `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
-| `memory-notes` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
+| `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（digest/policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryDigestCharLimit`（min 0）、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
+| `memory-notes` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesConventionsCharLimit`（min 0）, `notesPitfallsCharLimit`（min 0）, `notesMaxEntriesPerFile` |
 | `memory-autorecall` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1）, `hitSignalEnabled`, `hitSignalThreshold`（min 0） |
 | `memory-identity` | spec 驱动 `NamespaceCard` | `identityEnabled`, `soulCharLimit`（min 0）, `userCharLimit`（min 0）, `identitySeedDir` |
 | `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
@@ -665,7 +676,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 - **Golden 夹具：** `GOLDEN_ENTRIES` —— 35 条跨三个作用域的条目：原 24 条主题互不重叠（12 英文 / 6 中文 / 6 混合，故意放了几枚诱饵词元——两条条目共享 端口/port），加同义改写切片（查询词只出现在条目 summary 里，含双语镜像条目）与词形变化切片——以及 `GOLDEN_CASES` —— 35 组 查询→相关 id 对。
 - **召回评估：** `evaluateRecall(searcher, k = 5)` 把每组用例跑在 store 形态的检索面上（spec 里是真实的 `DomainMemoryStore`），聚合 **success@k**（全部相关 id 落在 top-k 内）、**P@k**、**P@1**、**MRR**，另加 zh/en 切片。当前基线：success@5 = 100%、P@1 = 82.9%、MRR = 0.902（P@1 被同义切片引入的同主题多条 summary 候选稀释；原 24 条基线为 P@1 91.7% / MRR 0.958）。spec 里的地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh success@5 ≥ 0.8）使任何分词器/权重/预算回退都变成 CI 失败。
-- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算）——默认档决策的依据（见 [Agent Note](../.agents/notes/implemented/architecture/2026-09-01-index-default-promotion.zh.md)：第三波检索升级后 `index` 升为出厂默认，超越原 policy-only 裁定；被超越 note 记录了当时的证据）。
+- **注入成本：** `measureInjectionCost(mode, renderedSection, …)` 按夹具 store 对 `policy-only` / `index` / `full` 各模式报告渲染字符数与 ≈tokens（4 字符/token 启发式，与快照尾注同一估算），由 `tests/recall-golden.spec.ts` 打印（`DSH_MEMORY_EVAL_VERBOSE=1`；当前实测：policy-only 344 ≈tokens、index 1102、full 815）。digest 优先裁定建立在这些数字之上：digest 档段落实测 434 ≈tokens（policy + digest 追加指引，无常驻数据）、双预算 notes 段 466 ≈tokens、一次性清单消息在 35 条夹具上 ≈114 ≈tokens（anchors 密集的库在 800 字符预算下约 250）——index 以逐条存在行承载的"存在性感知"改由清单的计数与主题词继承，常驻前缀同时缩小并保持逐字节稳定（决策与 OpenClaw 实证见 [Agent Note](../.agents/notes/implemented/architecture/2026-09-09-memory-digest-first-fence-and-volatility-ordering.zh.md)；被超越的 index/policy-only 裁定记录在 2026-09-01 与 2026-08-26 两份 note）。
 - **已知边界，记录在案：** 纯中文查询对纯英文条目零词法重叠、必然漏检——词法 BM25 不承诺跨语言语义召回；那是 embedding 层的问题，属于另一个工程量级。
 
 模块以 `@chenhw7/dsh-memory/benchmark` 导出（含类型），夹具与指标可在 spec 之外复用。
@@ -677,7 +688,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 - **分层（声明 vs 学习）：** soul/user-profile 注入段（order 80/81，§7.4）承载*自我书写*的身份——永不衰减、永不整合、永不冲突标注、不进索引/检索/自动召回（定义上就是 always-on）；memory 段保持*学到的*事实。prompt 内位阶：会话显式指令 > 宿主 `deployment:persona` > 身份段 > 学到的记忆。
 - **服务（`src/identity/`）：** `IdentityService.snapshotFor()` 返回两份文档的原始内容（预算在段组装时施加，沿 notes 先例）。**seed-once：**缺失的文档当会话即以内置中文种子供给，持久写入 fire-and-forget；插件此后永不覆盖已有文档。种子不含任何个人信息、不含防陈旧条款（画像纯自然生长，2026-09-08 裁定）。
 - **设置：** `memory-identity` 命名空间（`memory-context` 注册，§7.4）——`identityEnabled`（默认**关**）、`soulCharLimit`（2000）、`userCharLimit`（3000）、`identitySeedDir`（可选种子覆盖目录，含 `SOUL.md`/`USER.md`；部分覆盖时缺失的类别保留内置种子）。设置 UI 入口是 Plugins 页签的**身份卡片**（`memory-identity`，§7.8）；Identity 设置区保持只读治理。装载期 loud 门在 **`memory-context` 的 apply**——该命名空间的拥有者校验自己的组合层配置（目录不存在或种子文件未过 scanner 都使挂载失败）；设置叠层改动走可观测降级（记录失败 + 内置种子回退，经 `health()` 呈现），因为 cordis 会吞掉 `ctx.inject` 回调的 throw（已对装机运行时核实）。
-- **跨命名空间读取必须走 `ctx.inject`：** cordis 的服务属性在未 inject 该服务的纤程上抛 `cannot get property "settings" without inject`——identity 插件经 settings-injected 纤程读取 `memory` 命名空间，并以稳定的按调用间接层（tool 插件的 `defaultLimit` 模式）重读变量。在插件自身纤程上直接 `ctx.settings` 访问会静默降级为禁用默认；notes 模块的直接读取携带同一潜在缺陷（具名缺口——其预算在设置服务在场的部署里会静默回退默认值）。
+- **跨命名空间读取必须走 `ctx.inject`：** cordis 的服务属性在未 inject 该服务的纤程上抛 `cannot get property "settings" without inject`——identity 插件经 settings-injected 纤程读取 `memory` 命名空间，并以稳定的按调用间接层（tool 插件的 `defaultLimit` 模式）重读变量。在插件自身纤程上直接 `ctx.settings` 访问会静默降级为禁用默认；notes 模块同样经 injected-fiber 间接层读取——修复落地于预算改为快照时输入之际，因为静默回退内置默认值已变成承重路径（用户预算改动将永远到不了渲染）。
 - **写路径（`identity_update`，§7.2）：**整文档替换过三重门——`identityEnabled`、按类别字符预算、scanner——随后 store 的原子版本写（经表 read-modify-write 计算 version+1，并发改写不会铸出同一版本）加每版一份全量历史快照。confirm 模式下提案作为身份建议（`identityKind`，§6.4）入队，人采纳前不写。告知纪律——「改了这份文件，告诉用户」——落在工具描述与结果文案里。
 - **防回声：**提取永不入库身份复述——review/flush 提示词携带规则并渲染身份文档作为所指，两个提取写缝各跑一道机械预筛（对已注入文档的 IDF 加权重叠 > 0.6；关于人格的*记忆*远低于该值）。身份层关闭时预筛自然失效（没有注入文档，没有可复述对象）。
 - **治理面（§7.8）：**只读 Identity 设置区——文档 + 版本历史 + 回滚阀门（`identityRevert`，受 `remoteWritesEnabled` 与 `identityRevertEnabled` 共同控制，§7.7）+ 导出；无内容编辑器、无导入。
@@ -694,7 +705,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 ```yaml
 memory:
-  memoryMode: policy-only        # full / policy-only / custom / off / index
+  memoryMode: digest             # full / policy-only / custom / off / index / digest
   memoryPolicyCustomText: ""     # 仅 custom 模式使用（支持 YAML "|" 多行）
   memoryCharLimit: 5000          # 冻结内容快照预算（0 = 不注入内容）
   memoryMaxEntries: 20           # 冻结快照条目数上限（0 = 无限制）；
@@ -709,7 +720,8 @@ memory:
 ```yaml
 memory-notes:
   notesEnabled: true             # project-notes prompt 段注入总开关
-  notesCharLimit: 4000           # 注入 project-notes 段的预算
+  notesConventionsCharLimit: 1600  # 约定半区字符预算（冻结时应用）
+  notesPitfallsCharLimit: 800      # 踩坑半区字符预算（冻结时应用）
   notesMaxEntriesPerFile: 100    # 渲染条目上限（保留最新）
 ```
 
@@ -717,7 +729,7 @@ memory-notes:
 
 ```yaml
 memory-autorecall:
-  autoRecallEnabled: false       # 步级 <recalled-memory> 围栏（opt-in）
+  autoRecallEnabled: true        # 步级 <recalled-memory> 围栏
   autoRecallLimit: 5             # 单围栏最大条数
   autoRecallMinChars: 12         # 用户文本低于该长度跳过召回
   hitSignalEnabled: false        # 使用命中信号（Step 2）：作答回声已注入条目
@@ -893,8 +905,8 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 
 仓库自带 **47 个 vitest spec 文件、951 个用例**（945 个活跃 + 6 个无真实 API key 时跳过），分五层：
 
-1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`hit-signal.spec`（12：使用命中的对立 fixture——复述事实的作答命中，被无视的注入与顺带一提不命中——store 的 `markHits` 记账、sweep 的 hit 优先排序、活体 ledger 监听含一次性消费与关闭态）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（27：模式组装、index 汇总、含 token 尾注的自动召回块、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（31：渲染矩阵、渲染器、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（5）、`context-refresh.spec`（2）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
-2. **契约** —— `store-contract.spec`（73：同一契约体对三个后端各跑一遍——内存版 `TestMemoryStore`、真实 `DomainMemoryStore`、SQLite 后端 `SqliteMemoryStore`（write-path rework 的双后端参数化纪律）；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现；markHits/migration describe 覆盖 SQLite 专属行为）。
+1. **纯函数单元** —— `extract.spec`（81：含负面准入规则 + 日期前缀剥离的 parse/build/prompts，stub LLM seam 下的 storeMemories/curator）、`consolidate.spec`（29：选择器信号、分桶、裁决解析 fail-closed、四种动作全应用、无候选零调用直写）、`sweep.spec`（25：按用量排序选拔、零共享锚点配对、`p<N>` 协议 fail-closed、conflict 弃用、冷却持久化、插件接线门控）、`hit-signal.spec`（12：使用命中的对立 fixture——复述事实的作答命中，被无视的注入与顺带一提不命中——store 的 `markHits` 记账、sweep 的 hit 优先排序、活体 ledger 监听含一次性消费与关闭态）、`write-path-rework-acceptance.spec`（5：阶段 1 语料重放断言——prog101 矛盾标注、prog112 projectName、审计的重复对基线、验收语料契约）、`accumulator.spec`（41：折叠、keyword/correction 信号、失败序列配对、签名归一化、容量上限）、`dedup.spec`（27：停用词分词、Jaccard、findDuplicate、judge prompts/verdicts、有界 mergeContent）、`scanner.spec`（19）+ `scanner-corpus.spec`（44，语料驱动）、`policy.spec`（55：模式组装含 digest、index 汇总、含 token 尾注的自动召回块、截断下围栏闭合回归、清单——分组/过滤/主题词/预算/越狱钉子、notes 段）、`types.spec`（11）、`bm25.spec`（10：分词器、IDF 非负性、排序）、`smoke.spec`（9：模块加载健全性）、`conflict.spec`（13）、`notes.spec`（36：渲染矩阵、带优先排序与计数行折叠的预算化渲染器、弃用键派生、prompt-only 投影零写入、≤0.5.x 残留清理各分支）、`model-catalog.spec`（7：选项解析器含 undefined-provider 回归）、`auto-recall.spec`（14：默认开召回、围栏轻量盖章、清单每会话一次/合并/压缩补发/预算 0 不置位）、`context-refresh.spec`（7：冻结/重冻结含跨轮逐字节稳定）、`suggestions.spec`（13：observe/再观察 hits、超集替换、上限淘汰、经契约的 adopt/reject）、`recall-golden.spec`（2：golden-set 地板值 + 三模式注入成本快照，§7.9）。
+2. **契约** —— `store-contract.spec`（97：同一契约体对三个后端各跑一遍——内存版 `TestMemoryStore`、真实 `DomainMemoryStore`、SQLite 后端 `SqliteMemoryStore`（write-path rework 的双后端参数化纪律）；search 断言按 BM25 token 语义——任一 query token 命中即匹配、纯子串不命中；CRUD/pin/health/扫描拒绝/project 作用域校验/recordRecall 无副作用；janitor 两层衰减、importance 排序、召回盖章与 pin TOCTOU 在专属 describe 验证真实实现；后端硬化套件对两个真实后端跑召回分档（围栏只刷最近召回时间）与 anchor 写时扫描；markHits/migration describe 覆盖 SQLite 专属行为）。
 3. **工具行为** —— `tools.spec`（37）：八个 `execute()` 路径跑真实 `ToolRuntime` + `SystemPrompt` 组合 + 内存 store；`tools-confirm-and-window.spec`（10）：人审模式入队（`{ pending, suggestionId }`、`targetEntryId` 提议）+ `memory_list` 智能视图（最新优先、`since`/`until` 时间窗、元数据、放宽提示）。
 4. **远程与客户端 UI** —— `remote-service.spec`（12：projects 聚合 / staleSince·stale 透传 / 最新优先排序 / `recordRecall:false` 抑制 / archive + 建议方法）；`memory-section.client.spec.tsx`（24，jsdom）：tab 划分 / 懒加载 / 筛选 / 审核队列采纳·拒绝·编辑 / 管理写操作 / 错误恢复。
 5. **集成** —— `integration/composition.spec`（36）：`storage-domain` + JSON 后端的完整 Cordis 组合，端到端验证 store、tools、context 注入与 notes；`integration/host.spec`（13，P1-3）：在临时目录上启动真实组合——断言对象是**磁盘上的物理文件**（KV 介质）与**组装出的 system prompt 文本**（正是捕捉宿主 API 漂移的那一层）；`confirm-extraction.spec`（7）：人审模式提取端到端（入队而非入库、工具提议、curator 提议）；`dedup-integration.spec`（2）对真实 store 验证去重管线；`settings-live.spec`（5）live 设置应用；`judge-real-api.spec`（6，无 API key 时跳过）对接真实 DeepSeek API。
@@ -904,14 +916,14 @@ GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每
 ## 12. 性能与 Prompt 预算考量
 
 - **检索成本：** 结构化过滤 O(n) + BM25 索引构建 O(总 token 数) + 打分 O(n × 查询去重词数)——n 保持较小（几十到几百条短条目），每次搜索重建。结果上限约束（默认 50；`0` 取消封顶）。
-- **自动召回成本：** 启用时每个 agent step 一次同步 store 搜索——不涉 LLM；1200 字符围栏约束 prompt 影响；`autoRecallMinChars` 避免琐碎查询。
+- **消息尾部注入成本：** 清单每会话渲染一次（一趟 store 遍历 + anchor 扫描，不涉 LLM）；自动召回围栏启用时每个 agent step 一次同步 store 搜索——不涉 LLM；1200 字符围栏与 `memoryDigestCharLimit` 清单上限约束 prompt 影响；`autoRecallMinChars` 避免琐碎查询。
 - **Janitor 成本：** O(n) 扫描，每次会话创建至多一次（`decayDays <= 0` 跳过）。
 - **Curator 成本：** 每 N 次会话创建一次 LLM 调用，≤5 条，受预算门控。
 - **Sweep 成本：** 每次启动 + 每 N 次会话创建至多一次整合调用，受 meta 表冷却（≥1 小时）与 `sweepEnabled`（默认关闭）门控；0.2 词面门把每次调用的候选对上限压在 20 对。
 - **审计日志：** 封顶 200 条；`appendAudit` 尽力而为、绝不阻塞写入；单调 `seq` 保证确定性排序。建议队列同样封顶（200 行，按 hits 感知的淘汰）。
 - **建议队列成本：** `observeSuggestion` 对队列去重（同 target 查找 + 同作用域 Jaccard，至多 200 行）——相对产生该提议的 LLM 调用可忽略；list/adopt/reject 是 O(n)/O(1) 的 KV 操作。
-- **Prompt 预算：** 记忆内容 ≤ `memoryCharLimit`（5000 字符 ≈ 1.2–1.5 k tokens）**且 ≤ `memoryMaxEntries` 条（默认 20）** + policy 块（约 0.4 k tokens）；快照尾注与自动召回围栏尾注都报告 ≈tokens；index 模式把尾部折叠为类别汇总行；project-notes ≤ `notesCharLimit`（4000）；自动召回围栏 ≤ 1200 字符。各模式在 golden 夹具上的常驻成本在 §7.9 实测（policy-only ≈344 tokens，与 store 规模无关的固定值）。
-- **缓存稳定性：** 快照在会话创建时冻结、仅在 `compaction/end` 刷新（彼时前缀本来重建）；自动召回只触及步尾消息通道，system prompt 前缀不动。
+- **Prompt 预算：** 记忆内容 ≤ `memoryCharLimit`（5000 字符 ≈ 1.2–1.5 k tokens）**且 ≤ `memoryMaxEntries` 条（默认 20）** + policy 块（约 0.4 k tokens，digest 档含追加指引）；快照、清单与自动召回围栏的尾注都报告 ≈tokens；index 模式把尾部折叠为类别汇总行；project-notes ≤ `notesConventionsCharLimit` + `notesPitfallsCharLimit`（1600 + 800，冻结期条目选择 + 计数行折叠）；清单消息 ≤ `memoryDigestCharLimit`（800，每会话一次）；自动召回围栏 ≤ 每步 1200 字符。各模式在 golden 夹具上的常驻成本在 §7.9 实测（digest 档段落约 434 + 466 tokens；policy-only ≈344 tokens，与 store 规模无关的固定值）。
+- **缓存稳定性：** 快照在会话创建时冻结、仅在 `compaction/end` 刷新（彼时前缀本来重建）；清单与自动召回围栏只触及步尾消息通道，system prompt 前缀不动——且 memory/notes 段序为 6000/6001，位于宿主工具指引之后，重冻结只花费前缀尾部。
 - **提取花费：** 按触发记账（drain / compaction / dispose / curator tick），会话级预算（默认 20）；除覆盖外复用会话 provider/model。
 - **Notes 成本：** 冻结时从内存同步渲染——0.6 起零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；一次性的 ≤0.5.x 残留清理每项目根每进程执行一次。
 - **I/O：** 单个 JSON 文件；写入在域写链串行；读取走内存。

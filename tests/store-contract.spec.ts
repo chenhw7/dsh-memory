@@ -1042,3 +1042,68 @@ describe('janitor-pin-toctou (DomainMemoryStore)', () => {
     expect(stamped.staleSince).toBe(overdue)
   })
 })
+
+// Recall tiers + the anchor write scan (the digest/injection rework): the
+// fence tier stamps lastRecalledAt only — BM25 query luck must never inflate
+// accessCount, the eviction/ranking signal — and anchors, now a prompt
+// surface (digest topic words), pass the write-time scanner with violating
+// ones dropped silently. These are obligations of the two REAL backends;
+// the minimal TestMemoryStore stays a no-op provider (recall tracking is
+// optional in the base contract).
+function runBackendHardeningSuite(name: string, makeStore: () => MemoryStore): void {
+  describe(`${name} — recall tiers + anchor write scan`, () => {
+    it('the fence recall tier stamps lastRecalledAt without bumping accessCount', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'matched by a bm25 query' })
+
+      store.markRecalled([entry.id as string], 'fence')
+      await new Promise(resolve => { setTimeout(resolve, 20) })
+      const stamped = store.get(entry.id)!
+      expect(stamped.lastRecalledAt).toBeDefined()
+      expect(stamped.accessCount).toBeUndefined()
+
+      // The tool tier still bumps: one deliberate read counts as use.
+      store.markRecalled([entry.id as string])
+      await new Promise(resolve => { setTimeout(resolve, 20) })
+      expect(store.get(entry.id)!.accessCount).toBe(1)
+    })
+
+    it('search with recordRecall: false never stamps recall metadata', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'tokenmatch body' })
+
+      store.search({ query: 'tokenmatch', recordRecall: false })
+      await new Promise(resolve => { setTimeout(resolve, 20) })
+      expect(store.get(entry.id)!.lastRecalledAt).toBeUndefined()
+
+      // Default (recordRecall true): the search itself is a tool read.
+      store.search({ query: 'tokenmatch' })
+      await new Promise(resolve => { setTimeout(resolve, 20) })
+      expect(store.get(entry.id)!.lastRecalledAt).toBeDefined()
+    })
+
+    it('drops scanner-violating anchors on write, keeping clean ones (prompt surface)', async () => {
+      const store = makeStore()
+      const secret = 'my key is sk-' + 'c'.repeat(48)
+      const { entry } = await store.add({ scope: 'global', content: 'anchored fact', anchors: [secret, '', 'clean-anchor'] })
+      expect(entry.anchors).toEqual(['clean-anchor'])
+
+      // The update path applies the same filter to supplied anchors.
+      const updated = await store.update(entry.id, { content: 'anchored fact', anchors: [secret, 'other-anchor'] })
+      expect(updated!.anchors).toEqual(['other-anchor'])
+    })
+  })
+}
+
+runBackendHardeningSuite('DomainMemoryStore', () => new DomainMemoryStore(memTable(), memTable(), memTable(), memTable()))
+{
+  const dirs: string[] = []
+  runBackendHardeningSuite('SqliteMemoryStore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sqlite-hardening-'))
+    dirs.push(dir)
+    return new SqliteMemoryStore({ dbPath: join(dir, 'storages', 'memory.db') })
+  })
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+}

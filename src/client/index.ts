@@ -98,8 +98,9 @@ const NOTES_SPEC: NamespaceCardSpec = {
   descriptionKey: 'notesCardDescription',
   fields: [
     { key: 'notesEnabled', kind: 'checkbox' },
-    { key: 'notesCharLimit', kind: 'number' },
-    { key: 'notesMaxEntriesPerFile', kind: 'number' },
+    { key: 'notesConventionsCharLimit', kind: 'number', minValue: 0 },
+    { key: 'notesPitfallsCharLimit', kind: 'number', minValue: 0 },
+    { key: 'notesMaxEntriesPerFile', kind: 'number', minValue: 0 },
   ],
 }
 

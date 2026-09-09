@@ -33,9 +33,11 @@ import { SelectField, TextField, NumberField, CheckboxField, TextareaField } fro
 
 /** The `memory` settings-namespace shape (all fields optional in the wire section). */
 export interface MemoryConfig {
-  memoryMode?: 'full' | 'policy-only' | 'custom' | 'off' | 'index'
+  memoryMode?: 'full' | 'policy-only' | 'custom' | 'off' | 'index' | 'digest'
   memoryPolicyCustomText?: string
   memoryCharLimit?: number
+  /** Character budget for the one-time digest inventory message (`digest` mode); 0 = off. */
+  memoryDigestCharLimit?: number
   /** Max entries injected into the memory snapshot regardless of character budget (P0-6); 0 = no limit. */
   memoryMaxEntries?: number
   maxSearchResults?: number
@@ -60,21 +62,22 @@ export interface MemoryPluginCardProps
 
 // ─── Defaults + helpers ─────────────────────────────────────────────────────
 
-const MODES = ['policy-only', 'full', 'index', 'custom', 'off'] as const
+const MODES = ['digest', 'policy-only', 'full', 'index', 'custom', 'off'] as const
 
 /** Default draft when the namespace section has not arrived yet. */
 const DEFAULTS: MemoryConfig = {
-  memoryMode: 'index',
+  memoryMode: 'digest',
   memoryPolicyCustomText: '',
   memoryCharLimit: 5000,
+  memoryDigestCharLimit: 800,
   memoryMaxEntries: 20,
   maxSearchResults: 50,
   decayDays: 30,
 }
 
 /** Numeric fields validated by {@link numericInvalid}. */
-type NumericField = 'memoryCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays'
-const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays']
+type NumericField = 'memoryCharLimit' | 'memoryDigestCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays'
+const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryDigestCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays']
 
 /** A field is overridden when the user layer carries it (presence, not value). */
 function isOverridden(snap: SettingsScopeSnapshot<MemoryConfig>, field: keyof MemoryConfig): boolean {
@@ -176,7 +179,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             overriddenLabel={t('overridden')}
             resetLabel={t('reset')}
             disabled={disabled}
-            value={draft.memoryMode ?? 'policy-only'}
+            value={draft.memoryMode ?? 'digest'}
             options={MODES.map(m => ({ value: m, label: m }))}
             onChange={(v) => edit('memoryMode', v as MemoryConfig['memoryMode'])}
             onReset={() => { void props.unset('memoryMode'); edit('memoryMode', undefined) }}
@@ -208,6 +211,20 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             value={draft.memoryCharLimit ?? ''}
             onChange={(v) => edit('memoryCharLimit', v === '' ? undefined : Number(v))}
             onReset={() => { void props.unset('memoryCharLimit'); edit('memoryCharLimit', undefined) }}
+          />
+          <NumberField
+            id="dsh-memory-digest-char-limit"
+            label={t('digestCharLimit')}
+            hint={t('digestCharLimitHint')}
+            overridden={isOverridden(snap, 'memoryDigestCharLimit')}
+            overriddenLabel={t('overridden')}
+            resetLabel={t('reset')}
+            invalidLabel={t('invalidNumber')}
+            invalid={numericInvalid('memoryDigestCharLimit')}
+            disabled={disabled}
+            value={draft.memoryDigestCharLimit ?? ''}
+            onChange={(v) => edit('memoryDigestCharLimit', v === '' ? undefined : Number(v))}
+            onReset={() => { void props.unset('memoryDigestCharLimit'); edit('memoryDigestCharLimit', undefined) }}
           />
           <NumberField
             id="dsh-memory-max-entries"

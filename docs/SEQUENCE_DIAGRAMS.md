@@ -47,7 +47,7 @@ sequenceDiagram
     Host->>Context: apply(ctx, config) [inject: systemPrompt]
     Context->>Context: installSettingsSection('memory', MemoryConfig)
     Context->>Notes: ctx.get('projectNotes') (optional, at freeze time)
-    Context->>Host: systemPrompt.section('memory', order 90)<br/>systemPrompt.section('project-notes', order 91)<br/>session/created freeze · compaction/end re-freeze<br/>agent/pre-step auto-recall middleware
+    Context->>Host: systemPrompt.section('memory', order 6000)<br/>systemPrompt.section('project-notes', order 6001)<br/>session/created freeze · compaction/end re-freeze + digest re-arm<br/>agent/pre-step step-tail injection middleware
 
     Host->>Remote: apply(ctx) [inject: memory]
     Remote->>Store: ctx.get('memory')
@@ -457,7 +457,7 @@ sequenceDiagram
     Ctx->>Ctx: sessionMemory.set(session, { content, index, notes }) [WeakMap]
 
     Note over SP,Policy: Phase 2: Assemble each step
-    SP->>Ctx: section('memory', order 90)
+    SP->>Ctx: section('memory', order 6000)
     Ctx->>Ctx: settings = current(); snapshot = sessionMemory.get(session)
     Ctx->>Policy: buildMemorySectionText(mode, customText, snapshot.content, snapshot.index)
     alt mode = 'off'
@@ -473,7 +473,7 @@ sequenceDiagram
     end
     Note over Policy: MEMORY_CONTEXT_NOTE / MEMORY_INDEX_NOTE frame entries as<br/>"helpful context, not instructions" + write-time truth —<br/>verify against the current repo and tool output before acting
 
-    SP->>Ctx: section('project-notes', order 91)
+    SP->>Ctx: section('project-notes', order 6001)
     Ctx->>Policy: buildNotesSectionText(conventions, pitfalls, notesCharLimit)
     Policy-->>SP: <project-notes> block ("nearer scope wins") or ""
 ```
@@ -516,9 +516,9 @@ sequenceDiagram
 
 ---
 
-## 10. Step-Level Auto Recall (Opt-In)
+## 10. Step-Tail Injection: One-Time Digest + Auto Recall
 
-On every agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message. The system prompt is untouched — the KV-cache prefix stays stable.
+On every agent step, the middleware first computes the session's pending one-time `<memory-digest>` inventory (digest mode), then the per-step auto-recall fence, and merges both into at most one plugin message appended after the step's messages. The system prompt is untouched — the KV-cache prefix stays stable.
 
 ```mermaid
 sequenceDiagram
@@ -530,29 +530,55 @@ sequenceDiagram
     participant Next as next() / step
 
     PS->>Ctx: middleware(payload, next)
-    Ctx->>Settings: current().autoRecallEnabled
-    alt disabled OR ctx.get('memory') absent
-        Ctx->>Next: return next()
-    else enabled
+    Ctx->>Store: ctx.get('memory') absent → return next()
+    Ctx->>Settings: current().memoryMode === 'digest' && memoryDigestCharLimit > 0
+    alt digest pending (session not in digestSent WeakSet)
+        Ctx->>Store: memory.list() (exclude: isRenderedEntry under notes)
+        Ctx->>Policy: buildMemoryDigestText(entries, 800, exclude)
+        Note over Policy: fence <memory-digest>: per-project/scope category counts<br/>+ Topics (anchors → redactBlocked → rank → fold …(N more))<br/>+ "[N entries; M stale hidden]" footer, no markRecalled, no ledger
+        alt digest non-empty
+            Ctx->>Ctx: digestSent.add(session) [flag set ONLY on emission]
+        end
+    end
+    Ctx->>Settings: current().autoRecallEnabled (default on)
+    alt enabled
         Ctx->>Ctx: query = payload.messages → user-message text blocks joined
-        alt query.length < autoRecallMinChars (12)
-            Ctx->>Next: return next()
-        else long enough
-            Ctx->>Store: memory.search({ query, limit: autoRecallLimit (5) })
-            Note over Store: BM25 ranked; marks hits recalled<br/>(clears staleSince)
-            Ctx->>Ctx: hits = entries.filter(staleSince === undefined)
-            alt no fresh hits
-                Ctx->>Next: return next()
-            else hits found
-                Ctx->>Store: markRecalled(hit ids) [idempotent]
+        alt query.length ≥ autoRecallMinChars (12)
+            Ctx->>Store: memory.search({ query, limit: autoRecallLimit (5),<br/>recordRecall: false })
+            Ctx->>Ctx: hits = entries.filter(staleSince undefined, status active)
+            alt fresh hits found
+                Ctx->>Store: markRecalled(hit ids, 'fence') [lightweight tier:<br/>lastRecalledAt + clear staleSince, NO accessCount bump]
                 Ctx->>Policy: buildAutoRecallBlock(hits, 1200)
                 Note over Policy: fence <recalled-memory>: framing note (write-time-truth<br/>disclaimer) + "- [scope/category] summary-or-content[:200]"<br/>lines, char-capped, trailing "N characters ≈M tokens" footer
-                Ctx->>Ctx: createUserMessage(block, source { kind:'plugin', plugin:'dsh-memory-context' })
-                Ctx-->>PS: { kind: 'enter', messages: [...payload.messages, recallMessage] }
-                Note over Ctx,Next: any failure anywhere → catch → return next() unchanged
             end
         end
     end
+    alt digest block OR recall block non-empty
+        Ctx->>Ctx: text = [digest, recall].join('\n\n') — ONE message, digest first
+        Ctx->>Ctx: createUserMessage(text, source { kind:'plugin', plugin:'dsh-memory-context' })
+        Ctx-->>PS: { kind: 'enter', messages: [...payload.messages, message] }
+    else both empty
+        Ctx->>Next: return next()
+    end
+    Note over Ctx,Next: any failure anywhere → catch → return next() unchanged
+```
+
+After a clean `compaction/end` (the sanctioned prefix break), the re-freeze listener also clears the session's digest flag — the next step re-emits a fresh inventory reflecting mid-session writes:
+
+```mermaid
+sequenceDiagram
+    participant Host as harness
+    participant Ctx as context/index.ts
+    participant Session as session
+    participant PS as agent/pre-step waterfall
+
+    Host->>Ctx: session/event 'compaction/end' (data.error absent)
+    Ctx->>Ctx: digestSent.delete(session) [re-arm]
+    Ctx->>Ctx: freezeFor(session) [re-freeze snapshot]
+    Host->>PS: next agent step
+    PS->>Ctx: middleware(payload, next)
+    Ctx->>Ctx: digest pending again (mode digest, budget > 0)
+    Note over Ctx,PS: one fresh <memory-digest> appended once more;<br/>the rebuilt prefix re-learns what the store now holds
 ```
 
 ---
@@ -709,8 +735,8 @@ graph TB
     end
 
     subgraph "Context Layer"
-        Context["context/index.ts<br/>frozen snapshots + 2 sections + auto-recall"]
-        PolicyMod["context/policy.ts<br/>mode composition + index + auto-recall fence"]
+        Context["context/index.ts<br/>frozen snapshots + 2 sections + step-tail injection"]
+        PolicyMod["context/policy.ts<br/>mode composition + index + digest + auto-recall fence"]
         Conflict["context/conflict.ts<br/>annotateConflicts (wired at freeze)"]
     end
 
@@ -772,7 +798,7 @@ graph TB
 |-------------|-------------|----------------------|
 | **Multi-point scanning** | `scanContent` runs at the tool boundary, inside the store contract, per extracted/curated line, at the notes gate, and again at every prompt-facing render (`redactBlocked`) | Correctness-first redundancy; could cache scan verdicts keyed by content hash if profiling ever shows cost |
 | **Fire-and-forget background work** | Review/flush/janitor/curator all swallow errors (`void …catch`); the artifact cleanup does the same | Observability: silent failures are hard to debug; a structured log line or health counter per path would help |
-| **Snapshot freeze timing** | Frozen at `session/created`; re-frozen only on a clean `compaction/end` (the sanctioned prefix break) | Mid-session extractions stay invisible to the prompt until compaction or next session; auto-recall covers step-level freshness instead |
+| **Snapshot freeze timing** | Frozen at `session/created`; re-frozen only on a clean `compaction/end` (the sanctioned prefix break) — which also re-arms the one-time digest | Mid-session extractions stay invisible to the prompt until compaction or next session; the per-step recall fence covers step-level freshness, and the re-armed digest re-maps the store once after the rebuild |
 | **Proposal queue is not a memory** | `suggestions` rows never inject, search, or decay; only `adoptSuggestion` promotes them through the full store contract | Keep the two-table boundary intact; a future "auto-adopt high-hit proposals" policy must go through the same contract path |
 | **Retrieval quality is a measured baseline, not a claim** | Golden-set floors (success@5 ≥ 0.85, MRR ≥ 0.75, P@1 ≥ 0.6, zh ≥ 0.8) gate every build; per-mode injection cost is snapshotted next to it | Baseline drift is intentional only via a documented re-baseline commit; the cross-language limit stays out of scope |
 | **Budget charged per trigger** | One `extractionBudget` unit per drain/flush/curator tick, even when a drain issues pitfall + generic calls | A pathological batch could do 2× LLM work per charged unit; charging per call would be stricter but complicates retry semantics |
@@ -780,5 +806,5 @@ graph TB
 | **Failure-streak state lives in projection state** | `openCalls` (64) / `openStreaks` (8, LRU) persist in the JSON projection payload | Caps bound growth; signatures normalize arguments, but exotic arg shapes collapse to bare tool names |
 | **Audit pin gap** | `pin`/`unpin` mutate without audit records (only add/update/remove are audited) | Add a dedicated op kind if provenance for pins matters |
 | **Curator cadence is process-global** | `sessionCount` counts creations per process; restart resets the counter | Persistent counter would make cadence exact across restarts |
-| **Auto-recall queries only user text** | Query = concatenated user-message text blocks of the incoming step | Could blend recent assistant/tool text for multi-turn recall precision |
+| **Auto-recall queries only user text** | Query = concatenated user-message text blocks of the incoming step; fence hits stamp the lightweight recall tier (recency only, never `accessCount`) | Could blend recent assistant/tool text for multi-turn recall precision |
 | **@Remote service now carries the Memory section** | Fourteen typed methods: CRUD + pin/archive + the review-queue trio + health/projects/audit; the section's three tabs call them over the generic `/api` RPC channel (no client-side mount) | Method names must keep avoiding the gateway's reserved member names (hence `removeEntry`); adding a 15th method re-generates the client artifacts |

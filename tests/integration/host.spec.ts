@@ -63,7 +63,8 @@ async function boot(options: BootOptions = {}): Promise<{
     maxSearchResults: 50,
     decayDays: 30,
     notesEnabled: false,
-    notesCharLimit: 4000,
+    notesConventionsCharLimit: 1600,
+    notesPitfallsCharLimit: 800,
     notesMaxEntriesPerFile: 100,
     ...options.config,
   } as memoryContext.MemoryConfig)
@@ -134,7 +135,7 @@ describe('integration: host services (P1-3)', () => {
     expect(text).toContain('helpful context')
   })
 
-  it('the shipping default (index) injects existence lines, not full content', async () => {
+  it('the shipping default (digest) injects guidance only; data rides the step tail', async () => {
     // Re-boot with the shipping default instead of the test's full-mode base.
     await root.dispose()
     rmSync(dir, { recursive: true, force: true })
@@ -145,14 +146,26 @@ describe('integration: host services (P1-3)', () => {
     store = env.store
     session = env.session
     sectionText = env.sectionText
-    await store.add({ scope: 'global', content: 'plain default-mode entry. ' + 'Detail sentence number two lives here so the body exceeds the index-line prefix cut. '.repeat(4) + 'The tail of this body must not appear verbatim in the prompt.', source: 'ui' })
+    await store.add({ scope: 'global', content: 'plain default-mode entry with anchors', anchors: ['digest-topic'], source: 'ui' })
     ctx.emit('session/created', env.session)
 
     const text = await sectionText()
-    // The index frame + one existence line: entry BODIES stay out of the
-    // prompt (the index line shows only a truncated prefix), ids stay in.
-    expect(text).toContain('<memory-index>')
-    expect(text).not.toContain('The tail of this body must not appear verbatim')
+    // Digest mode: policy guidance + the digest hint, no resident data.
+    expect(text).toContain('<memory-policy>')
+    expect(text).toContain('<memory-digest>')
+    expect(text).not.toContain('<memory-index>')
+    expect(text).not.toContain('plain default-mode entry')
+
+    // The data rides the session's first pre-step as a digest message.
+    const userMessage = { content: [{ type: 'text', text: 'anything stored here?' }] }
+    const messages = [userMessage] as never
+    const decision = await ctx.waterfall('agent/pre-step', { agent: { session: env.session }, messages, turn: 0, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    const appended = (decision as { messages: unknown[] }).messages
+    expect(appended).toHaveLength(2)
+    const fenceText = JSON.stringify(appended[1])
+    expect(fenceText).toContain('<memory-digest>')
+    expect(fenceText).toContain('digest-topic')
+    expect(fenceText).toContain('[1 entries]')
   })
 
   it('index mode renders one id-addressed existence line per entry, preferring summaries', async () => {

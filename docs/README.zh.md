@@ -29,7 +29,7 @@
 | [archive/memory-plugins-comparison-zh.md](./archive/memory-plugins-comparison-zh.md) | 与三个参考 dsh 记忆插件的横向对比 + P0/P1 治理改进清单，全部已随 v0.5.0 落地。 |
 | [archive/MEMORY_MANAGER_PLAN.zh.md](./archive/MEMORY_MANAGER_PLAN.zh.md) | 记忆管理中心 UI 实施规划；一期已随 v0.4.0 发布，§12 记录实施偏差（如弃 `$mount` 改 `/api` RPC 直呼）。 |
 | [archive/PROJECT_NOTES.zh.md](./archive/PROJECT_NOTES.zh.md) | 项目笔记子系统的设计与 ADR（v0.2–v0.6）。prompt-only 投影已随 v0.6.0 落地；决策由 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md) 承载。 |
-| [archive/INDEX_MODE_EVALUATION.zh.md](./archive/INDEX_MODE_EVALUATION.zh.md) | 三档注入模式（policy-only / index / full）的实测对照；可用 `tests/recall-golden.spec.ts` 复现。裁决由 [Agent Note](../.agents/notes/implemented/architecture/2026-08-26-index-mode-stays-policy-only.zh.md) 承载。 |
+| [archive/INDEX_MODE_EVALUATION.zh.md](./archive/INDEX_MODE_EVALUATION.zh.md) | 三档注入模式（policy-only / index / full）的实测对照；可用 `tests/recall-golden.spec.ts` 复现。裁决现由 [digest 优先 Agent Note](../.agents/notes/implemented/architecture/2026-09-09-memory-digest-first-fence-and-volatility-ordering.zh.md) 承载（归档对照的原裁决记录在 2026-08-26 note）。 |
 | [archive/SECURITY_AUDIT.zh.md](./archive/SECURITY_AUDIT.zh.md) | 安全审计（2026-08-28，v0.5.0）：九大类人工审计 + Mimosa 密封深扫，发现 SEC-01…09——全部已处置（SEC-01 的 key 已于 2026-08-31 吊销）。 |
 
 ## 约定

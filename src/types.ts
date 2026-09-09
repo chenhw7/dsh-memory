@@ -28,6 +28,15 @@ export type MemoryCategory =
 /** Who triggered a write to the memory store (recorded in the audit trail). */
 export type AuditSource = 'tool' | 'review' | 'flush' | 'ui' | 'janitor'
 
+/**
+ * Which recall surface stamped an entry: `'tool'` is a deliberate read
+ * through the tool surface (memory_get/memory_list — full stamp, bumps
+ * `accessCount`); `'fence'` is the step-level auto-recall fence (lightweight
+ * stamp, `lastRecalledAt` only — query luck must not inflate the eviction
+ * signal). See {@link MemoryStore.markRecalled}.
+ */
+export type RecallSource = 'tool' | 'fence'
+
 /** The operation kind recorded in one audit entry. */
 export type AuditOp = 'add' | 'update' | 'remove' | 'readRaw'
 

@@ -29,7 +29,7 @@ import { resolveNotesSettings, type NotesSettings } from './settings.ts'
 export { isRenderedEntry } from './scope.ts'
 export { renderConventions, renderPitfalls } from './render.ts'
 export { cleanupLegacyNotesArtifacts, stripAgentsPointerBlock, AGENTS_POINTER_BEGIN, AGENTS_POINTER_END, LEGACY_NOTES_DIR } from './cleanup.ts'
-export { resolveNotesSettings, DEFAULT_NOTES_ENABLED, DEFAULT_NOTES_CHAR_LIMIT, DEFAULT_NOTES_MAX_ENTRIES_PER_FILE } from './settings.ts'
+export { resolveNotesSettings, DEFAULT_NOTES_ENABLED, DEFAULT_NOTES_CONVENTIONS_CHAR_LIMIT, DEFAULT_NOTES_PITFALLS_CHAR_LIMIT, DEFAULT_NOTES_MAX_ENTRIES_PER_FILE } from './settings.ts'
 export type { NotesSettings } from './settings.ts'
 
 /** Cordis plugin name. */
@@ -72,7 +72,10 @@ export abstract class ProjectNotesService {
    * Render and return the notes snapshot for a project root from the store.
    * Idempotent and side-effect free. An undefined `cwd` means "no current
    * project": project-scope entries drop out of the snapshot, but the
-   * global/user slices still render.
+   * global/user slices still render. The per-kind character budgets apply
+   * HERE — at render/freeze time — so a live budget change takes effect at
+   * the next snapshot (session/created or compaction/end), not per assembly;
+   * the section assembly's fence cap is the final defense.
    * @param cwd - the session working directory (project root), or undefined.
    * @returns the rendered snapshot; empty strings when disabled or unavailable.
    */
@@ -128,8 +131,8 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
         else if (kind === 'pitfalls') pitfalls.push(entry)
       }
       return {
-        conventions: renderConventions(conventions, settings.notesMaxEntriesPerFile),
-        pitfalls: renderPitfalls(pitfalls, settings.notesMaxEntriesPerFile),
+        conventions: renderConventions(conventions, settings.notesMaxEntriesPerFile, settings.notesConventionsCharLimit),
+        pitfalls: renderPitfalls(pitfalls, settings.notesMaxEntriesPerFile, settings.notesPitfallsCharLimit),
       }
     } catch (error) {
       this.ctx.get('memory')?.reportFailure('notes-snapshot', error)
@@ -145,14 +148,26 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
  * @param ctx - Cordis context.
  */
 export function apply(ctx: Context): void {
-  const settings = (): NotesSettings => {
-    try {
-      return resolveNotesSettings(ctx.settings.get(NOTES_NS))
-    } catch {
-      return resolveNotesSettings(undefined)
+  // Settings read through a settings-injected fiber (the identity plugin's
+  // pattern): a plain `ctx.settings` access on this fiber throws "cannot get
+  // property without inject" whenever the service is present, and the silent
+  // `resolveNotesSettings(undefined)` fallback would pin the service to the
+  // builtin budgets forever — load-bearing since the budgets apply at
+  // snapshot (freeze) time. The stable indirection re-reads the variable per
+  // call, so the inject callback's reassignment takes effect mid-flight.
+  let readSettings = (): NotesSettings => resolveNotesSettings(undefined)
+  ctx.inject(['settings'], (sctx) => {
+    readSettings = (): NotesSettings => {
+      try {
+        return resolveNotesSettings(sctx.settings.get(NOTES_NS))
+      } catch {
+        // Namespace not registered yet (or the provider tore down) — the
+        // builtin defaults stand until it registers.
+        return resolveNotesSettings(undefined)
+      }
     }
-  }
-  const service = new ProjectNotesServiceImpl(ctx, settings)
+  })
+  const service = new ProjectNotesServiceImpl(ctx, () => readSettings())
   ctx.provide('projectNotes', service)
 
   // One-time migration: strip the file-export artifacts a ≤0.5.x install

@@ -192,19 +192,19 @@ describe('plugin-card namespaces — one served namespace per card', () => {
     const messages = [createUserMessage({ content: [{ type: 'text', text: 'how do I run the deploy script for staging?' }], source: { kind: 'user' } })]
     const payload = { agent: { session: undefined }, messages, turn: 0, step: 0, signal: new AbortController().signal }
     const innerNext = async (): Promise<{ kind: string; messages: unknown[] }> => ({ kind: 'enter', messages })
-    // Factory default off: the fence falls through.
+    // Factory default ON: the fence appends on the first step.
     const before = await ctx.waterfall('agent/pre-step', payload, innerNext)
-    expect((before as { messages: unknown[] }).messages).toHaveLength(1)
-    // Card write in the `memory-autorecall` namespace applies to the next step.
+    expect((before as { messages: unknown[] }).messages).toHaveLength(2)
+    // A card write turning it off applies to the next step.
+    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: false })
+    const off = await ctx.waterfall('agent/pre-step', payload, innerNext)
+    expect((off as { messages: unknown[] }).messages).toHaveLength(1)
+    // And back on again — live, no restart.
     await ctx.settings.update('memory-autorecall', { autoRecallEnabled: true })
     const after = await ctx.waterfall('agent/pre-step', payload, innerNext)
     const appended = (after as { messages: unknown[] }).messages
     expect(appended).toHaveLength(2)
     expect(JSON.stringify(appended[1])).toContain('<recalled-memory>')
-    // Back off: the next step falls through again.
-    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: false })
-    const off = await ctx.waterfall('agent/pre-step', payload, innerNext)
-    expect((off as { messages: unknown[] }).messages).toHaveLength(1)
   })
 
   it('identity enablement rides the memory-identity namespace live', async () => {

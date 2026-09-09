@@ -17,6 +17,21 @@ function entry(overrides: Partial<MemoryEntry> & { scope: MemoryEntry['scope'] }
   return { id: `id-${Math.random()}` as never, content: 'content', createdAt: 0, updatedAt: 0, ...overrides } as MemoryEntry
 }
 
+/**
+ * A fake Cordis context for the notes-service tests: models `ctx.inject`
+ * by invoking the callback immediately with a settings-bearing sub-context
+ * (the real service reads settings through an injected fiber).
+ */
+function fakeNotesCtx(settingsGet: (ns: string) => unknown, store: unknown, onProvide: (s: unknown) => void): never {
+  const settings = { get: settingsGet }
+  return {
+    get: (name: string) => (name === 'memory' ? store : undefined),
+    provide: (_name: string, s: unknown) => { onProvide(s) },
+    on: () => {},
+    inject: (_names: string[], cb: (sctx: unknown) => void) => { cb({ settings }) },
+  } as never
+}
+
 describe('isRenderedEntry — the scope×category matrix', () => {
   it('renders project entries only for the matching project', () => {
     const e = entry({ scope: 'project', category: 'failure', projectName: 'app' })
@@ -54,7 +69,7 @@ describe('renderConventions / renderPitfalls', () => {
   ]
 
   it('renders the three sections in precedence order with the header', () => {
-    const text = renderConventions(entries, 100)
+    const text = renderConventions(entries, 100, 5000)
     expect(text).toContain(AUTO_HEADER)
     const iP = text.indexOf('## Project conventions')
     const iG = text.indexOf('## Global practices')
@@ -66,25 +81,56 @@ describe('renderConventions / renderPitfalls', () => {
     expect(text).toContain('prefers terse reviews')
   })
 
-  it('omits empty sections', () => {
-    const text = renderConventions([entries[0]!], 100)
+  it('omits empty sections and drops the header for an empty kind', () => {
+    const text = renderConventions([entries[0]!], 100, 5000)
     expect(text).toContain('## Project conventions')
     expect(text).not.toContain('## Global practices')
     expect(text).not.toContain('## Personal habits')
+    expect(renderConventions([], 100, 5000)).toBe('')
   })
 
-  it('truncates beyond the cap, keeping the newest', () => {
-    const text = renderConventions(entries, 1)
+  it('truncates beyond the cap, folding the rest into count lines', () => {
+    const text = renderConventions(entries, 1, 5000)
     expect(text).toContain('use vitest')
     expect(text).not.toContain('prefer small diffs')
     expect(text).not.toContain('prefers terse reviews')
+    // The squeezed entries are counted, never silently dropped.
+    expect(text).toContain('(another 1 global practices — use memory_search)')
+    expect(text).toContain('(another 1 personal habits — use memory_search)')
+  })
+
+  it('folds budget-evicted entries into per-section count lines', () => {
+    // Budget fits the header and a few bullets: the rest fold.
+    const many = Array.from({ length: 12 }, (_, i) =>
+      entry({ scope: 'global', category: 'preference', content: `global convention number ${i} with a reasonably long body`, updatedAt: 100 + i }))
+    const text = renderConventions(many, 0, 450)
+    expect(text).toMatch(/\(another \d+ global practices — use memory_search\)/)
+    // A zero budget drops the whole kind.
+    expect(renderConventions(many, 0, 0)).toBe('')
+  })
+
+  it('orders selection by pinned, then importance, then use signal', () => {
+    const pinnedLow = entry({ scope: 'global', category: 'preference', content: 'pinned wins', pinned: true, updatedAt: 0 })
+    const highImportanceOld = entry({ scope: 'global', category: 'preference', content: 'critical convention', importance: 5, updatedAt: 1 })
+    const midRecalled = entry({ scope: 'global', category: 'preference', content: 'mid importance but recalled yesterday', importance: 3, lastRecalledAt: 1000, updatedAt: 1 })
+    const midFresh = entry({ scope: 'global', category: 'preference', content: 'mid importance only recently updated', importance: 3, updatedAt: 999 })
+    const lowImportance = entry({ scope: 'global', category: 'preference', content: 'unimportant but newest', importance: 1, updatedAt: 5000 })
+    // Everything renders under a generous budget — the ORDER encodes the
+    // priority key (pinned → importance desc → lastRecalledAt ?? updatedAt desc).
+    const text = renderConventions([lowImportance, midFresh, midRecalled, highImportanceOld, pinnedLow], 0, 5000)
+    const at = (needle: string): number => text.indexOf(needle)
+    expect(at('pinned wins')).toBeLessThan(at('critical convention'))
+    expect(at('critical convention')).toBeLessThan(at('mid importance but recalled yesterday'))
+    // Equal importance: the fresher USE signal outranks a newer updatedAt.
+    expect(at('mid importance but recalled yesterday')).toBeLessThan(at('mid importance only recently updated'))
+    expect(at('mid importance only recently updated')).toBeLessThan(at('unimportant but newest'))
   })
 
   it('renders pitfalls verbatim with dates', () => {
     const text = renderPitfalls([
       entry({ scope: 'project', category: 'failure', projectName: 'app', content: '症状：x。根因：y。修复：z。', createdAt: new Date('2026-08-21T00:00:00Z').getTime(), updatedAt: 2 }),
       entry({ scope: 'global', category: 'tool-quirk', content: 'pnpm needs --force on this box', createdAt: new Date('2026-08-01T00:00:00Z').getTime(), updatedAt: 1 }),
-    ], 100)
+    ], 100, 5000)
     expect(text).toContain('## Project pitfalls')
     expect(text).toContain('## Environment & cross-project pitfalls')
     expect(text).toContain('(2026-08-21) 症状：x。根因：y。修复：z。')
@@ -93,37 +139,65 @@ describe('renderConventions / renderPitfalls', () => {
 })
 
 describe('resolveNotesSettings', () => {
-  it('applies defaults for abs/garbage values', () => {
-    expect(resolveNotesSettings(undefined).notesEnabled).toBe(true)
+  it('applies the per-kind defaults for abs/garbage values', () => {
+    const resolved = resolveNotesSettings(undefined)
+    expect(resolved.notesEnabled).toBe(true)
+    expect(resolved.notesConventionsCharLimit).toBe(1600)
+    expect(resolved.notesPitfallsCharLimit).toBe(800)
+    expect(resolved.notesMaxEntriesPerFile).toBe(100)
     expect(resolveNotesSettings({ notesEnabled: false }).notesEnabled).toBe(false)
-    expect(resolveNotesSettings({ notesCharLimit: 1234 }).notesCharLimit).toBe(1234)
+    expect(resolveNotesSettings({ notesConventionsCharLimit: 1234 }).notesConventionsCharLimit).toBe(1234)
+    expect(resolveNotesSettings({ notesPitfallsCharLimit: -1 }).notesPitfallsCharLimit).toBe(800)
+  })
+
+  it('derives both budgets 60/40 from the deprecated notesCharLimit when it is the only key', () => {
+    const resolved = resolveNotesSettings({ notesCharLimit: 4000 })
+    expect(resolved.notesConventionsCharLimit).toBe(2400)
+    expect(resolved.notesPitfallsCharLimit).toBe(1600)
+    // 0 disables both halves.
+    const off = resolveNotesSettings({ notesCharLimit: 0 })
+    expect(off.notesConventionsCharLimit).toBe(0)
+    expect(off.notesPitfallsCharLimit).toBe(0)
+  })
+
+  it('a new key wins its own slot; the legacy key still derives the other', () => {
+    const resolved = resolveNotesSettings({ notesCharLimit: 1000, notesConventionsCharLimit: 300 })
+    expect(resolved.notesConventionsCharLimit).toBe(300)
+    expect(resolved.notesPitfallsCharLimit).toBe(400)
   })
 
   it('ignores the pre-0.6 keys (notesDir / notesAgentsPointer)', () => {
     const resolved = resolveNotesSettings({ notesDir: 'elsewhere', notesAgentsPointer: false })
-    expect(Object.keys(resolved).sort()).toEqual(['notesCharLimit', 'notesEnabled', 'notesMaxEntriesPerFile'])
+    expect(Object.keys(resolved).sort()).toEqual(['notesConventionsCharLimit', 'notesEnabled', 'notesMaxEntriesPerFile', 'notesPitfallsCharLimit'])
   })
 })
 
 describe('buildNotesSectionText', () => {
   it('is empty when both inputs are empty', () => {
-    expect(buildNotesSectionText('', '', 4000)).toBe('')
-    expect(buildNotesSectionText('  ', '\n', 4000)).toBe('')
+    expect(buildNotesSectionText('', '', 1600, 800)).toBe('')
+    expect(buildNotesSectionText('  ', '\n', 1600, 800)).toBe('')
   })
-  it('is empty at zero budget', () => {
-    expect(buildNotesSectionText('# Conventions\nx', '# Pitfalls\ny', 0)).toBe('')
+  it('is empty at zero combined budget', () => {
+    expect(buildNotesSectionText('# Conventions\nx', '# Pitfalls\ny', 0, 0)).toBe('')
   })
   it('wraps content with the precedence note', () => {
-    const text = buildNotesSectionText('# Conventions\na', '', 4000)
+    const text = buildNotesSectionText('# Conventions\na', '', 1600, 800)
     expect(text).toContain('<project-notes>')
     expect(text).toContain(PROJECT_NOTES_NOTE)
     expect(text).toContain('# Conventions')
     expect(text.endsWith('</project-notes>')).toBe(true)
   })
-  it('truncates to the char limit', () => {
-    const text = buildNotesSectionText('x'.repeat(8000), '', 100)
-    expect(text.length).toBeLessThanOrEqual(160)
-    expect(text).toContain('truncated')
+  it('truncates to the combined budget with the fence closed and a retrieval-hint footnote', () => {
+    // The combined budget covers the frame (opening + note + footnote +
+    // closing ≈ 260 chars) but not the 8000-char body.
+    const text = buildNotesSectionText('x'.repeat(8000), '', 200, 200)
+    expect(text).toContain('notes are partial; use memory_search for the rest')
+    expect(text.endsWith('</project-notes>')).toBe(true)
+    expect(text.length).toBeLessThanOrEqual(400)
+  })
+  it('drops the section when the budget cannot carry the frame', () => {
+    expect(buildNotesSectionText('x'.repeat(8000), '', 10, 10)).toBe('')
+    expect(buildNotesSectionText('x'.repeat(8000), '', 100, 100)).toBe('')
   })
 })
 
@@ -210,12 +284,7 @@ describe('load-time scan — blocked entries never re-enter a prompt (§9.2a)', 
         health: () => ({ totalEntries: 2, byScope: { global: 0, project: 2, user: 0 }, pinned: 0, auditRecords: 0 }),
       } as unknown as MemoryStore
       let provided: unknown
-      const ctx = {
-        get: (name_: string) => (name_ === 'memory' ? store : undefined),
-        provide: (_name: string, service: unknown) => { provided = service },
-        on: () => {},
-        settings: { get: () => undefined },
-      } as never
+      const ctx = fakeNotesCtx(() => undefined, store, s => { provided = s })
       apply(ctx)
       const service = provided as import('../src/notes/index.ts').ProjectNotesService
       const snap = service.snapshotFor(cwd)
@@ -281,12 +350,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
         health: () => ({ totalEntries: entries.length, byScope: { global: 1, project: 3, user: 1 }, pinned: 0, auditRecords: 0, lastActivityTs: 1 }),
       } as unknown as MemoryStore
       let provided: unknown
-      const ctx = {
-        get: (name_: string) => (name_ === 'memory' ? store : undefined),
-        provide: (_name: string, service: unknown) => { provided = service },
-        on: () => {},
-        settings: { get: () => undefined },
-      } as never
+      const ctx = fakeNotesCtx(() => undefined, store, s => { provided = s })
       apply(ctx)
       const service = provided as import('../src/notes/index.ts').ProjectNotesService
       const snap = service.snapshotFor(cwd)
@@ -304,12 +368,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
       expect(existsSync(path.join(cwd, 'AGENTS.md'))).toBe(false)
       // Disabled via settings: empty snapshot.
       let provided2: unknown
-      const ctx2 = {
-        get: (n_: string) => (n_ === 'memory' ? store : undefined),
-        provide: (_n: string, s: unknown) => { provided2 = s },
-        on: () => {},
-        settings: { get: (ns: string) => ns === 'memory-notes' ? { notesEnabled: false } : undefined },
-      } as never
+      const ctx2 = fakeNotesCtx(ns => ns === 'memory-notes' ? { notesEnabled: false } : undefined, store, s => { provided2 = s })
       apply(ctx2)
       const service2 = provided2 as import('../src/notes/index.ts').ProjectNotesService
       expect(service2.snapshotFor(cwd)).toEqual({ conventions: '', pitfalls: '' })
@@ -321,12 +380,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
   it('returns the empty snapshot when the store is absent', async () => {
     const { apply } = await import('../src/notes/index.ts')
     let provided: unknown
-    const ctx = {
-      get: () => undefined,
-      provide: (_n: string, s: unknown) => { provided = s },
-      on: () => {},
-      settings: { get: () => undefined },
-    } as never
+    const ctx = fakeNotesCtx(() => undefined, undefined, s => { provided = s })
     apply(ctx)
     const service = provided as import('../src/notes/index.ts').ProjectNotesService
     expect(service.snapshotFor('/tmp/whatever')).toEqual({ conventions: '', pitfalls: '' })

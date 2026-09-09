@@ -20,6 +20,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
+import type { RecallSource } from '../types.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import { nextIdentityRecord } from './identity-util.js'
 import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
@@ -541,6 +542,17 @@ function entryIndexTokens(entry: MemoryEntry): string[] {
 }
 
 /**
+ * Filter one anchor list for storage: anchors first became a prompt surface
+ * (the digest's topic words), so each one passes the write-time scanner;
+ * violating (or empty) anchors drop silently — they are derived tokens, not
+ * the entry body, and losing one costs a topic word, never content. The
+ * load-time counterpart is `redactBlocked` in the digest builder.
+ */
+function filterAnchors(anchors: readonly string[]): string[] {
+  return anchors.filter(anchor => anchor.length > 0 && scanContent(anchor).allowed)
+}
+
+/**
  * MemoryStore implementation backed by a storage-domain KV table. Reads are
  * synchronous from memory; writes serialize on the domain chain. Every
  * successful mutation appends one record to the `audit` table (best-effort:
@@ -679,7 +691,7 @@ export class DomainMemoryStore extends MemoryStore {
       createdAt: now,
       updatedAt: now,
       ...clampImportance(input.importance),
-      ...input.anchors !== undefined ? { anchors: input.anchors } : {},
+      ...input.anchors !== undefined ? { anchors: filterAnchors(input.anchors) } : {},
     }
     await this.entries.put(id, entry)
     await this.appendAudit('add', id, entry, input.source, input.sessionId)
@@ -728,8 +740,9 @@ export class DomainMemoryStore extends MemoryStore {
       // Only rewrite the field when the caller supplies one; `undefined`
       // keeps the stored importance (add-time assessment stands).
       ...clampImportance(input.importance),
-      // Same absent-means-keep semantics for anchors.
-      ...(input.anchors !== undefined ? { anchors: input.anchors } : {}),
+      // Same absent-means-keep semantics for anchors; supplied anchors are
+      // scanner-filtered (they are prompt-surface tokens, like at add time).
+      ...(input.anchors !== undefined ? { anchors: filterAnchors(input.anchors) } : {}),
     }
     const updated: MemoryEntry = input.summary === ''
       ? (() => { const { summary: _c, ...rest } = base; return rest as MemoryEntry })()
@@ -810,8 +823,9 @@ export class DomainMemoryStore extends MemoryStore {
     // Fire-and-forget: stamp the returned entries with a recall timestamp
     // so the janitor can decay entries that have not been recalled recently.
     // Read-only consumers (management UI) opt out via recordRecall: false —
-    // merely viewing entries must not rewrite their recall metadata.
-    if (query.recordRecall !== false) void this.stampRecalled(all.map(entry => entry.id))
+    // merely viewing entries must not rewrite their recall metadata. The
+    // auto-recall fence also opts out and stamps its own lightweight tier.
+    if (query.recordRecall !== false) void this.stampRecalled(all.map(entry => entry.id), 'tool')
     return { entries: all, total }
   }
 
@@ -824,9 +838,15 @@ export class DomainMemoryStore extends MemoryStore {
    * changed entry; entries already carrying this pass's timestamp and no
    * decay stamp are skipped without touching the chain. `updatedAt` is
    * intentionally left untouched: recalling is not mutating.
+   *
+   * The tier follows {@link RecallSource}: `'tool'` bumps `accessCount` (the
+   * deliberate-read signal eviction and ranking consume); `'fence'` stamps
+   * `lastRecalledAt` only — a BM25 query match is presentation, not use.
    * @param ids - the ids of the entries the caller surfaced to the model.
+   * @param source - the recall surface selecting the stamping tier.
    */
-  private async stampRecalled(ids: readonly MemoryId[]): Promise<void> {
+  private async stampRecalled(ids: readonly MemoryId[], source: RecallSource): Promise<void> {
+    const bumpAccess = source !== 'fence'
     const now = Date.now()
     for (const id of ids) {
       // Cheap pre-check on the synchronous snapshot: a stamp pass that would
@@ -842,7 +862,7 @@ export class DomainMemoryStore extends MemoryStore {
           return {
             ...rest,
             lastRecalledAt: now,
-            accessCount: (rest.accessCount ?? 0) + 1,
+            ...(bumpAccess ? { accessCount: (rest.accessCount ?? 0) + 1 } : {}),
           }
         })
       } catch (error) {
@@ -861,10 +881,13 @@ export class DomainMemoryStore extends MemoryStore {
    * (e.g. `memory_get` / `memory_list` tool results). Fire-and-forget; never
    * throws into the caller. The base-class default is a no-op so providers
    * without recall tracking stay contract-conformant.
+   * @param ids - the ids of the entries surfaced.
+   * @param source - the recall surface selecting the stamping tier (see
+   *   {@link stampRecalled}); defaults to the full `'tool'` stamp.
    */
-  override markRecalled(ids: readonly string[]): void {
+  override markRecalled(ids: readonly string[], source: RecallSource = 'tool'): void {
     if (ids.length === 0) return
-    void this.stampRecalled(ids.filter(id => this.entries.get(id as MemoryId) !== undefined) as MemoryId[])
+    void this.stampRecalled(ids.filter(id => this.entries.get(id as MemoryId) !== undefined) as MemoryId[], source)
   }
 
   /**

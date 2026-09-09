@@ -29,6 +29,7 @@ import type {
   MemoryHealth,
   MemorySearchQuery,
   MemorySuggestion,
+  RecallSource,
   SearchMemoryResult,
   UpdateIdentityInput,
   UpdateMemoryInput,
@@ -52,6 +53,7 @@ export type {
   MemoryScope,
   MemorySearchQuery,
   MemorySuggestion,
+  RecallSource,
   ScanResult,
   SearchMemoryResult,
   UpdateIdentityInput,
@@ -163,9 +165,19 @@ export abstract class MemoryStore {
    * janitor can track staleness. Fire-and-forget and best-effort: the default
    * implementation is a no-op, so providers without recall tracking remain
    * contract-conformant and callers never need to handle failures.
+   *
+   * The `source` selects the stamping tier: `'tool'` (the default) is a
+   * deliberate read through the tool surface and bumps `accessCount` too (the
+   * eviction/ranking signal); `'fence'` is the step-level auto-recall fence,
+   * where hits come from BM25 query luck rather than the model choosing to
+   * read — it stamps `lastRecalledAt` only, so lexical matches never inflate
+   * the eviction signal (the janitor's decay clock refresh is the accepted
+   * part: "recently presented" is true either way).
    * @param ids - The entry ids that were recalled.
+   * @param source - The recall surface: `'tool'` (full stamp) or `'fence'`
+   *   (lightweight stamp). Defaults to `'tool'`.
    */
-  markRecalled(ids: readonly string[]): void { /* default no-op */ }
+  markRecalled(ids: readonly string[], source: RecallSource = 'tool'): void { /* default no-op */ }
 
   /**
    * Record one failure swallowed by a best-effort background path (flush,

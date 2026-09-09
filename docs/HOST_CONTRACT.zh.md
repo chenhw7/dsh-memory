@@ -44,7 +44,7 @@
 - section `text` 可以是 `(context) => string` 函数，**每次组装时求值**——KV-cache 冻结靠我们自己把快照存进 per-session WeakMap，而不是宿主保证。
 - 同名 section 靠 scope shadowing；重复注册同名全局段会抛错，effect disposer 必须交给 `ctx.effect()` 管理。
 - 渲染期 `{{var}}` 引用未知变量直接 throw——我们的段文案不含变量引用，若将来加，需同时注册 variable。
-- **段序全景（2026-09-08 核实，身份层落位依据）：**`HARNESS_IDENTITY(-1000) → DEPLOYMENT_PERSONA(0) → PLAN_POLICY(500) → PTC_ONLY(800) → FILE_REFERENCE(900) → TOOL_*（1000+，工具段） → TOOLS_SDK(5000) → STRUCTURED_OUTPUT(9900)`。我们的段序：`soul`(80) / `user-profile`(81) 落在 deployment persona 之后、policy 之前的 0–500 带；`memory`(90) / `project-notes`(91) 同带；插件自有工具指引在 100–199。
+- **段序全景（2026-09-08 核实，身份层落位依据；2026-09-09 复核，数据段易变度落位依据）：**`HARNESS_IDENTITY(-1000) → DEPLOYMENT_PERSONA(0) → PLAN_POLICY(500) → PTC_ONLY(800) → FILE_REFERENCE(900) → TOOL_BASH(1000)…TOOL_REPORT(2900)（工具段） → TOOLS_SDK(5000) → DELIVERABLE_FILE_REFERENCES(9000) → STRUCTURED_OUTPUT(9900)`。我们的段序：`soul`(80) / `user-profile`(81) 落在 deployment persona 之后、policy 之前的 0–500 带；`memory`(6000) / `project-notes`(6001) 落在 TOOLS_SDK(5000) 之后、DELIVERABLE_FILE_REFERENCES(9000) 之前——compaction 重冻结只牵连前缀尾部，不牵连工具指引中段（易变度降序落位，OpenClaw `CONTEXT_FILE_ORDER` 同理）。
 - **`deployment:persona` 是部署所有的静态人格槽位**（`PERSONA_SECTION`，order 0；`dsh-persona` preset 行只能按 agent scope 同名遮蔽，全局同名注册在注册表处撞车 fail loud）。我们的 `soul` 段与它是**共存而非替代**关系；位阶链（会话显式指令 > 部署任命 > 身份段 > 学到的记忆）写进段文案并由测试钉住。
 
 ## 4. 会话事件面
@@ -54,7 +54,7 @@
 | `session/created` / `session/disposed` | `packages/session/session-persistence/src/coordinator.ts:1118,1132`（同款消费先例） | 冻结快照、janitor、curator、dispose flush |
 | `'compaction/end'`: `{compactionId; error?: string}` | `packages/compaction/compaction/src/types.ts:71` | 边界重冻结 + flush 触发（`error !== undefined` 时跳过） |
 | `'compaction/summary'`: `shadowedSeqs` 可从 `session.events[seq]` 回放 | `packages/compaction/compaction/src/types.ts:33`、append 点 `compaction-basic/src/region.ts:447` | flush 提取被压缩的原文片段 |
-| `'agent/pre-step'` waterfall：`{agent, messages, turn, step, signal}, next` → `PreStepDecision` | `packages/core/agent/src/runtime-types.ts:231` | 周期评审 drain + auto-recall fence（返回 `{kind:'enter', messages:[...]}` 追加消息） |
+| `'agent/pre-step'` waterfall：`{agent, messages, turn, step, signal}, next` → `PreStepDecision` | `packages/core/agent/src/runtime-types.ts:231` | 周期评审 drain + 消息尾部注入（一次性清单 + 自动召回围栏，返回 `{kind:'enter', messages:[...]}` 追加至多一条消息） |
 
 **契约要点**：
 - `agent/pre-step` 是 waterfall：**必须 `return next()`** 放行或返回 enter 决策；任何异常都要自己吞掉，否则阻断步骤。
@@ -127,7 +127,7 @@
 
 1. §1 KvTable 接口形状 / 域 version 语义是否变化；
 2. §2 installSettingsSection hooks 形状（setSource/onChange）是否变化；
-3. §3 AssembleContext.agent 是否仍透传给 section text 函数；`SECTION_ORDERS` 表是否有新增/改序条目落在我们的 0–500 带内（soul 80 / user-profile 81 / memory 90 / project-notes 91），`PERSONA_SECTION` 名称是否变化；
+3. §3 AssembleContext.agent 是否仍透传给 section text 函数；`SECTION_ORDERS` 表是否有新增/改序条目落在我们的两个落位带内（soul 80 / user-profile 81 的 0–500 带；memory 6000 / project-notes 6001 的 TOOLS_SDK 与 DELIVERABLE_FILE_REFERENCES 之间），`PERSONA_SECTION` 名称是否变化；
 4. §4 compaction/end 的 `error` 字段类型与 shadowedSeqs 回放路径；
 5. §4 agent/pre-step 的 payload/决策形状；
 6. §6 finish reason 枚举与 BlockAssembler API；

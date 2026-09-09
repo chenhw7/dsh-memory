@@ -2,14 +2,26 @@
  * System-prompt memory context injection and the `memory` settings namespace.
  *
  * This function plugin contributes four system-prompt sections: `memory` at
- * order 90 and `project-notes` at 91 (before tool guidance at 100–199), and —
- * when the identity layer is enabled — `soul` at 80 and `user-profile` at 81
- * (after the host's deployment persona at order 0). On `session/created` it reads a frozen
+ * order 6000 and `project-notes` at 6001 — after the host's tool guidance
+ * (SECTION_ORDERS TOOL_* 1000–2900, TOOLS_SDK 5000) and before
+ * DELIVERABLE_FILE_REFERENCES (9000), so a compaction re-freeze that changes
+ * the memory/notes text no longer invalidates the prefix cache of every tool
+ * section behind it (the OpenClaw CONTEXT_FILE_ORDER lesson: most-volatile
+ * data last, closest to the cache boundary) — and — when the identity layer
+ * is enabled — `soul` at 80 and `user-profile` at 81 (after the host's
+ * deployment persona at order 0). On `session/created` it reads a frozen
  * snapshot of recalled memory from the optional `ctx.memory` store (global,
  * project, and user scopes) and freezes it per session so a running session
  * reuses the same recalled content across steps, preserving KV-cache prefix
  * stability. The section text is rebuilt at each assembly from the live
  * settings mode and the session's frozen snapshot.
+ *
+ * In `digest` mode (the default) the sections carry only frozen guidance;
+ * the data rides as step-tail messages: a one-time `<memory-digest>` store
+ * inventory appended to the session's first pre-step (re-appended once after
+ * compaction) and, when auto recall is on, per-step `<recalled-memory>`
+ * fences of BM25 hits — both merged into at most one plugin message per step,
+ * so the frozen prefix itself never changes mid-session.
  *
  * The memory-family settings namespaces are registered through `ctx.settings`,
  * one per plugin-configuration card (`memory`, `memory-notes`,
@@ -36,10 +48,11 @@ import { annotateConflicts, type ConflictStatus } from './conflict.ts'
 import type { ProjectNotesService, ProjectNotesSnapshot } from '../notes/index.ts'
 import { isRenderedEntry } from '../notes/scope.ts'
 import {
-  DEFAULT_NOTES_CHAR_LIMIT,
   DEFAULT_NOTES_ENABLED,
   DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
+  resolveNotesSettings,
 } from '../notes/settings.ts'
+import type { NotesSettings } from '../notes/settings.ts'
 import type { IdentitySnapshot } from '../identity/index.ts'
 import { EMPTY_IDENTITY } from '../identity/index.ts'
 import { validateSeedDir } from '../identity/seeds.ts'
@@ -64,9 +77,9 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 // text provider can recover the session whose frozen snapshot it reads.
 import type {} from '@deepseek-ai/dsh-agent'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, buildSoulSectionText, buildUserProfileSectionText, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, type MemoryMode, type IndexEntry } from './policy.ts'
+import { buildMemorySectionText, buildNotesSectionText, buildAutoRecallBlock, buildSoulSectionText, buildUserProfileSectionText, buildMemoryDigestText, renderMemoryIndex, AUTO_RECALL_CHAR_LIMIT, MEMORY_DIGEST_POLICY_HINT, type MemoryMode, type IndexEntry } from './policy.ts'
 
-export { buildMemorySectionText, buildAutoRecallBlock, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_CONTEXT_NOTE, MEMORY_INDEX_NOTE, AUTO_RECALL_NOTE } from './policy.ts'
+export { buildMemorySectionText, buildAutoRecallBlock, buildMemoryDigestText, renderMemoryIndex, MEMORY_POLICY_TEXT, MEMORY_DIGEST_POLICY_HINT, MEMORY_CONTEXT_NOTE, MEMORY_INDEX_NOTE, AUTO_RECALL_NOTE } from './policy.ts'
 export { buildNotesSectionText, buildSoulSectionText, buildUserProfileSectionText, PROJECT_NOTES_NOTE, SOUL_NOTE, USER_PROFILE_NOTE } from './policy.ts'
 export type { MemoryMode, IndexEntry } from './policy.ts'
 
@@ -86,13 +99,20 @@ const NOTES_NS = 'memory-notes'
 const AUTORECALL_NS = 'memory-autorecall'
 const IDENTITY_NS = 'memory-identity'
 
-// Factory default is `index`: every entry is visible to the model as an
-// existence line without it having to guess that a memory might exist. The
-// superseded policy-only default and its measured costs are recorded in the
-// implemented Agent Note (index-default-promotion); deployments with tight
-// context budgets set policy-only or off explicitly.
-const DEFAULT_MEMORY_MODE: MemoryMode = 'index'
+// Factory default is `digest`: the system prompt carries only the frozen
+// policy guidance, while a one-time <memory-digest> inventory (category
+// counts + anchor topics) rides the first step's tail and per-step recall
+// fences answer "what does it actually say". The data never resides in the
+// prefix, so a re-freeze or store change never disturbs the cached prefix.
+// This rewrites rather than overturns the index-default promotion: the
+// existence awareness the index carried as 80-char lines now lives in the
+// digest's counts and topic words (see the implemented Agent Note
+// index-default-promotion and this change's own). `index`/`full` remain
+// explicit opt-ins for prefix-resident data; `policy-only`/`off` trim further.
+const DEFAULT_MEMORY_MODE: MemoryMode = 'digest'
 const DEFAULT_MEMORY_CHAR_LIMIT = 5000
+/** Character budget for the one-time digest inventory (≈250 tokens); `0` = off. */
+const DEFAULT_MEMORY_DIGEST_CHAR_LIMIT = 800
 const DEFAULT_MAX_SEARCH_RESULTS = 50
 const DEFAULT_DECAY_DAYS = 30
 /**
@@ -116,12 +136,17 @@ const EMPTY_NOTES: ProjectNotesSnapshot = { conventions: '', pitfalls: '' }
 
 /** The `memory` system-prompt section name. */
 const SECTION_NAME = 'memory'
-/** Section order: before tool guidance (100–199). */
-const SECTION_ORDER = 90
+/**
+ * Section order: after the host's tool guidance (TOOL_* 1000–2900, TOOLS_SDK
+ * 5000) and before DELIVERABLE_FILE_REFERENCES (9000) — verified against the
+ * installed host's SECTION_ORDERS (HOST_CONTRACT §3). Data sections sit as
+ * late as possible so re-freezing them costs only the tail of the prefix.
+ */
+const SECTION_ORDER = 6000
 /** The `project-notes` system-prompt section name. */
 const NOTES_SECTION_NAME = 'project-notes'
-/** Notes section order: right after the memory section. */
-const NOTES_SECTION_ORDER = 91
+/** Notes section order: right after the memory section, same volatility class. */
+const NOTES_SECTION_ORDER = 6001
 /** The `soul` system-prompt section name. */
 const SOUL_SECTION_NAME = 'soul'
 /** Soul section order: after the deployment persona (order 0), before memory (90). */
@@ -149,12 +174,19 @@ const SNAPSHOT_SCOPES: readonly MemoryScope[] = ['global', 'project', 'user']
  * `MemoryIdentityConfig` → the Identity card / `memory-identity`.
  */
 export interface MemoryInjectionConfig {
-  /** How recalled memory reaches the system prompt; defaults to `policy-only`. */
+  /** How recalled memory reaches the system prompt; defaults to `digest` (a one-time inventory message + per-step recall fences, nothing resident). */
   memoryMode: MemoryMode
   /** User-supplied custom policy text, used only when `memoryMode` is `custom`. */
   memoryPolicyCustomText?: string
   /** Character budget for the frozen memory content snapshot; defaults to `5000`. */
   memoryCharLimit: number
+  /**
+   * Character budget for the one-time `<memory-digest>` inventory message in
+   * `digest` mode (≈250 tokens at the 4-chars/token estimate; CJK topics run
+   * higher). `0` disables the digest message while keeping the mode's section
+   * guidance. Defaults to `800`.
+   */
+  memoryDigestCharLimit: number
   /**
    * Maximum number of entries injected into the memory snapshot regardless of
    * the character budget (P0-6). Entries beyond this count are rolled up into
@@ -170,14 +202,30 @@ export interface MemoryInjectionConfig {
 export interface MemoryNotesConfig {
   /** Enable the `project-notes` prompt section; defaults to `true`. */
   notesEnabled: boolean
-  /** Character budget for the injected project-notes section; defaults to `4000`. */
-  notesCharLimit: number
-  /** Max entries rendered into the project-notes section; defaults to `100`. */
+  /**
+   * Character budget for the rendered conventions half of the notes section.
+   * Absent inherits the resolver default (`1600`); the deprecated combined
+   * `notesCharLimit` derives it (60%) when it is the only key set.
+   */
+  notesConventionsCharLimit?: number
+  /**
+   * Character budget for the rendered pitfalls half of the notes section.
+   * Absent inherits the resolver default (`800`); the deprecated combined
+   * `notesCharLimit` derives it (40%) when it is the only key set.
+   */
+  notesPitfallsCharLimit?: number
+  /** Max entries selected into the notes section (the rest fold into count lines); defaults to `100`. */
   notesMaxEntriesPerFile: number
 }
 
 export interface MemoryAutoRecallConfig {
-  /** Append a fenced auto-recall block to each step's messages (BM25 over the store). Defaults to `false`. */
+  /**
+   * Append a fenced auto-recall block to each step's messages (BM25 over the
+   * store). Defaults to `true` — the digest-mode complement: the digest says
+   * WHAT is stored (once per session), the fence recalls WHAT it says (per
+   * step, at the step tail). Fence hits stamp `lastRecalledAt` only, never
+   * `accessCount`.
+   */
   autoRecallEnabled: boolean
   /** Max entries in one auto-recall fence; defaults to `5`. */
   autoRecallLimit: number
@@ -229,9 +277,10 @@ export type MemoryConfig = MemoryInjectionConfig & MemoryNotesConfig & MemoryAut
  * namespaces cannot drift.
  */
 const INJECTION_FIELDS = {
-  memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index'] as const).default(DEFAULT_MEMORY_MODE),
+  memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index', 'digest'] as const).default(DEFAULT_MEMORY_MODE),
   memoryPolicyCustomText: z.string(),
   memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
+  memoryDigestCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_DIGEST_CHAR_LIMIT),
   memoryMaxEntries: z.number().step(1).min(0).default(DEFAULT_MEMORY_MAX_ENTRIES),
   maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
   decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
@@ -239,12 +288,16 @@ const INJECTION_FIELDS = {
 
 const NOTES_FIELDS = {
   notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
-  notesCharLimit: z.number().step(1).min(0).default(DEFAULT_NOTES_CHAR_LIMIT),
+  // No schema default on the two budgets on purpose: absence is the signal
+  // the deprecated `notesCharLimit` fallback reads (60/40 derivation in
+  // resolveNotesSettings — the one home for the builtin defaults too).
+  notesConventionsCharLimit: z.number().step(1).min(0),
+  notesPitfallsCharLimit: z.number().step(1).min(0),
   notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
 }
 
 const AUTORECALL_FIELDS = {
-  autoRecallEnabled: z.boolean().default(false),
+  autoRecallEnabled: z.boolean().default(true),
   autoRecallLimit: z.number().step(1).min(1).default(5),
   autoRecallMinChars: z.number().step(1).min(1).default(12),
   hitSignalEnabled: z.boolean().default(false),
@@ -279,6 +332,7 @@ function injectionEntry(config: MemoryConfig): MemoryInjectionConfig {
     // Optional composition keys are carried only when set (exactOptionalPropertyTypes).
     ...config.memoryPolicyCustomText === undefined ? {} : { memoryPolicyCustomText: config.memoryPolicyCustomText },
     memoryCharLimit: config.memoryCharLimit,
+    memoryDigestCharLimit: config.memoryDigestCharLimit,
     memoryMaxEntries: config.memoryMaxEntries,
     maxSearchResults: config.maxSearchResults,
     decayDays: config.decayDays,
@@ -286,10 +340,17 @@ function injectionEntry(config: MemoryConfig): MemoryInjectionConfig {
 }
 
 function notesEntry(config: MemoryConfig): MemoryNotesConfig {
+  // The deprecated `notesCharLimit` rides along untyped (schemastery's
+  // non-strict object passes unknown keys through) so resolveNotesSettings
+  // can derive both budgets from it — one derivation home, no second
+  // implementation here.
+  const legacy = (config as { notesCharLimit?: unknown }).notesCharLimit
   return {
     notesEnabled: config.notesEnabled,
-    notesCharLimit: config.notesCharLimit,
+    ...config.notesConventionsCharLimit === undefined ? {} : { notesConventionsCharLimit: config.notesConventionsCharLimit },
+    ...config.notesPitfallsCharLimit === undefined ? {} : { notesPitfallsCharLimit: config.notesPitfallsCharLimit },
     notesMaxEntriesPerFile: config.notesMaxEntriesPerFile,
+    ...(typeof legacy === 'number' ? { notesCharLimit: legacy } : {}),
   }
 }
 
@@ -497,8 +558,21 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     ...identitySource(),
   })
 
+  /**
+   * The resolved notes settings. Notes budgets (and the deprecated
+   * `notesCharLimit` derivation) resolve in ONE place —
+   * {@link resolveNotesSettings} — so the injection side and the notes
+   * service cannot drift.
+   */
+  const notesResolved = (): NotesSettings => resolveNotesSettings(notesSource())
+
   // Per-session frozen memory snapshots (content + index), read once at session/created.
   const sessionMemory = new WeakMap<Session, FrozenSnapshot>()
+
+  // Sessions that already received their one-time digest message. The flag is
+  // set only after a NON-EMPTY emission: a zero budget or an empty store
+  // leaves it unset, so raising the budget live takes effect on the next step.
+  const digestSent = new WeakSet<Session>()
 
   // Usage-hit ledger (write-path rework Step 2): per session, the entries the
   // current round injected — the standing snapshot's entries (recorded at
@@ -551,10 +625,12 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   /** Freeze (or re-freeze) the per-session snapshot from live settings + store. */
   const freezeFor = (session: Session): void => {
     const settings = current()
+    const notes = notesResolved()
     const memory = ctx.get('memory')
     // The project-notes snapshot: rendering is synchronous and side-effect
-    // free (prompt-only since 0.6 — nothing is written to the project).
-    const notes: ProjectNotesSnapshot = settings.notesEnabled
+    // free (prompt-only since 0.6 — nothing is written to the project). The
+    // per-kind budgets apply inside snapshotFor, i.e. HERE at freeze time.
+    const notesSnapshot: ProjectNotesSnapshot = notes.notesEnabled
       ? ctx.get('projectNotes')?.snapshotFor(session.header?.cwd) ?? EMPTY_NOTES
       : EMPTY_NOTES
     // The identity snapshot (raw, unbudgeted — the section builders apply
@@ -564,7 +640,7 @@ export function apply(ctx: Context, config: MemoryConfig): void {
       ? ctx.get('identity')?.snapshotFor() ?? EMPTY_IDENTITY
       : EMPTY_IDENTITY
     if (memory === undefined) {
-      sessionMemory.set(session, { content: '', index: '', notes, identity })
+      sessionMemory.set(session, { content: '', index: '', notes: notesSnapshot, identity })
       hitLedger.set(session, [])
       return
     }
@@ -573,13 +649,13 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     // No double injection: entries rendered into the project-notes section
     // are excluded from the memory section's snapshot/index while notes are
     // enabled.
-    const exclude = settings.notesEnabled
+    const exclude = notes.notesEnabled
       ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
       : undefined
     sessionMemory.set(session, {
       content: readMemorySnapshot(memory, charLimit, exclude, maxEntries),
       index: readMemoryIndex(memory, charLimit, exclude),
-      notes,
+      notes: notesSnapshot,
       identity,
     })
     // The standing round's ledger: the entries the frozen snapshot injected.
@@ -610,6 +686,9 @@ export function apply(ctx: Context, config: MemoryConfig): void {
   ctx.on('session/event', (session: Session, event) => {
     if (event.type !== 'compaction/end') return
     if (event.data.error !== undefined) return
+    // The digest rides the message tail, so a rebuilt prefix re-arms it: the
+    // next pre-step re-emits a fresh inventory reflecting mid-session writes.
+    digestSent.delete(session)
     try {
       freezeFor(session)
     } catch (error) {
@@ -618,39 +697,69 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     }
   }, { global: true })
 
-  // P1-11 step-level auto recall (opt-in): on every agent step, run a BM25
-  // search keyed on the step's user text and append a fenced
-  // `<recalled-memory>` message. The system prompt is untouched — the block
-  // rides in the logged user-message channel of this step only, so the
-  // KV-cache prefix stays stable. Synchronous store search; never throws into
-  // the waterfall (any failure falls through to `next()` unchanged).
+  // Step-tail injection (P1-11 + digest mode): on every agent step, first
+  // compute the session's pending one-time <memory-digest> inventory (digest
+  // mode, store present, not yet sent this session), then the step's
+  // auto-recall fence (BM25 over the store keyed on the user text). The two
+  // blocks merge into at most ONE plugin message appended after the step's
+  // messages (digest first) — the system prompt and its cached prefix stay
+  // untouched. The digest is independent of auto-recall switches; neither
+  // runs when the store is absent, and a failure falls through to `next()`
+  // unchanged. Fence hits stamp a LIGHTWEIGHT recall (lastRecalledAt only) so
+  // lexical query matches never inflate `accessCount` (the eviction signal).
   ctx.on('agent/pre-step', async (payload, next) => {
     try {
       const settings = current()
-      if (!settings.autoRecallEnabled) return next()
       const memory = ctx.get('memory')
       if (memory === undefined) return next()
-      const query = payload.messages.map(userMessageText).join('\n').trim()
-      if (query.length < settings.autoRecallMinChars) return next()
-      const result = memory.search({ query, limit: settings.autoRecallLimit })
-      // Soft-decayed and superseded entries stay hidden until deliberately
-      // recalled through the tool surface.
-      const hits = result.entries.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
-      if (hits.length === 0) return next()
-      memory.markRecalled(hits.map(entry => entry.id))
-      // The auto-recall fence replaces the standing round's injected set for
-      // the hit ledger: these are the entries the model sees THIS round.
       const session = sessionOf(payload)
-      if (settings.hitSignalEnabled && session !== undefined) hitLedger.set(session, hits.map(toLedgerEntry))
-      const block = buildAutoRecallBlock(hits, AUTO_RECALL_CHAR_LIMIT)
-      if (block.length === 0) return next()
-      const recallMessage = createUserMessage({
-        content: [{ type: 'text', text: block }],
+
+      // The one-time digest: an inventory, not a recall — no markRecalled,
+      // no hit ledger. Notes-rendered entries are excluded by the same
+      // predicate the snapshot uses, so nothing shows up twice.
+      let digestBlock = ''
+      if (settings.memoryMode === 'digest' && settings.memoryDigestCharLimit > 0 && session !== undefined && !digestSent.has(session)) {
+        const exclude = notesResolved().notesEnabled
+          ? (entry: MemoryEntry): boolean => isRenderedEntry(entry, projectNameOf(session)) !== undefined
+          : undefined
+        const digest = buildMemoryDigestText(memory.list(), settings.memoryDigestCharLimit, exclude)
+        if (digest.length > 0) {
+          digestSent.add(session)
+          digestBlock = digest
+        }
+      }
+
+      // The per-step recall fence.
+      let recallBlock = ''
+      if (settings.autoRecallEnabled) {
+        const query = payload.messages.map(userMessageText).join('\n').trim()
+        if (query.length >= settings.autoRecallMinChars) {
+          // recordRecall: false — the search itself must not count as a tool
+          // read; the single lightweight stamp below is the fence's whole
+          // write to recall metadata.
+          const result = memory.search({ query, limit: settings.autoRecallLimit, recordRecall: false })
+          // Soft-decayed and superseded entries stay hidden until deliberately
+          // recalled through the tool surface.
+          const hits = result.entries.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
+          if (hits.length > 0) {
+            memory.markRecalled(hits.map(entry => entry.id), 'fence')
+            // The auto-recall fence replaces the standing round's injected set for
+            // the hit ledger: these are the entries the model sees THIS round.
+            if (settings.hitSignalEnabled && session !== undefined) hitLedger.set(session, hits.map(toLedgerEntry))
+            recallBlock = buildAutoRecallBlock(hits, AUTO_RECALL_CHAR_LIMIT)
+          }
+        }
+      }
+
+      if (digestBlock.length === 0 && recallBlock.length === 0) return next()
+      const text = [digestBlock, recallBlock].filter(block => block.length > 0).join('\n\n')
+      const message = createUserMessage({
+        content: [{ type: 'text', text }],
         source: { kind: 'plugin', plugin: 'dsh-memory-context' },
       })
-      return { kind: 'enter', messages: [...payload.messages, recallMessage] }
+      return { kind: 'enter', messages: [...payload.messages, message] }
     } catch (error) {
-      // Recall must never break the step: fall through unchanged, but stay observable.
+      // Injection must never break the step: fall through unchanged, but stay observable.
       ctx.get('memory')?.reportFailure('auto-recall', error)
       return next()
     }
@@ -703,11 +812,19 @@ export function apply(ctx: Context, config: MemoryConfig): void {
     name: NOTES_SECTION_NAME,
     order: NOTES_SECTION_ORDER,
     text: (context: AssembleContext): string => {
-      const settings = current()
-      if (!settings.notesEnabled) return ''
+      const notes = notesResolved()
+      if (!notes.notesEnabled) return ''
       const session = context.agent?.session
       const snapshot = session === undefined ? undefined : sessionMemory.get(session)
-      return buildNotesSectionText(snapshot?.notes.conventions ?? '', snapshot?.notes.pitfalls ?? '', settings.notesCharLimit)
+      // The frozen snapshot already applied the entry-level budgets at freeze
+      // time; the live budgets here are the assembly-side final defense
+      // (fenceWithin cuts the joined body to their sum, fence closed).
+      return buildNotesSectionText(
+        snapshot?.notes.conventions ?? '',
+        snapshot?.notes.pitfalls ?? '',
+        notes.notesConventionsCharLimit,
+        notes.notesPitfallsCharLimit,
+      )
     },
   }), 'memory-context.notes-section()')
 

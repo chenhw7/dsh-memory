@@ -6,10 +6,12 @@
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { MemoryStore, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery } from '../src/types.ts'
 import * as context from '../src/context/index.ts'
+import * as notes from '../src/notes/index.ts'
 
 /** In-memory store whose entries the test mutates between assemblies. */
 class MutableStore extends MemoryStore {
@@ -19,7 +21,14 @@ class MutableStore extends MemoryStore {
   override async add(input: AddMemoryInput): Promise<{ entry: MemoryEntry }> {
     validateContent(input.content)
     const now = Date.now()
-    const entry: MemoryEntry = { id: `mem-${++this.seq}` as MemoryId, scope: input.scope, content: input.content, createdAt: now, updatedAt: now }
+    const entry: MemoryEntry = {
+      id: `mem-${++this.seq}` as MemoryId,
+      scope: input.scope,
+      content: input.content,
+      ...(input.category !== undefined ? { category: input.category } : {}),
+      createdAt: now,
+      updatedAt: now,
+    }
     this.entries.push(entry)
     return { entry }
   }
@@ -52,10 +61,13 @@ const CONFIG = {
   memoryMode: 'full',
   memoryPolicyCustomText: '',
   memoryCharLimit: 5000,
+  memoryDigestCharLimit: 800,
+  memoryMaxEntries: 20,
   maxSearchResults: 50,
   decayDays: 30,
   notesEnabled: false,
-  notesCharLimit: 4000,
+  notesConventionsCharLimit: 1600,
+  notesPitfallsCharLimit: 800,
   notesMaxEntriesPerFile: 100,
 } as const
 
@@ -98,6 +110,21 @@ describe('compaction-boundary snapshot refresh', () => {
     const refreshed = sectionText()
     expect(refreshed).toContain('before compaction fact')
     expect(refreshed).toContain('learned mid-session fact')
+  })
+
+  it('the four sections are byte-identical across turns (frozen prefix)', async () => {
+    const { ctx, store, session, sectionText } = await setup()
+    await store.add({ scope: 'global', content: 'stable fact one' })
+    ctx.emit('session/created', session)
+    const first = sectionText()
+    // Repeated assemblies with no compaction must return the SAME bytes —
+    // this is the KV-cache stability the freeze exists for.
+    expect(sectionText()).toBe(first)
+    expect(sectionText()).toBe(first)
+    // Mid-session store writes do not perturb the frozen text either.
+    await store.add({ scope: 'global', content: 'mid-session fact' })
+    const afterWrite = sectionText()
+    expect(afterWrite).toBe(first)
   })
 
   it('a failed compaction keeps serving the previous snapshot', async () => {
@@ -179,9 +206,73 @@ describe('identity sections (soul / user-profile) — freeze, refreeze, gate', (
   })
 
   it('live budget: the section applies soulCharLimit at assembly with a truncation footer', async () => {
-    const { ctx, session, setDocuments, soulText } = await setupIdentity({ soulCharLimit: 60 })
-    setDocuments('很长的人格文档，超过六十个字符预算的时候应当被截断并附上注脚说明。'.repeat(4), '画像')
+    // The budget is a whole-section cap: it must carry the frame (opening +
+    // note + footnote + closing), so a truncating budget sits a few hundred
+    // chars above the note alone.
+    const { ctx, session, setDocuments, soulText } = await setupIdentity({ soulCharLimit: 400 })
+    setDocuments('很长的人格文档，超过四百个字符预算的时候应当被截断并附上注脚说明，同时闭合标签必须完好。'.repeat(4), '画像')
     ctx.emit('session/created', session)
-    expect(soulText()).toContain('truncated at 60 characters')
+    expect(soulText()).toContain('truncated at 400 characters')
+    expect(soulText().endsWith('</soul>')).toBe(true)
+    // A budget below the frame drops the section instead of slicing the fence.
+    const tiny = await setupIdentity({ soulCharLimit: 60 })
+    tiny.setDocuments('人格', '画像')
+    tiny.ctx.emit('session/created', tiny.session)
+    expect(tiny.soulText()).toBe('')
+  })
+})
+
+/** An in-memory settings provider so live settings writes reach the plugins. */
+class TestSettingsProvider extends SettingsProvider {
+  override get writable() { return true }
+  private doc: Record<string, unknown> = {}
+  protected override async load(): Promise<Record<string, unknown>> { return this.doc }
+  protected override async persist(ns: Parameters<SettingsProvider['update']>[0], section: Record<string, unknown>): Promise<void> {
+    this.doc = { ...this.doc, [ns]: section }
+  }
+}
+
+describe('project-notes budget — frozen at snapshot time, not per assembly', () => {
+  it('a live notes-budget change lands at the next freeze (compaction), not the next assembly', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TestSettingsProvider)
+    const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
+    ctx.provide('systemPrompt', {
+      section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
+        sections.set(def.name, def)
+        return () => {}
+      },
+    })
+    const store = new MutableStore()
+    ctx.provide('memory', store)
+    await ctx.plugin(notes, {})
+    await ctx.plugin(context, { ...CONFIG, notesEnabled: true } as never)
+
+    // Two convention entries: only the first survives the tiny budget once it lands.
+    await store.add({ scope: 'global', content: 'first convention with a fairly long body text', category: 'convention' } as never)
+    await store.add({ scope: 'global', content: 'second convention with a fairly long body text', category: 'convention' } as never)
+
+    const session = { header: { cwd: '' } } as unknown as Session
+    const assembleCtx = { agent: { session } }
+    const notesText = (): string => sections.get('project-notes')!.text(assembleCtx)
+
+    // Freeze under the default budget: both entries render.
+    ctx.emit('session/created', session)
+    expect(notesText()).toContain('first convention')
+    expect(notesText()).toContain('second convention')
+
+    // Shrink the conventions budget live. Assemblies keep serving the FROZEN
+    // snapshot — the change must not apply per assembly.
+    await ctx.settings.update('memory-notes', { notesConventionsCharLimit: 230 })
+    const frozen = notesText()
+    expect(frozen).toContain('second convention')
+    expect(notesText()).toBe(frozen)
+
+    // The compaction boundary is where the budget re-applies: the squeezed
+    // entry now folds into a count line instead of rendering.
+    ctx.emit('session/event', session, { type: 'compaction/end', seq: 101, time: 0, data: { compactionId: 'c-budget' } })
+    const refrozen = notesText()
+    expect(refrozen).not.toBe(frozen)
+    expect(refrozen).toMatch(/\(another \d+ global practices — use memory_search\)/)
   })
 })
