@@ -140,7 +140,7 @@ async function main(): Promise<void> {
     // ── assertions ──────────────────────────────────────────────────────────
     const turn1 = turns[0]
     if (turn1?.systemPrompt === undefined) {
-      expect(false, 'no system prompt captured from turn 1 (request/header event missing)')
+      expect(false, 'no system prompt captured from turn 1 (system/message event missing)')
     } else {
       const fence = memoryIndexFence(turn1.systemPrompt)
       expect(fence !== undefined, 'turn 1 system prompt carries no <memory-index> fence')

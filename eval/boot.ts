@@ -36,7 +36,7 @@ import {
 export interface TurnResult {
   /** Concatenated text of the turn's final assistant message. */
   finalText: string
-  /** The assembled system prompt captured from this turn's request/header. */
+  /** The assembled system prompt captured from this turn's `system/message` event. */
   systemPrompt?: string
   /** Tool calls observed during the turn, paired with their results. */
   toolCalls: Array<{ name: string; args: unknown; ok: boolean }>
@@ -452,8 +452,8 @@ export async function startHarness(options: StartHarnessOptions): Promise<Harnes
     if (collector.systemPrompt !== undefined) lastSystemPrompt = collector.systemPrompt
     return {
       finalText: collector.finalText,
-      // A turn without its own header snapshot (unchanged header) carries the
-      // session's standing prompt forward.
+      // A turn without its own `system/message` event (the harness emits one
+      // only when the rendered prompt changed) carries the standing prompt.
       ...(collector.systemPrompt !== undefined
         ? { systemPrompt: collector.systemPrompt }
         : lastSystemPrompt !== undefined ? { systemPrompt: lastSystemPrompt } : {}),

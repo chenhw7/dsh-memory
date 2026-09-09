@@ -74,9 +74,9 @@ scope 错误将整条封顶 1 分：scope 错误直接破坏所有下游注入�
 
 ## 常驻注入链路评测
 
-主打场景类型把写入路径与常驻注入接成一条链。会话 1 在真实风格的编程或日常工作对话里埋点；runner 等待落盘稳定（review drain 或 dispose flush 完成；`memory.json` 与审计表轮询至稳定）；同一 `$DSH_HOME` 里开启会话 2，从 SDK `request/header` 事件捕获组装后的 system prompt。每个埋点事实随后按链路记分：存储 rubric 分（存得如何）、常驻命中（是否到达会话 2 的 `memory`/`project-notes` 段）、以及（真模型轮次）答案正确性。一次未命中可以被定位为提取失败或注入失败，而不是消失在聚合数里。
+主打场景类型把写入路径与常驻注入接成一条链。会话 1 在真实风格的编程或日常工作对话里埋点；runner 等待落盘稳定（review drain 或 dispose flush 完成；`memory.json` 与审计表轮询至稳定）；同一 `$DSH_HOME` 里开启会话 2，从会话的 `system/message` surface 事件捕获组装后的 system prompt（harness 的第 0 号节点提示词表示；见[捕获迁移 bug-fix 笔记](../bug-fix/2026-09-09-eval-prompt-capture-follows-system-message.zh.md)）。每个埋点事实随后按链路记分：存储 rubric 分（存得如何）、常驻命中（是否到达会话 2 的 `memory`/`project-notes` 段）、以及（真模型轮次）答案正确性。一次未命中可以被定位为提取失败或注入失败，而不是消失在聚合数里。
 
-两种注入模式都测，因为出厂默认已是 index 模式：`full` 给渲染内容块打分；`index` 给索引行质量打分——存在行加 summary 是否足以引导一次 `memory_search`。会糊掉度量的配置项（`decayDays`、curator、`confirmBeforeWrite`、`reviewCandidateThreshold`）经场景类的 profile `cordis.patch.yml` 钉死。
+三种注入模式都在轴上：`full` 给渲染内容块打分；`index` 给索引行质量打分——存在行加 summary 是否足以引导一次 `memory_search`；`digest`（[digest-first 重做](../architecture/2026-09-09-memory-digest-first-fence-and-volatility-ordering.zh.md)以来的出厂默认）以数据不驻留的常驻段加一次性清单消息运行。套件把 `index` 钉为稳定的、数据驻留的测量基线。会糊掉度量的配置项（`decayDays`、curator、`confirmBeforeWrite`、`reviewCandidateThreshold`）经场景类的 profile `cordis.patch.yml` 钉死。
 
 ## 执行设计
 

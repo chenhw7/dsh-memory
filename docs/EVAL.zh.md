@@ -231,7 +231,7 @@ judge 配置按优先级回退：
 | `eval/pilot.ts` | 噪声试点编排：G1–G5 门禁依序跑，judge 缺席 fail loud |
 | `eval/pilot-gate.ts` | 预登记判定规则：fixture 解析 + 五道门的纯函数（vitest 覆盖） |
 | `eval/runner.ts` | 场景执行：seed 链（预写 store → 追问）与 plant 链（对话埋点 → dispose → quiesce → 同 home 新开 handle 追问；noisy 场景改走 review 中段写入，`noisyReviewPatch`）；medium-diff 更新追踪 |
-| `eval/boot.ts` | 临时 home + profile 物化 + `dsh --profile sdk` 子进程 + SDK stdio 驱动；从 `request/header` 事件捕获开场 system prompt |
+| `eval/boot.ts` | 临时 home + profile 物化 + `dsh --profile sdk` 子进程 + SDK stdio 驱动；从 `system/message` 事件捕获组装后的 system prompt |
 | `eval/mechanical.ts` | 机械指标：fence 解析、注入行匹配（逐字 + distinctive token）、噪声、成本 |
 | `eval/judge.ts` | rubric 驱动的存储/召回判定（v2）、env 门控、invalid 协议、updated 条目标记 |
 | `eval/report.ts` | 纯聚合：分片指标（含 register 轴）、独立题 headline、盖印报告、A/B 配对 diff（JSON + Markdown 渲染） |

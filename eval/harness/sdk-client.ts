@@ -442,7 +442,7 @@ export interface ObservedToolCall {
 export interface TurnCollector {
   /** Text of the LAST assistant message seen (the wire-final answer). */
   finalText: string
-  /** Rendered system prompt from the latest request/header snapshot. */
+  /** Rendered system prompt from the latest `system/message` surface event. */
   systemPrompt: string | undefined
   /** Tool calls in arrival order, paired with results when they land. */
   toolCalls: ObservedToolCall[]
@@ -460,10 +460,12 @@ export function emptyTurnCollector(): TurnCollector {
  */
 export function collectSessionEvent(collector: TurnCollector, event: SessionEventPayload): void {
   switch (event.type) {
-    case 'request/header': {
-      const header = event.data['header'] as { system?: unknown } | undefined
-      const system = header?.system
-      collector.systemPrompt = typeof system === 'string' ? system : undefined
+    case 'system/message': {
+      // The rendered prompt is surface node 0 (`system/message`); the
+      // `request/header` event carries config and tools only. An empty-content
+      // node is "no system prompt" and stays '' (not undefined), so the boot's
+      // standing-prompt fallback does not carry a dead prompt forward.
+      collector.systemPrompt = messageText(event.data['message'])
       return
     }
     case 'assistant/message':

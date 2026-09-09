@@ -134,7 +134,8 @@
 7. §7 typertRemote 绑定发现机制、保留方法名清单、信任围栏语义；
 8. §8 slots 契约键名与 scanner 根导出行为；
 9. §9 `ctx.logger` 服务形状（severity 方法集、Exporter 管道）是否变化。
-10. §11 宿主 engines 下限仍覆盖 `node:sqlite` 免 flag 线（≥22.13）——SQLite 后端全部前提。
+10. §11 宿主 engines 下限仍覆盖 `node:sqlite` 免 flag 线（≥22.13），`DatabaseSync` 的 open/prepare/exec（± transaction）形状未变——SQLite 后端全部前提。
+11. §12 eval SDK 会话事件面——`request/header` 载荷与 `system/message` 提示词事件形状是否变化；必跑 `npm run eval:smoke`（该缝无类型护栏，漂移是静默 undefined）。
 
 ## 11. 本地介质：插件自有的 `memory.db`（SQLite 后端）
 
@@ -147,5 +148,17 @@
 - **所有权与边界**：`$DSH_HOME/storages/memory.db` 是本插件命名并完全拥有的新文件（写入路径 `dshHomePath` 惯例，同 `memory.json`）；宿主 storage-json 对它零感知——它不在宿主的 descriptor 清单里，宿主备份/清理逻辑不触碰它。宿主拥有的 `memory.json` 与插件拥有的 `memory.db` 的分界：配置 `storage: 'host-medium'`（默认）时一切数据仍只在 `memory.json`；`storage: 'sqlite'` 时全量数据与整合 meta 都在 `memory.db`，`memory.json` 只留迁移标记。
 - **WAL 伴生文件**：`memory.db-wal` 与 `memory.db-shm` 是 SQLite WAL 模式的固有产物，与主库同生共死；卸载语义 = 删除 `memory.db` 即完整卸载（伴生文件随连接关闭自动回收，残留空伴生文件无害）。宿主若提供 storages 目录的清理工具，须把这三个文件视为一个单元。
 - **experimental 状态**：22.x–24.x 首次使用会向 stderr 打一条 `ExperimentalWarning: SQLite is an experimental feature…`——这是 Node 进程级的 warning 通道输出，不影响 stdout 的 JSON-RPC 帧协议；25.7.0 起升 release candidate 不再打。升级核对时确认宿主对 stderr 的断言（若有）容忍该行。
-- **API 面最小化**：只用 `DatabaseSync` 的 open/prepare/exec（± transaction helper）；`StatementSync` 的迭代语义封在 `SqliteMemoryStore` 之后，不外泄。API 漂移由 §10 清单第 11 项核对。
+- **API 面最小化**：只用 `DatabaseSync` 的 open/prepare/exec（± transaction helper）；`StatementSync` 的迭代语义封在 `SqliteMemoryStore` 之后，不外泄。API 漂移由 §10 清单第 10 项核对。
 - **并发语义**：WAL + `busy_timeout`；单写者语义由集成测试钉死（`tests/integration/composition.spec.ts` 的 SQLite 重开用例）。
+
+## 12. eval 套件的 SDK 会话事件面
+
+| 依赖 | 出处 |
+|---|---|
+| SDK 服务器把全部 `session/event` 原样转发为 `session.event` 通知（无过滤、无投影） | harness 仓库 `packages/sdk/server/src/server.ts:95-97`（2026-09-09 取证） |
+| 系统提示词 = surface 第 0 号节点：`system/message` 事件，载荷 `{turn, step, message}`，`message` 为 role `system`、单 text block 承载渲染后的提示词正文；空 `content` ＝「没有系统提示词」；提示词不变不发新事件，变化时 replace 节点 0 | harness 仓库 `packages/core/agent-loop/src/agent.ts`（turn() 的提交点，紧随 `step/start`）、`.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.md`（2026-09-06 合入） |
+| `request/header` 事件只载 `{config, adapterDefaults?, tools?}`，**不含 `system`** | harness 仓库 `packages/core/session/src/request-header.ts`（`canonicalHeader`）、`packages/core/agent-loop/src/agent.ts:571`（append 点） |
+
+**契约要点**：
+- eval 的提示词捕获点在 `eval/harness/sdk-client.ts` 的 `collectSessionEvent`：折入 `system/message`（`messageText` 提取正文；空 content 节点读作空串而非缺失，`eval/boot.ts` 的 standing 回退才不会把一条已清空的提示词继续带下去）；提示词不变的轮次没有新事件，由 `lastSystemPrompt` 回退承接。
+- 这条缝**没有类型护栏**——SDK 线界是无类型 JSON-RPC 帧（`SessionEventPayload` 只有 `type: string` + `data`），harness 事件面漂移在这里表现为静默 undefined（2026-09-09 实录：harness 移除 `header.system` 后，事件流完好而冒烟归因被「event missing」文案带偏）。§10 清单第 11 项是唯一防线，harness bump 时必跑 `npm run eval:smoke`。
