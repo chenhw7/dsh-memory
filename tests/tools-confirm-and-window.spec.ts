@@ -224,6 +224,34 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
     expect(store.proposals[0]).toMatchObject({ scope: 'global', content: 'proposed convention', category: 'convention', source: 'tool' })
   })
 
+  it('identity_update queues an identity proposal (identityKind) instead of writing', async () => {
+    // Dedicated composition: the shared setup's namespaces carry no identity
+    // keys, and identity_update refuses before confirm mode without
+    // identityEnabled — so this case wires its own settings fake.
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const store = new ScriptedTimeStore()
+    ctx.provide('memory', store)
+    ctx.provide('settings', {
+      get: (ns: string) => ns === 'memory-review'
+        ? { confirmBeforeWrite: true }
+        : ns === 'memory-identity' ? { identityEnabled: true } : { maxSearchResults: 50 },
+    })
+    await ctx.plugin(tool, { maxSearchResults: 50 })
+
+    const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '提案版人格文档' })
+    expect(result.isError).toBe(false)
+    const value = result.value as { updated?: boolean; pending?: boolean; suggestionId?: string }
+    expect(value.updated).toBeUndefined()
+    expect(value.pending).toBe(true)
+    expect(value.suggestionId).toBe('sg-1')
+    expect(store.proposals).toHaveLength(1)
+    expect(store.proposals[0]).toMatchObject({ content: '提案版人格文档', source: 'tool', identityKind: 'soul' })
+    // Nothing reached the identity layer: the document stays unwritten.
+    expect(store.getIdentity('soul')).toBeUndefined()
+  })
+
   it('memory_replace against an existing entry targets it (P1-2) without rewriting it', async () => {
     const { ctx, store } = await setup({ confirmBeforeWrite: true })
     // Seed directly through the store: under confirm mode the tool path

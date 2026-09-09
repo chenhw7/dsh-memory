@@ -1,8 +1,9 @@
 /**
  * storage-domain provider for the long-term memory store. Opens a `memory`
- * domain with four tables (`entries` keyed by `MemoryId`, `audit`, and
- * `suggestions` for the review queue, `meta` for subsystem state rows) and
- * implements the {@link MemoryStore} abstract service against them. Reads are
+ * domain with six tables (`entries` keyed by `MemoryId`, `audit`, and
+ * `suggestions` for the review queue, `meta` for subsystem state rows,
+ * `identity` and `identityHistory` for the identity layer's self-documents)
+ * and implements the {@link MemoryStore} abstract service against them. Reads are
  * synchronous from
  * the domain's authoritative in-memory state; writes serialize on the domain's
  * write chain and reach the backend before updating memory.
@@ -20,6 +21,7 @@ import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
+import { nextIdentityRecord } from './identity-util.js'
 import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
 import {
   CrossProcessGuard,
@@ -38,11 +40,15 @@ import type {
   AuditEntry,
   AuditOp,
   AuditSource,
+  IdentityHistoryRecord,
+  IdentityKind,
+  IdentityRecord,
   MemoryEntry,
   MemoryHealth,
   MemorySearchQuery,
   MemorySuggestion,
   SearchMemoryResult,
+  UpdateIdentityInput,
   UpdateMemoryInput,
 } from '../types.ts'
 
@@ -108,6 +114,7 @@ const suggestionSchema = zod.object({
   content: zod.string(),
   summary: zod.string().optional(),
   projectName: zod.string().optional(),
+  identityKind: zod.enum(['soul', 'user']).optional(),
   hits: zod.number(),
   firstSeenAt: zod.number(),
   lastSeenAt: zod.number(),
@@ -129,17 +136,37 @@ const metaRecordSchema = zod.looseObject({
   updatedAt: zod.number().optional(),
 }) as unknown as zod.ZodType<MemoryMetaRecord>
 
+/** Zod schema for the current record of one identity document. */
+const identityRecordSchema = zod.object({
+  kind: zod.enum(['soul', 'user']),
+  content: zod.string(),
+  version: zod.number(),
+  updatedAt: zod.number(),
+  seedVersion: zod.number(),
+})
+
+/** Zod schema for one identity-document version snapshot (the identity audit surface). */
+const identityHistorySchema = zod.object({
+  kind: zod.enum(['soul', 'user']),
+  version: zod.number(),
+  content: zod.string(),
+  ts: zod.number(),
+  source: zod.enum(['seed', 'tool', 'ui']),
+  sessionId: zod.string().optional(),
+})
+
 /**
  * The memory domain spec: `entries` (memory records keyed by id) plus `audit`
  * (mutation audit trail) plus `suggestions` (P1-1 pending-review queue) plus
  * `meta` (subsystem state rows: consolidation progress, migration markers),
- * plus a global singleton carrying the single-writer owner stamp (P3
- * cross-process detection). Domain version stays at 0 — all four later
- * additions are forward-compatible: storage-json reads only declared tables
- * and initializes any absent table as an empty map, and a medium whose global
- * slot was never written reads as `null`, which the domain replaces with the
- * spec's `initial` without materializing it, so existing v0 media reopen
- * without migration.
+ * plus `identity`/`identityHistory` (the identity layer's self-documents and
+ * their version snapshots), plus a global singleton carrying the single-writer
+ * owner stamp (P3 cross-process detection). Domain version stays at 0 — all
+ * later additions are forward-compatible: storage-json reads only declared
+ * tables and initializes any absent table as an empty map, and a medium whose
+ * global slot was never written reads as `null`, which the domain replaces
+ * with the spec's `initial` without materializing it, so existing v0 media
+ * reopen without migration.
  *
  * The stamp and meta-record schemas accept extra keys on purpose
  * (`looseObject`): the medium holds both as opaque JSON, and a future
@@ -158,6 +185,8 @@ export const memoryDomainSpec = defineDomain({
     audit: domainTable<AuditId, AuditEntry>(auditEntrySchema as unknown as zod.ZodType<AuditEntry>),
     suggestions: domainTable<SuggestionId, MemorySuggestion>(suggestionSchema as unknown as zod.ZodType<MemorySuggestion>),
     meta: domainTable<string, MemoryMetaRecord>(metaRecordSchema),
+    identity: domainTable<IdentityKind, IdentityRecord>(identityRecordSchema as unknown as zod.ZodType<IdentityRecord>),
+    identity_history: domainTable<string, IdentityHistoryRecord>(identityHistorySchema as unknown as zod.ZodType<IdentityHistoryRecord>),
   },
 })
 
@@ -175,6 +204,22 @@ type SuggestionsTable = KvTable<SuggestionId, MemorySuggestion>
 
 /** The meta table from the opened domain (subsystem state rows). */
 type MetaTable = KvTable<string, MemoryMetaRecord>
+
+/** The identity table from the opened domain (current self-document records, keyed by kind). */
+type IdentityTable = KvTable<IdentityKind, IdentityRecord>
+
+/** The identity-history table from the opened domain (version snapshots, keyed `${kind}#${version}`). */
+type IdentityHistoryTable = KvTable<string, IdentityHistoryRecord>
+
+/**
+ * The identity plumbing handed to {@link DomainMemoryStore}. Optional so a
+ * composition (or unit test) can mount the store without the identity layer;
+ * identity writes then fail loud instead of silently no-opping.
+ */
+export interface IdentityTables {
+  readonly identity: IdentityTable
+  readonly identityHistory: IdentityHistoryTable
+}
 
 /**
  * Maximum audit records retained; oldest are trimmed on overflow. Protocol
@@ -206,6 +251,14 @@ const DEFAULT_ENTRIES_CAP = 500
  * lowest-signal rows first: fewest hits, then oldest `lastSeenAt`.
  */
 const DEFAULT_SUGGESTION_CAP = 200
+
+/**
+ * Maximum identity-history snapshots retained per document kind. Overflow
+ * evicts the oldest versions first; reverts therefore can only restore within
+ * this window. Bounded payload: one snapshot is at most the document budget
+ * (a few thousand chars), so 20 kinds' worth of history stays a small table.
+ */
+const IDENTITY_HISTORY_CAP = 20
 
 /**
  * IDF-weighted overlap above which two same-scope proposals count as the
@@ -302,6 +355,8 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
   const audit: AuditTable = domain.table('audit')
   const suggestions: SuggestionsTable = domain.table('suggestions')
   const meta: MetaTable = domain.table('meta')
+  const identity: IdentityTable = domain.table('identity')
+  const identityHistory: IdentityHistoryTable = domain.table('identity_history')
 
   // Backend selection (write-path rework Step 3.2): `sqlite` mounts the
   // plugin-owned memory.db instead of the domain store. The medium's
@@ -323,9 +378,19 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
     // progress, not the migration record.
     const migrated = meta.get(SQLITE_MIGRATION_MARKER)
     const mediumEntries = [...entries.entries()].map(([, entry]) => entry)
-    if (migrated === undefined && mediumEntries.length > 0) {
+    const mediumIdentity = [...identity.entries()].map(([, record]) => record)
+    if (migrated === undefined && (mediumEntries.length > 0 || mediumIdentity.length > 0)) {
       // One-time import: the medium holds data this database has never seen.
-      sqlite.importFromDomain(mediumEntries, [...audit.entries()].map(([, record]) => record), [...suggestions.entries()].map(([, row]) => row))
+      sqlite.importFromDomain(
+        mediumEntries,
+        [...audit.entries()].map(([, record]) => record),
+        [...suggestions.entries()].map(([, row]) => row),
+        mediumIdentity,
+        [...identityHistory.entries()].map(([, record]) => record),
+      )
+      // If a crash occurs after importFromDomain completes but before the medium is
+      // cleared, the next boot re-imports; this is safe because importFromDomain uses
+      // stable primary keys with INSERT OR REPLACE, making re-import idempotent.
       // The imported rows are now memory.db's rows, so the medium's data
       // tables clear before the marker lands. Left in place they would make
       // the next sqlite boot trip the both-sides guard on its own leftovers
@@ -336,13 +401,15 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
       for (const key of [...entries.keys()]) await entries.delete(key)
       for (const key of [...audit.keys()]) await audit.delete(key)
       for (const key of [...suggestions.keys()]) await suggestions.delete(key)
+      for (const key of [...identity.keys()]) await identity.delete(key)
+      for (const key of [...identityHistory.keys()]) await identityHistory.delete(key)
       await meta.put(SQLITE_MIGRATION_MARKER, { key: 'medium', value: new Date().toISOString(), updatedAt: Date.now() })
       ctx.logger.warn(`dsh-memory: imported ${String(mediumEntries.length)} entries from memory.json into ${dbPath} and cleared the medium`)
-    } else if (migrated !== undefined && mediumEntries.length > 0) {
+    } else if (migrated !== undefined && (mediumEntries.length > 0 || mediumIdentity.length > 0)) {
       // Both sides hold data: the medium was written after the migration —
       // a second writer (the migrating boot itself leaves the medium's data
       // tables empty). Failing loud is the only safe answer.
-      throw new Error('dsh-memory: storage: sqlite — the host medium holds entries but carries a migratedToSqlite marker; a host-medium process wrote memory.json after the migration. Reconcile the two stores by hand and remove the stale writes before restarting.')
+      throw new Error('dsh-memory: storage: sqlite — the host medium holds data but carries a migratedToSqlite marker; a host-medium process wrote memory.json after the migration. Reconcile the two stores by hand and remove the stale writes before restarting.')
     }
     ctx.effect(() => async () => { sqlite.close() })
     ctx.provide('memory', sqlite)
@@ -369,7 +436,7 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
   const own = currentBootOwner()
   const mediumReader = resolveMediumReader(ctx)
   const mediumGoodbye = resolveMediumGoodbye(ctx, own.bootId)
-  const store = new DomainMemoryStore(entries, audit, suggestions, meta, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap)
+  const store = new DomainMemoryStore(entries, audit, suggestions, meta, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap, { identity, identityHistory })
   const guard = new CrossProcessGuard(
     own,
     mediumReader,
@@ -484,6 +551,8 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly audit: AuditTable
   private readonly suggestions: SuggestionsTable
   private readonly meta: MetaTable
+  private readonly identity: IdentityTable | undefined
+  private readonly identityHistory: IdentityHistoryTable | undefined
   private readonly auditCap: number
   private readonly suggestionCap: number
   private readonly entriesCap: number
@@ -503,12 +572,15 @@ export class DomainMemoryStore extends MemoryStore {
     suggestionCap: number = DEFAULT_SUGGESTION_CAP,
     failureLogger?: { warn(message: string): void },
     entriesCap: number = DEFAULT_ENTRIES_CAP,
+    identity?: IdentityTables,
   ) {
     super()
     this.entries = entries
     this.audit = audit
     this.suggestions = suggestions
     this.meta = meta
+    this.identity = identity?.identity
+    this.identityHistory = identity?.identityHistory
     this.auditCap = auditCap
     this.suggestionCap = suggestionCap
     this.entriesCap = entriesCap
@@ -848,6 +920,11 @@ export class DomainMemoryStore extends MemoryStore {
    * @throws when the proposed content or summary fails validation or the scanner.
    */
   override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    // Identity proposals (confirm-mode identity_update) take their own queue
+    // path: dedup by document kind, not by scope/content overlap.
+    if (input.identityKind !== undefined) {
+      return this.observeIdentitySuggestion(input)
+    }
     validateProjectScope({ ...input, projectName: input.projectName ?? (input.targetEntryId !== undefined ? this.entries.get(input.targetEntryId)?.projectName : undefined) })
     validateContent(input.content)
     const scan = scanContent(input.content)
@@ -862,17 +939,21 @@ export class DomainMemoryStore extends MemoryStore {
     // Match against existing proposals: same target entry wins outright;
     // otherwise nearest-content in the same scope above the dup threshold.
     let matched: MemorySuggestion | undefined
+    const inputTokens = uniqueTokens(input.content)
     for (const [, suggestion] of this.suggestions.entries()) {
       if (input.targetEntryId !== undefined) {
         if (suggestion.targetEntryId === input.targetEntryId) { matched = suggestion; break }
         continue
       }
+      // Identity rows never match entry proposals: their dedup dimension is
+      // the document kind, not scope/content overlap.
+      if (suggestion.identityKind !== undefined) continue
       if (suggestion.scope !== input.scope) continue
       // The live queue is the corpus: at queue scale (≤ cap rows) rebuilding
       // the df table per row would be wasteful, but the queue is tiny — and
       // the table only needs building once per observe call, not per row.
       const stats = buildCorpusStats([input.content, suggestion.content])
-      const similarity = weightedOverlapSimilarity(stats, uniqueTokens(input.content), uniqueTokens(suggestion.content))
+      const similarity = weightedOverlapSimilarity(stats, inputTokens, uniqueTokens(suggestion.content))
       if (similarity > SUGGESTION_DUP_THRESHOLD) { matched = suggestion; break }
     }
     if (matched !== undefined) {
@@ -901,6 +982,51 @@ export class DomainMemoryStore extends MemoryStore {
       ...input.summary !== undefined ? { summary: input.summary } : {},
       ...input.projectName !== undefined ? { projectName: input.projectName } : {},
       ...input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {},
+      ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+    }
+    await this.suggestions.put(suggestion.id, suggestion)
+    await this.trimSuggestions()
+    return suggestion
+  }
+
+  /**
+   * The identity-proposal queue path (confirm-mode `identity_update`): the
+   * same scanner gates, dedup by document kind — one row per identity
+   * document, a repeated proposal bumps `hits` — and `scope` fixed at
+   * `'global'` (the identity layer is per-user global; the field exists for
+   * the durable row shape).
+   */
+  private async observeIdentitySuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    validateContent(input.content)
+    const scan = scanContent(input.content)
+    if (!scan.allowed) {
+      throw new Error(`suggestion content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const now = Date.now()
+    // Identity proposals dedup by kind alone (not content similarity like entry
+    // proposals): each identity kind has exactly one living document, so the
+    // latest proposal per kind always supersedes earlier ones.
+    for (const [, suggestion] of this.suggestions.entries()) {
+      if (suggestion.identityKind !== input.identityKind) continue
+      const improved = input.content.length > suggestion.content.length && input.content.includes(suggestion.content)
+      const updated: MemorySuggestion = {
+        ...suggestion,
+        content: improved ? input.content : suggestion.content,
+        hits: suggestion.hits + 1,
+        lastSeenAt: now,
+      }
+      await this.suggestions.put(suggestion.id, updated)
+      return updated
+    }
+    const suggestion: MemorySuggestion = {
+      id: SuggestionId(),
+      scope: 'global',
+      content: input.content,
+      hits: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      source: input.source,
+      identityKind: input.identityKind,
       ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
     }
     await this.suggestions.put(suggestion.id, suggestion)
@@ -949,6 +1075,14 @@ export class DomainMemoryStore extends MemoryStore {
     const summary = override?.summary !== undefined
       ? (override.summary.length > 0 ? override.summary : undefined)
       : suggestion.summary
+    // Identity proposal: the human's yes rewrites the document through the
+    // identity write path (source 'ui' — the governance adoption). No memory
+    // entry is created, so the caller sees `undefined` on success.
+    if (suggestion.identityKind !== undefined) {
+      await this.updateIdentity(suggestion.identityKind, content, { source: 'ui' })
+      await this.suggestions.delete(id)
+      return undefined
+    }
     let entry: MemoryEntry | undefined
     if (suggestion.targetEntryId !== undefined && this.entries.get(suggestion.targetEntryId) !== undefined) {
       entry = await this.update(suggestion.targetEntryId, {
@@ -1102,6 +1236,101 @@ export class DomainMemoryStore extends MemoryStore {
     await this.entries.put(id, updated)
     await this.appendAudit('update', id, updated, 'janitor', undefined)
     return updated
+  }
+
+  // ─── Identity documents (the identity layer) ────────────────────────────────
+
+  /** The identity tables, or a loud refusal — identity writes never silently no-op. */
+  private requireIdentityTables(): IdentityTables {
+    if (this.identity === undefined || this.identityHistory === undefined) {
+      throw new Error('this store was mounted without identity tables')
+    }
+    return { identity: this.identity, identityHistory: this.identityHistory }
+  }
+
+  override getIdentity(kind: IdentityKind): IdentityRecord | undefined {
+    return this.identity?.get(kind)
+  }
+
+  override async updateIdentity(kind: IdentityKind, content: string, input: UpdateIdentityInput): Promise<IdentityRecord> {
+    return this.writeIdentity(kind, content, input)
+  }
+
+  override listIdentityHistory(kind: IdentityKind): readonly IdentityHistoryRecord[] {
+    if (this.identityHistory === undefined) return []
+    const all: IdentityHistoryRecord[] = []
+    for (const [key, record] of this.identityHistory.entries()) {
+      if (!key.startsWith(`${kind}#`)) continue
+      all.push(record)
+    }
+    all.sort((a, b) => b.version - a.version)
+    return all
+  }
+
+  override async revertIdentity(kind: IdentityKind, version: number): Promise<IdentityRecord> {
+    const { identityHistory } = this.requireIdentityTables()
+    const snapshot = identityHistory.get(`${kind}#${version}`)
+    if (snapshot === undefined) {
+      throw new Error(`identity history has no version ${String(version)} for '${kind}'`)
+    }
+    return this.writeIdentity(kind, snapshot.content, { source: 'ui' })
+  }
+
+  /**
+   * The shared write path behind update/revert: scanner gate, next version
+   * through the table's atomic read-modify-write, history snapshot, history
+   * trim. Character budgets are NOT enforced here — they are settings, and
+   * the identity service (read side) and the tool (write side) own them.
+   */
+  private async writeIdentity(kind: IdentityKind, content: string, input: UpdateIdentityInput): Promise<IdentityRecord> {
+    const { identity, identityHistory } = this.requireIdentityTables()
+    validateContent(content)
+    const scan = scanContent(content)
+    if (!scan.allowed) {
+      throw new Error(`identity content rejected by scanner: ${scan.reasons.join('; ')}`)
+    }
+    const now = Date.now()
+    let record: IdentityRecord
+    try {
+      // Atomic read-modify-write: the next version re-reads the record
+      // current at this write-chain slot, so two racing rewrites never mint
+      // the same version — the later write lands as the next version instead
+      // of overwriting the winner.
+      record = await identity.update(kind, current => nextIdentityRecord(current, kind, content, input, now))
+    } catch (error) {
+      // First-ever write: no record to read-modify-write. The seed path is
+      // once-per-process guarded by the identity service and the domain's
+      // single-writer guard excludes cross-process racers, so the residual
+      // window is a same-process race between two simultaneous first writes.
+      // Fragile: the fallback to put() relies on error-message text from the host's
+      // KvTable.update; if the host changes its wording this branch may stop firing.
+      // Ideally the host would expose a typed MissingRecordError; until then, keep
+      // the string set narrow and update it when the host is bumped.
+      if (!(error instanceof Error) || !(error.message.includes('missing-key') || error.message.includes('no record'))) throw error
+      record = nextIdentityRecord(undefined, kind, content, input, now)
+      await identity.put(kind, record)
+    }
+    await identityHistory.put(`${kind}#${record.version}`, {
+      kind,
+      version: record.version,
+      content,
+      ts: now,
+      source: input.source,
+      ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+    })
+    await this.trimIdentityHistory(kind)
+    return record
+  }
+
+  /** Trim one document's history to the cap, deleting the oldest versions. */
+  private async trimIdentityHistory(kind: IdentityKind): Promise<void> {
+    if (this.identityHistory === undefined) return
+    const all = this.listIdentityHistory(kind)
+    const excess = all.length - IDENTITY_HISTORY_CAP
+    for (let i = 0; i < excess; i++) {
+      const oldest = all[all.length - 1 - i]!
+      await this.identityHistory.delete(`${kind}#${oldest.version}`)
+    }
   }
 
   /**

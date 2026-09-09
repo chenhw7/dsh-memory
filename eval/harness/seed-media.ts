@@ -53,8 +53,12 @@ export interface StoredEntry {
   readonly updatedAt: number
 }
 
-/** The v0 medium document for a set of seed entries (empty store allowed). */
-export function buildSeedMedium(entries: readonly SeedEntryInput[]): unknown {
+/**
+ * The v0 medium document for a set of seed entries (empty store allowed);
+ * identity documents, when supplied, seed the `identity`/`identity_history`
+ * tables alongside `entries`.
+ */
+export function buildSeedMedium(entries: readonly SeedEntryInput[], identity?: { soul?: string; user?: string }): unknown {
   const table: Record<string, unknown> = {}
   for (const entry of entries) {
     table[entry.id] = {
@@ -71,8 +75,34 @@ export function buildSeedMedium(entries: readonly SeedEntryInput[]): unknown {
   return {
     unit: { name: 'memory', version: 0 },
     global: null,
-    tables: { entries: table },
+    tables: {
+      entries: table,
+      ...(identity === undefined ? {} : buildIdentityTables(identity)),
+    },
   }
+}
+
+/**
+ * The identity tables of a seeded medium (identity-v0 slice): each present
+ * document lands as a version-1 record plus its founding seed snapshot in
+ * the history — exactly the shape a first `updateIdentity(source: 'seed')`
+ * write produces.
+ */
+export function buildIdentityTables(identity: { soul?: string; user?: string }): {
+  identity: Record<string, unknown>
+  identity_history: Record<string, unknown>
+} {
+  const identityTable: Record<string, unknown> = {}
+  const historyTable: Record<string, unknown> = {}
+  for (const kind of ['soul', 'user'] as const) {
+    const content = identity[kind]
+    // The corpus schema already refuses empty strings (min(1)); the guard
+    // keeps direct callers honest too — an empty document seeds nothing.
+    if (content === undefined || content.length === 0) continue
+    identityTable[kind] = { kind, content, version: 1, updatedAt: SEED_TIMESTAMP, seedVersion: 1 }
+    historyTable[`${kind}#1`] = { kind, version: 1, content, ts: SEED_TIMESTAMP, source: 'seed' }
+  }
+  return { identity: identityTable, identity_history: historyTable }
 }
 
 /**
@@ -80,10 +110,14 @@ export function buildSeedMedium(entries: readonly SeedEntryInput[]): unknown {
  * @param dshHome - the throwaway harness home (created if needed).
  * @param entries - the seeded entries; an empty list still writes a valid
  *   empty medium so the store opens over a known state.
+ * @param identity - optional identity documents seeded into the medium's
+ *   `identity`/`identity_history` tables (identity-v0 slice). Seeding is
+ *   axis-independent: an identity-off control run holds the same medium, so
+ *   the injection is the only variable.
  */
-export function seedMemoryMedium(dshHome: string, entries: readonly SeedEntryInput[]): void {
+export function seedMemoryMedium(dshHome: string, entries: readonly SeedEntryInput[], identity?: { soul?: string; user?: string }): void {
   mkdirSync(join(dshHome, 'storages'), { recursive: true })
-  writeFileSync(memoryMediumPath(dshHome), `${JSON.stringify(buildSeedMedium(entries), undefined, 2)}\n`)
+  writeFileSync(memoryMediumPath(dshHome), `${JSON.stringify(buildSeedMedium(entries, identity), undefined, 2)}\n`)
 }
 
 /** Read result for one medium: the entries plus the audit counter. */

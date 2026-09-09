@@ -3,10 +3,13 @@
  *
  * Two surfaces over one store:
  *
- * 1. **Configuration** (unchanged since v0.3.0): four cards inside Settings →
- *    Plugins → Plugin configuration (`settings.plugin.item`) — injection mode,
- *    project notes, auto recall, automatic extraction. All write through the
- *    standard `ctx.settingsScope` transport and apply live.
+ * 1. **Configuration**: five cards inside Settings → Plugins → Plugin
+ *    configuration (`settings.plugin.item`) — injection mode, project notes,
+ *    auto recall, identity, automatic extraction. The host's plugins tab
+ *    dispatches a card only when its slot key names a settings namespace the
+ *    Host serves, so each card's key IS its namespace and `memory-context`
+ *    registers all five host-side. All write through the standard
+ *    `ctx.settingsScope` transport and apply live.
  * 2. **Content management** (phase 1): a dedicated "Memory" settings section
  *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
  *    memory store — an Overview tab with the health dashboard and a Manage tab
@@ -14,6 +17,13 @@
  *    read-only lazily loaded list with soft-decay markers.
  *    Configuration and content are different dimensions: the cards stay where
  *    they are, the section says so in its intro line.
+ * 3. **Identity governance** (the identity layer): a read-only "Identity"
+ *    settings section (id `identity`, order 26) rendering the agent's two
+ *    self-documents — SOUL.md (its character) and USER.md (its understanding
+ *    of the human) — with their retained version history, the revert valve,
+ *    and a plain export. The documents are written by the agent through
+ *    conversation (`identity_update`); the human holds no editor here, only
+ *    governance.
  *
  * The content surface calls the host's `memoryRemote` Typert namespace through
  * the generic `/api` RPC channel (`memoryRemote/<method>`, `{ args }` payload).
@@ -53,12 +63,15 @@ import { MemoryPluginCard } from './MemoryPluginCard.tsx'
 import type { MemoryConfig, MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
 import { MemorySection } from './MemorySection.tsx'
 import type { MemorySectionInjected } from './MemorySection.tsx'
+import { IdentitySection } from './IdentitySection.tsx'
+import type { IdentitySectionInjected } from './IdentitySection.tsx'
 import { namespaceCard } from './NamespaceCard.tsx'
 import type {
   ModelCatalogView, NamespaceCardInjected, NamespaceCardSpec,
 } from './NamespaceCard.tsx'
 import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
+import { IdentitySectionController } from './identity-section-store.ts'
 import { modelOptions, providerOptions, consolidationOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
@@ -77,6 +90,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
 export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
+export type { IdentitySectionInjected, IdentitySectionProps } from './IdentitySection.tsx'
 
 /** The project-notes card: `notesEnabled` + its knobs, from the `memory` namespace. */
 const NOTES_SPEC: NamespaceCardSpec = {
@@ -99,6 +113,18 @@ const AUTORECALL_SPEC: NamespaceCardSpec = {
     { key: 'autoRecallMinChars', kind: 'number', minValue: 1 },
     { key: 'hitSignalEnabled', kind: 'checkbox', labelKey: 'hitSignalEnabled', hintKey: 'hitSignalEnabledHint' },
     { key: 'hitSignalThreshold', kind: 'number', minValue: 0, labelKey: 'hitSignalThreshold', hintKey: 'hitSignalThresholdHint' },
+  ],
+}
+
+/** The identity card: the identity layer's knobs, from the `memory` namespace. */
+const IDENTITY_SPEC: NamespaceCardSpec = {
+  titleKey: 'identityCardTitle',
+  descriptionKey: 'identityCardDescription',
+  fields: [
+    { key: 'identityEnabled', kind: 'checkbox' },
+    { key: 'soulCharLimit', kind: 'number', minValue: 0 },
+    { key: 'userCharLimit', kind: 'number', minValue: 0 },
+    { key: 'identitySeedDir', kind: 'text' },
   ],
 }
 
@@ -155,24 +181,27 @@ const NS = 'settings.memory'
 /** Settings-section nav order — after Plugins (15) and Agent presets (20). */
 const SECTION_ORDER = 25
 
+/** The identity section's nav order — right after the Memory section. */
+const IDENTITY_SECTION_ORDER = 26
+
 /**
- * One `settings.plugin.item` registration. `namespace` is the settings
- * scope to bind (defaults to `key`); it differs when two cards share a
- * namespace (Memory + Project Notes both bind `memory`).
+ * One `settings.plugin.item` registration. The slot is keyed by the settings
+ * namespace the card edits — the host's plugins tab pairs card keys with the
+ * Host's served namespaces, so the key and the bound namespace are the same
+ * string for every card.
  */
 interface CardEntry {
-  /** Slot key — unique per card. */
+  /** Slot key — the card's settings namespace. */
   readonly key: string
-  /** Settings namespace to bind; defaults to `key`. */
-  readonly namespace?: string
   /** Spec for NamespaceCard; absent → curated MemoryPluginCard. */
   readonly spec?: NamespaceCardSpec
 }
 
 const CARDS: readonly CardEntry[] = [
   { key: 'memory' },
-  { key: 'memory-notes', namespace: 'memory', spec: NOTES_SPEC },
-  { key: 'memory-autorecall', namespace: 'memory', spec: AUTORECALL_SPEC },
+  { key: 'memory-notes', spec: NOTES_SPEC },
+  { key: 'memory-autorecall', spec: AUTORECALL_SPEC },
+  { key: 'memory-identity', spec: IDENTITY_SPEC },
   { key: 'memory-review', spec: REVIEW_SPEC },
 ]
 
@@ -246,6 +275,9 @@ function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRe
     suggestList: () => invoke('suggestList'),
     suggestAdopt: request => invoke('suggestAdopt', request),
     suggestReject: request => invoke('suggestReject', request),
+    identityList: () => invoke('identityList'),
+    identityHistory: request => invoke('identityHistory', request),
+    identityRevert: request => invoke('identityRevert', request),
   }
 }
 
@@ -284,18 +316,24 @@ export function apply(ctx: ClientContext): void {
   // The content-management controller rides the generic /api RPC channel to
   // the host's memoryRemote namespace; a deployment without the channel
   // degrades the section to its error state instead of breaking settings.
-  const controller = new MemorySectionController(createMemoryRemoteApi(connection))
+  const remoteApi = createMemoryRemoteApi(connection)
+  const controller = new MemorySectionController(remoteApi)
+
+  // The identity governance controller rides the same channel; it takes the
+  // same face (the identity RPCs are optional on it) so one adapter serves
+  // both sections and old deployments degrade to the empty state.
+  const identityController = new IdentitySectionController(remoteApi)
 
   ctx.effect(() => {
     return ctx.on('connection/reset', () => {
       void controller.load()
+      void identityController.load()
     })
   }, 'dsh-memory: memory section reload on reconnect')
 
   ctx.slots.inject('settings.plugin.item', function* () {
     for (const card of CARDS) {
-      const ns = card.namespace ?? card.key
-      const scope = ctx.settingsScope.bind({ namespace: ns })
+      const scope = ctx.settingsScope.bind({ namespace: card.key })
       if (card.spec === undefined) {
         const typed = scope as SettingsScope<MemoryConfig>
         const injected = (): MemoryPluginCardInjected => ({
@@ -354,4 +392,22 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: sectionInjected,
   }, MemorySection))
+
+  // The identity governance section: a separate nav entry after Memory —
+  // the identity documents are the agent's own surface, not memory entries,
+  // and the settings-section contract keeps them addressable apart.
+  const identityInjected = (): IdentitySectionInjected => ({
+    hooks: { identitySection: identityController.store },
+    load: () => identityController.load(),
+    revert: (kind, version) => identityController.revert(kind, version),
+  })
+
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'identity',
+    order: IDENTITY_SECTION_ORDER,
+    label: () => ctx.locale.bind(NS)('identityNav'),
+    locale: NS,
+    inject: identityInjected,
+  }, IdentitySection))
 }

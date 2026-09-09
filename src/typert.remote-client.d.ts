@@ -32,6 +32,8 @@ export interface MemorySuggestionJson {
   firstSeenAt: number
   lastSeenAt: number
   targetEntryId?: string
+  /** When set, the proposal targets an identity document (confirm-mode identity_update). */
+  identityKind?: 'soul' | 'user'
   source: AuditSourceJson
   sessionId?: string
 }
@@ -45,7 +47,7 @@ export interface MemoryRemoveResult { removed: boolean }
 export interface MemoryPinResult { entry?: MemoryEntryJson; found: boolean }
 export interface MemorySuggestListResult { suggestions: readonly MemorySuggestionJson[] }
 export interface MemorySuggestAdoptRequest { id: string; content?: string; category?: string; summary?: string }
-export interface MemorySuggestAdoptResult { entry?: MemoryEntryJson; found: boolean; error?: string }
+export interface MemorySuggestAdoptResult { entry?: MemoryEntryJson; identity?: { kind: 'soul' | 'user'; version: number }; found: boolean; error?: string }
 export interface MemorySuggestRejectResult { rejected: boolean }
 export interface MemoryHealthResult {
   totalEntries: number
@@ -71,6 +73,26 @@ export interface AuditEntryJson {
 }
 export interface MemoryAuditResult { entries: readonly AuditEntryJson[] }
 
+// Identity governance surface (the identity layer)
+export interface IdentityRecordJson {
+  kind: 'soul' | 'user'
+  content: string
+  version: number
+  updatedAt: number
+  seedVersion: number
+}
+export interface IdentityHistoryJson {
+  kind: 'soul' | 'user'
+  version: number
+  content: string
+  ts: number
+  source: 'seed' | 'tool' | 'ui'
+  sessionId?: string
+}
+export interface MemoryIdentityListResult { soul?: IdentityRecordJson; user?: IdentityRecordJson }
+export interface MemoryIdentityHistoryResult { history: readonly IdentityHistoryJson[] }
+export interface MemoryIdentityRevertResult { reverted?: IdentityRecordJson; error?: string }
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespace$6d656d6f727952656d6f7465 {
     list: (request: { scope?: string; projectName?: string; limit?: number; offset?: number }) => Promise<RemoteResult<MemoryListResult>>
@@ -88,6 +110,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     health: () => Promise<RemoteResult<MemoryHealthResult>>
     projects: () => Promise<RemoteResult<MemoryProjectsResult>>
     auditLog: (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
+    identityList: () => Promise<RemoteResult<MemoryIdentityListResult>>
+    identityHistory: (request: { kind: 'soul' | 'user' }) => Promise<RemoteResult<MemoryIdentityHistoryResult>>
+    identityRevert: (request: { kind: 'soul' | 'user'; version: number }) => Promise<RemoteResult<MemoryIdentityRevertResult>>
   }
   interface TypertRemoteMap {
     'memoryRemote/list': (request: { scope?: string; projectName?: string; limit?: number; offset?: number }) => Promise<RemoteResult<MemoryListResult>>
@@ -105,6 +130,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/health': () => Promise<RemoteResult<MemoryHealthResult>>
     'memoryRemote/projects': () => Promise<RemoteResult<MemoryProjectsResult>>
     'memoryRemote/auditLog': (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
+    'memoryRemote/identityList': () => Promise<RemoteResult<MemoryIdentityListResult>>
+    'memoryRemote/identityHistory': (request: { kind: 'soul' | 'user' }) => Promise<RemoteResult<MemoryIdentityHistoryResult>>
+    'memoryRemote/identityRevert': (request: { kind: 'soul' | 'user'; version: number }) => Promise<RemoteResult<MemoryIdentityRevertResult>>
   }
   interface TypertRemoteNamespaceMap {
     'memoryRemote': TypertRemoteNamespace$6d656d6f727952656d6f7465

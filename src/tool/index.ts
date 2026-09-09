@@ -1,7 +1,8 @@
 /**
- * Model-facing tools over the long-term memory service. Registers seven tools on
- * `ctx.tools`: `memory_search`, `memory_add`, `memory_replace`,
- * `memory_remove`, `memory_forget`, `memory_list`, and `memory_get`. Each tool reads the
+ * Model-facing tools over the long-term memory service. Registers eight tools
+ * on `ctx.tools`: `memory_search`, `memory_add`, `memory_replace`,
+ * `memory_remove`, `memory_forget`, `memory_list`, `memory_get`, and
+ * `identity_update`. Each tool reads the
  * optional `memory` service through `ctx.get('memory')` and fails loud when no
  * provider is composed. Write paths run content through {@link scanContent} at
  * the tool boundary so the model sees a clean rejection before the store is
@@ -17,6 +18,7 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {
+  IdentityKind,
   MemoryCategory,
   MemoryEntry,
   MemoryId,
@@ -26,6 +28,7 @@ import type {
 import { scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { redactBlocked, setAllowlist } from '../scanner.ts'
 import type { ScanAllowlist } from '../scanner.ts'
+import { DEFAULT_SOUL_CHAR_LIMIT, DEFAULT_USER_CHAR_LIMIT } from '../identity/settings.ts'
 
 export const name = 'tool-memory'
 export const inject = ['tools']
@@ -34,6 +37,8 @@ export const inject = ['tools']
 const MEMORY_NS = 'memory'
 /** The `memory-review` settings namespace — read cross-namespace (owned by memory-review). */
 const REVIEW_NS = 'memory-review'
+/** The `memory-identity` settings namespace — read cross-namespace (owned by memory-context). */
+const IDENTITY_NS = 'memory-identity'
 
 /** Default for the search-result cap when the namespace value is absent. */
 const DEFAULT_MAX_SEARCH_RESULTS = 50
@@ -275,6 +280,17 @@ function formatEntryList(header: string, entries: readonly RenderEntry[]): strin
  *   allowlist (§3.10) installed at apply time. The cap is read live per call
  *   so a settings change applies immediately.
  */
+/** Model-facing description for `identity_update`; carries the announce discipline. */
+const IDENTITY_UPDATE_DESCRIPTION =
+  'Rewrite one of your identity documents — the character file (kind "soul", SOUL.md) or your '
+  + 'working profile of the human user (kind "user", USER.md). These documents ARE you: they are '
+  + 'injected into every session and grow through what you learn in conversation. Provide the FULL '
+  + 'new document text (whole-document replace) within the character budget, preserving the section '
+  + 'skeleton. Write deliberately: after a successful rewrite, ALWAYS tell the user what you changed '
+  + 'and why — this is your core, and changes should be known to both sides. The new text takes '
+  + 'effect from the next session. Only available when the identity layer is enabled '
+  + '(the Identity card in plugin configuration).'
+
 export function apply(ctx: Context, config: Config): void {
   // §3.10's production path: install the composition's scanner allowlist
   // before any write path can run, so a documented false positive is
@@ -291,6 +307,14 @@ export function apply(ctx: Context, config: Config): void {
   // live per call so flipping the setting applies to the very next tool call;
   // a deployment without memory-review composed keeps automatic writes.
   let confirmMode = (): boolean => false
+  // The `memory-identity` namespace, read live per call — the enabled gate
+  // plus the two document budgets. Defaults match the settings schema so a
+  // namespace-less deployment behaves like the disabled default.
+  let identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => ({
+    identityEnabled: false,
+    soulCharLimit: DEFAULT_SOUL_CHAR_LIMIT,
+    userCharLimit: DEFAULT_USER_CHAR_LIMIT,
+  })
   ctx.inject(['settings'], (sctx) => {
     fromSettings = (): number => {
       try {
@@ -306,6 +330,15 @@ export function apply(ctx: Context, config: Config): void {
         return ns?.confirmBeforeWrite === true
       } catch { /* namespace not registered yet — confirm mode stays off */ }
       return false
+    }
+    identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => {
+      try {
+        const ns = sctx.settings.get(IDENTITY_NS) as { identityEnabled?: boolean; soulCharLimit?: number; userCharLimit?: number } | undefined
+        const soulCharLimit = typeof ns?.soulCharLimit === 'number' && ns.soulCharLimit >= 0 ? ns.soulCharLimit : DEFAULT_SOUL_CHAR_LIMIT
+        const userCharLimit = typeof ns?.userCharLimit === 'number' && ns.userCharLimit >= 0 ? ns.userCharLimit : DEFAULT_USER_CHAR_LIMIT
+        return { identityEnabled: ns?.identityEnabled === true, soulCharLimit, userCharLimit }
+      } catch { /* namespace not registered yet — the disabled default stands */ }
+      return { identityEnabled: false, soulCharLimit: DEFAULT_SOUL_CHAR_LIMIT, userCharLimit: DEFAULT_USER_CHAR_LIMIT }
     }
   })
   const defaultLimit = (): number => fromSettings()
@@ -1108,6 +1141,88 @@ export function apply(ctx: Context, config: Config): void {
       return {
         card: 'generic',
         title: meta?.unpinned ? 'Memory entry unpinned.' : 'Memory entry not found.',
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'identity_update',
+    description: IDENTITY_UPDATE_DESCRIPTION,
+    timeoutMs: 5000,
+    parameters: {
+      kind: { type: 'string', required: true, enum: ['soul', 'user'], description: 'Which identity document to rewrite: `soul` (your character file) or `user` (your working profile of the human user).' },
+      content: { type: 'string', required: true, description: 'The FULL new document text (whole-document replace). Keep it within the character budget and preserve the section skeleton.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          updated: { type: 'boolean' },
+          kind: { type: 'string', enum: ['soul', 'user'] },
+          version: { type: 'integer' },
+          pending: { type: 'boolean' },
+          suggestionId: { type: 'string' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.updated === true
+          ? `Identity document (${String(value.kind)}) rewritten to version ${String(value.version)}. Tell the user what you changed and why — this is your core, and changes should be known to both sides. The new text takes effect from the next session.`
+          : value.pending === true
+            ? 'Identity proposal queued for human review — the document changes only after a person adopts it in the Memory settings section. Tell the user you proposed a change.'
+            : 'Identity update failed.',
+      }],
+      presentationMeta: (_args, value) => {
+        // `updated` implies the write set kind+version; the ?? fallbacks only
+        // satisfy the schema type (neither field is schema-required).
+        if (value.updated === true) return { kind: value.kind ?? '', version: value.version ?? 0 }
+        return value.pending === true ? { pending: true } : null
+      },
+    },
+    async execute(args) {
+      const store = requireMemory(ctx)
+      const settings = identityConfig()
+      if (!settings.identityEnabled) {
+        throw new Error('identity layer is disabled: enable it in the Identity card of plugin configuration (identityEnabled) to use identity_update')
+      }
+      const kind = args.kind as IdentityKind
+      const limit = kind === 'soul' ? settings.soulCharLimit : settings.userCharLimit
+      if (limit <= 0) {
+        throw new Error(`the ${kind} document budget is 0 (soulCharLimit/userCharLimit in settings) — its injection is disabled, so rewriting it has no effect; raise the budget first`)
+      }
+      if (args.content.length > limit) {
+        throw new Error(`content exceeds the ${kind} document budget: ${String(args.content.length)} > ${String(limit)} characters — compress the document and retry`)
+      }
+      // Empty/blank content is a caller bug; scan at the tool boundary so a
+      // rejected payload never reaches the store (the store re-scans as
+      // defense-in-depth). Same discipline as memory_add.
+      validateContent(args.content)
+      const scan = scanContent(args.content)
+      if (!scan.allowed) {
+        throw new Error(`content rejected: ${scan.reasons.join('; ')}`)
+      }
+      // Human-confirm mode rides the same knob as the memory tools: the
+      // proposal waits for a human yes in the review queue.
+      if (confirmMode()) {
+        const suggestion = await store.observeSuggestion({ scope: 'global', content: args.content, source: 'tool', identityKind: kind })
+        return { pending: true, suggestionId: suggestion.id as string }
+      }
+      const record = await store.updateIdentity(kind, args.content, { source: 'tool' })
+      return { updated: true, kind, version: record.version }
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: 'Update identity document',
+      kind: 'edit',
+      rawInput: { kind: args.kind, content: (args.content as string ?? '').slice(0, 80) },
+    }),
+    presentResult: (_args, result) => {
+      const meta = result.meta as { kind?: string; version?: number } | null
+      if (meta === null || meta === undefined || meta.kind === undefined) return undefined
+      return {
+        card: 'generic',
+        title: `Identity document (${meta.kind}) rewritten to version ${String(meta.version ?? '?')}`,
       }
     },
   }))

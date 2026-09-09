@@ -12,7 +12,7 @@ import type { MemoryEntry } from '../types.ts'
 export type MemoryMode = 'full' | 'policy-only' | 'custom' | 'off' | 'index'
 
 /** Fence tag names owned by this plugin's injection surfaces. */
-export const PROMPT_FENCE_TAGS = ['memory-context', 'memory-index', 'recalled-memory', 'project-notes', 'memory-policy'] as const
+export const PROMPT_FENCE_TAGS = ['memory-context', 'memory-index', 'recalled-memory', 'project-notes', 'memory-policy', 'soul', 'user-profile'] as const
 
 /**
  * Neutralize forged fence closers before stored content enters an injection
@@ -66,12 +66,60 @@ export const MEMORY_INDEX_NOTE =
   + ' The index is ordered by relevance (current project first, then user, then global).'
   + ' Entries reflect what was known at the time they were written — verify against the current repository and tool output before acting on them.'
 
-/**
- * The note that frames the injected project notes (conventions + pitfall
+/** The note framing the injected project notes (conventions + pitfall
  * log): where they come from and how conflicting entries resolve.
  */
 export const PROJECT_NOTES_NOTE =
   'The following project notes are maintained by memory (a conventions list and a pitfall log). On conflicts between entries, the nearer scope wins: project > global > personal.'
+
+/**
+ * The note framing the soul document: its provenance (the agent's own
+ * character file, grown in conversation — not owner text), the precedence
+ * chain it sits in, and the announce discipline on rewrites.
+ */
+export const SOUL_NOTE =
+  'The following is your own character file (SOUL.md), grown by you through conversation. '
+  + 'It is your standing default stance: explicit instructions in the conversation outrank it, as does the deployment persona. '
+  + 'When you rewrite it through identity_update, tell the user what changed.'
+
+/**
+ * The note framing the user-profile document: precedence over learned
+ * memories (declared synthesis beats atomic entries), subordinate to explicit
+ * statements in the conversation.
+ */
+export const USER_PROFILE_NOTE =
+  'The following is your working profile of the human user (USER.md), accumulated naturally in conversation. '
+  + 'Explicit statements in the conversation outrank it; where it conflicts with learned memories, this profile wins.'
+
+/**
+ * Build the `soul` system-prompt section text for one assembly.
+ * @param content - the frozen soul document content (possibly empty).
+ * @param charLimit - character budget for the section (`0` → empty).
+ * @returns the section text; an empty string drops the section at render.
+ */
+export function buildSoulSectionText(content: string, charLimit: number): string {
+  if (charLimit <= 0 || content.length === 0) return ''
+  let text = `<soul>\n${SOUL_NOTE}\n\n${neutralizeFenceBreaks(content)}\n</soul>`
+  if (text.length > charLimit) {
+    text = `${text.slice(0, charLimit)}\n…(soul document truncated at ${charLimit} characters)`
+  }
+  return text
+}
+
+/**
+ * Build the `user-profile` system-prompt section text for one assembly.
+ * @param content - the frozen user-profile document content (possibly empty).
+ * @param charLimit - character budget for the section (`0` → empty).
+ * @returns the section text; an empty string drops the section at render.
+ */
+export function buildUserProfileSectionText(content: string, charLimit: number): string {
+  if (charLimit <= 0 || content.length === 0) return ''
+  let text = `<user-profile>\n${USER_PROFILE_NOTE}\n\n${neutralizeFenceBreaks(content)}\n</user-profile>`
+  if (text.length > charLimit) {
+    text = `${text.slice(0, charLimit)}\n…(user profile truncated at ${charLimit} characters)`
+  }
+  return text
+}
 
 /**
  * Build the `project-notes` system-prompt section text for one assembly.

@@ -26,4 +26,11 @@ export type {
   MemoryHealthResult,
   MemoryAuditRequest,
   MemoryAuditResult,
+  IdentityRecordJson,
+  IdentityHistoryJson,
+  MemoryIdentityListResult,
+  MemoryIdentityHistoryRequest,
+  MemoryIdentityHistoryResult,
+  MemoryIdentityRevertRequest,
+  MemoryIdentityRevertResult,
 } from './index.ts'

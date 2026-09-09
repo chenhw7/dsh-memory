@@ -308,7 +308,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
         get: (n_: string) => (n_ === 'memory' ? store : undefined),
         provide: (_n: string, s: unknown) => { provided2 = s },
         on: () => {},
-        settings: { get: () => ({ notesEnabled: false }) },
+        settings: { get: (ns: string) => ns === 'memory-notes' ? { notesEnabled: false } : undefined },
       } as never
       apply(ctx2)
       const service2 = provided2 as import('../src/notes/index.ts').ProjectNotesService

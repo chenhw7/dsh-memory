@@ -118,6 +118,19 @@ export type EvalNoisePattern = z.infer<typeof noisePatternSchema>
 export const workspaceSchema = z.enum(['demo-app', 'monorepo'])
 export type WorkspaceTemplate = z.infer<typeof workspaceSchema>
 
+/**
+ * The identity-layer seed (identity-v0 slice): documents pre-written into the
+ * medium's `identity` table before the run, injected as the `soul` /
+ * `user-profile` prompt sections when the run's identity axis is on. The
+ * runner seeds them axis-independently, so an off-axis control run holds the
+ * same medium and the only variable is the injection.
+ */
+export const identitySeedSchema = z.strictObject({
+  soul: z.string().min(1).optional(),
+  user: z.string().min(1).optional(),
+})
+export type EvalIdentitySeed = z.infer<typeof identitySeedSchema>
+
 export const scenarioSchema = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(['plant', 'seed']),
@@ -129,6 +142,8 @@ export const scenarioSchema = z.strictObject({
   patterns: z.array(noisePatternSchema).optional(),
   /** Fixture repository materialized as the child's cwd; see {@link workspaceSchema}. */
   workspace: workspaceSchema.optional(),
+  /** Identity documents pre-seeded into the medium (identity-v0 slice). */
+  identitySeed: identitySeedSchema.optional(),
   turns: z.array(turnSchema).optional(),
   seedEntries: z.array(seedEntrySchema).optional(),
   /** Per-planted-fact metadata (noise slice); see {@link plantFactSchema}. */

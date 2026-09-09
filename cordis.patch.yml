@@ -1,9 +1,10 @@
 # @chenhw7/dsh-memory — long-term memory bundle patch for the DeepSeek Harness.
 #
-# Installs the memory store provider, six model-facing memory tools, automatic
-# review + flush extraction, the project-notes prompt projection, and
-# system-prompt context injection as ONE layer over dsh-base. The memory rows
-# point at this
+# Installs the memory store provider, nine model-facing memory tools plus the
+# identity_update agent tool, automatic
+# review + flush extraction, the project-notes prompt projection, the identity
+# layer, and system-prompt context injection as ONE layer over dsh-base. The
+# memory rows point at this
 # package's own export sub-paths; the two storage rows are NOT inserted here
 # because dsh-web-app already provides them (storage-json + storage-domain
 # with the correct root path). For a headless profile that has no storage
@@ -39,6 +40,12 @@
     # cleans up file-export artifacts left by ≤0.5.x.
     - id: memory-notes
       name: '@chenhw7/dsh-memory/notes'
+
+    # Identity layer: seeds and reads the agent's self-documents (SOUL.md /
+    # USER.md) from the store's identity tables; memory-context injects them
+    # as the `soul` (80) and `user-profile` (81) prompt sections.
+    - id: memory-identity
+      name: '@chenhw7/dsh-memory/identity'
 
     # System-prompt section injection + frontend settings namespace.
     - id: memory-context

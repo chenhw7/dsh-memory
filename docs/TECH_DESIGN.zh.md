@@ -87,15 +87,16 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 
 ### 5.1 Bundle 组成
 
-`dsh.bundle.patch` manifest 字段指向 `cordis.patch.yml`，它在 `dsh-base` 上插入七行。行顺序不承载加载语义，分组只为可读性。
+`dsh.bundle.patch` manifest 字段指向 `cordis.patch.yml`，它在 `dsh-base` 上插入八行。行顺序不承载加载语义，分组只为可读性。
 
 | 行 | 必需（`inject`） | 可选（经 `ctx.get` 读取） | 角色 |
 |---|---|---|---|
 | `memory-root` | — | — | 无操作根条目，供客户端模块扫描器发现 |
 | `memory-store` | `storageDomain` | — | 打开 `memory` 域（entries + audit + suggestions + meta）；注册 `ctx.memory` |
-| `tool-memory` | `tools` | `memory`, `settings` | 注册八个模型工具（人审模式感知） |
+| `tool-memory` | `tools` | `memory`, `settings` | 注册十个模型工具（人审模式感知） |
 | `memory-review` | `llm` | `memory`, `sessionProjections`, `settings` | 累加器 + 周期 review + flush + two-tier 整合 + janitor + curator + 建议队列生产者；持有 `memory-review` 命名空间 |
 | `memory-notes` | — | `memory`, `settings` | 注册 `ctx.projectNotes`；渲染 `project-notes` prompt 快照（纯内存）；清理 ≤0.5.x 文件残留 |
+| `memory-identity` | — | `memory`, `settings` | 注册 `ctx.identity`；从 store 身份表播种并读取两份自我文档（SOUL.md / USER.md）（§7.10） |
 | `memory-context` | `systemPrompt` | `memory`, `settings`, `projectNotes`, `llm` | prompt 注入段 + 自动召回中间件；持有 `memory` 命名空间 |
 | `memory-remote` | `memory` | — | 记忆管理 UI 的 `@Remote` 服务 |
 
@@ -103,14 +104,15 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 flowchart TB
   subgraph host["dsh host · Cordis 组合"]
     base["dsh-base + dsh-web-app 层<br/>(session · agent · llm · tools · systemPrompt · settings · compaction · storage-json + storage-domain)"]
-    subgraph bundle["@chenhw7/dsh-memory — 一层七行"]
+    subgraph bundle["@chenhw7/dsh-memory — 一层八行"]
       root["memory-root<br/>无操作扫描入口"]
       store["memory-store · /store<br/>ctx.memory provider + BM25 检索<br/>entries + audit + suggestions + meta 四张表"]
-      tool["tool-memory · /tool<br/>八个模型工具（人审模式感知）"]
+      tool["tool-memory · /tool<br/>十个模型工具（人审模式感知）"]
       review["memory-review · /review<br/>累加器 + LLM 提取 + two-tier 整合<br/>+ janitor + curator + 人审队列 · memory-review ns"]
       notes["memory-notes · /notes<br/>project-notes prompt 投影 · ctx.projectNotes<br/>≤0.5.x 文件残留清理"]
+      identity["memory-identity · /identity<br/>自我文档服务 · ctx.identity<br/>seed-once + 读快照（§7.10）"]
       context["memory-context · /context<br/>memory @90 + project-notes @91 段<br/>自动召回中间件 · memory ns"]
-      remote["memory-remote · /remote-service<br/>UI 用 @Remote 服务（14 个方法）"]
+      remote["memory-remote · /remote-service<br/>UI 用 @Remote 服务（18 个方法）"]
     end
   end
   base ==> bundle
@@ -121,6 +123,7 @@ flowchart TB
   store -- "ctx.get('memory')" --> remote
   review -- "ctx.llm.stream（会话路由或覆盖）" --> llm["LLM provider / model"]
   notes -- "snapshotFor(cwd)" --> context
+  identity -- "snapshotFor()" --> context
   store -- "串行化写入" --> json["$DSH_HOME/storages/memory.json"]
 ```
 
@@ -292,11 +295,13 @@ interface MemoryEntry {
 
 ### 6.3 持久化布局
 
-- store provider 打开名为 **`memory`** 的 storage-domain（版本 0），含**四张表**：
+- store provider 打开名为 **`memory`** 的 storage-domain（版本 0），含**六张表**：
   - `entries` — 以 `MemoryId` 为键的 KV 表。记录加载时经 Zod schema 校验。
   - `audit` — 以 `AuditId` 为键的 KV 表。属向前兼容的新增：storage-json 把缺失表初始化为空 map，旧 v0 介质无需迁移即可重新打开。
   - `suggestions` — 以 `SuggestionId` 为键的 KV 表，承载待确认人审队列（§7.3.6）。同样是向前兼容的故事：P1 之前的介质重新打开时该表初始化为空。
   - `meta` — 以普通字符串为键的 KV 表，承载既非记忆、也非审计记录或建议的子系统状态行：整合进度（`consolidation:*` 键，如 last-run/cooldown 时间戳）、介质层迁移标记（`medium:*`，如 `migratedToSqlite`）与 schema 标记（`schema:*`）。记录是宽容载体 `{ key: 'consolidation' | 'medium' | 'schema', value?, updatedAt? }`（loose zod schema）：未知键与未知字段重读不报错，meta 之前的介质重新打开时该表初始化为空。store 暴露 `getMeta(key)`/`setMeta(key, record)`；写失败记为被吞的后台失败（`meta-write`），绝不抛给调用方。
+  - `identity` — 以文档类别（`'soul'` | `'user'`）为键的 KV 表，承载每份身份文档的现行记录（§7.10）：`{ kind, content, version, updatedAt, seedVersion }`。与 `audit` 同为向前兼容新增：identity 之前的介质重新打开时该表初始化为空。
+  - `identity_history` — 以 `` `${kind}#${version}` `` 为键的 KV 表，承载全量版本快照；身份层的审计面（以 entryId 为键的 `audit` 表装不下身份写入）。每类封顶 **20 版**、最旧先淘汰——回滚因此只能在该窗口内恢复。
 - **审计表**为每次 `add`/`update`/`remove`（pin/unpin 变更不写审计）追加一条 `AuditEntry`：
   - `source`：`'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` —— 触发者。经批量整合 `supersedeEntry` 接口落下的 supersede 复用 `'janitor'`：`AuditSource` 枚举没有整合成员，扩展持久化枚举形状不是该接口的职责（与 `trimEntries` 淘汰记录同一理由）。
   - `op`：`'add'` | `'update'` | `'remove'`。
@@ -307,7 +312,7 @@ interface MemoryEntry {
   - **条目表封顶 `entriesCap`（默认 500，store 行 Config 可配）**：`add` 成功后收敛到上限，淘汰序 **pinned 绝不淘汰 → `accessCount` 升序 → `lastRecalledAt ?? createdAt` 升序**（最久未用先走）；全部候选受保护时允许超限（软目标）。淘汰记 `remove`/`janitor` 审计。
 - **读取**同步自域的内存权威状态；**写入**在域写链上串行化，先落 JSON 后端再更新内存。
 - 宿主的 `storage-json` 后端把整个域持久化到 `$DSH_HOME/storages/memory.json`（Windows：`%USERPROFILE%\.dsh\storages\memory.json`）。
-- **SQLite 后端（`memory-store` 行的 `storage: 'sqlite'`，Step 3）**：store 挂载 `SqliteMemoryStore`，基于 `node:sqlite` 的 `DatabaseSync`，落在插件自有的 `$DSH_HOME/storages/memory.db`（WAL 模式、`busy_timeout` 5 秒；`-wal`/`-shm` 伴生文件与主库同属一个单元——见 `docs/HOST_CONTRACT.zh.md` §11）。读取按行同步读出（读语义相同）；写入每记录一条语句，entries + audit 同事务落定——没有全文件重发布。表：`entries`（MemoryEntry 列）、`audit`、`suggestions`、`meta`（`id`/`key` 主键）。一次性迁移：sqlite 首启遇到非空且无标记的介质时逐条导入 entries + audit + suggestions，随后清空介质三张数据表，再把 `medium:migratedToSqlite` 标记写进介质 meta 表（先清后写标记，两步之间被中断的下次启动看到的是空且无标记的介质，干净启动）；任一后端再启动时介质同时有数据与标记即 fail loud——有了清空，该状态只可能来自迁移后的 host-medium 写入者（两个活真源会分叉）。
+- **SQLite 后端（`memory-store` 行的 `storage: 'sqlite'`，Step 3）**：store 挂载 `SqliteMemoryStore`，基于 `node:sqlite` 的 `DatabaseSync`，落在插件自有的 `$DSH_HOME/storages/memory.db`（WAL 模式、`busy_timeout` 5 秒；`-wal`/`-shm` 伴生文件与主库同属一个单元——见 `docs/HOST_CONTRACT.zh.md` §11）。读取按行同步读出（读语义相同）；写入每记录一条语句，entries + audit 同事务落定——没有全文件重发布。表：`entries`（MemoryEntry 列）、`audit`、`suggestions`、`meta`（`id`/`key` 主键）、`identity`（`kind` 主键）、`identity_history`（`${kind}#${version}` 主键）。一次性迁移：sqlite 首启遇到非空且无标记的介质时逐条导入 entries + audit + suggestions + identity + identity_history，随后清空介质五张数据表，再把 `medium:migratedToSqlite` 标记写进介质 meta 表（先清后写标记，两步之间被中断的下次启动看到的是空且无标记的介质，干净启动）；任一后端再启动时介质同时有数据与标记即 fail loud——有了清空，该状态只可能来自迁移后的 host-medium 写入者（两个活真源会分叉）。
 - 卸载插件**不会**删除记忆；删除该文件即清空数据（SQLite 后端为 `memory.db` 及其 WAL 伴生文件）。
 
 ### 6.4 建议队列记录
@@ -324,16 +329,17 @@ interface MemorySuggestion {
   readonly firstSeenAt: number     // Unix epoch ms
   readonly lastSeenAt: number
   readonly targetEntryId?: MemoryId // 提议改写既有条目时设置（P1-2）
+  readonly identityKind?: 'soul' | 'user' // 提议指向身份文档时设置（§7.10）
   readonly source: AuditSource     // 'review' | 'flush' | 'tool'
   readonly sessionId?: string
 }
 ```
 
-一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；拒绝 → 删除该行）。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 Jaccard > 0.15 的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
+一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；拒绝 → 删除该行）。身份提议（`identityKind` 已设置，confirm 模式下的 `identity_update`）是队列的第二类：去重以文档类别为键而非作用域/内容重叠，`scope` 为持久化行形状固定为 `'global'`，采纳经身份写路径改写文档（`source: 'ui'`）且不产生任何记忆条目；条目提议永不与身份行相配——两个去重维度保持分离。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 Jaccard > 0.15 的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
 
 ### 6.5 会话事件词汇
 
-`memory/added`、`memory/updated`、`memory/removed` 声明在会话的 `SessionEventMap` 上，是**仅记日志**事件（无 `surfaceOp`，不进入派生历史）。它们为未来的仪表化（审计轨迹、UI 时间线）保留接缝而不引入破坏性变更。
+`memory/added`、`memory/updated`、`memory/removed` 声明在会话的 `SessionEventMap` 上，是**仅记日志**事件（无 `surfaceOp`，不进入派生历史）。它们为未来的仪表化（审计轨迹、UI 时间线）保留接缝而不引入破坏性变更。`identity/updated {kind, version}` 沿同一模式：仅声明词汇、当前无发射点（工具执行不携带 session 句柄）——对话内告知由 `identity_update` 工具结果文案承载，持久审计面是 `identity_history` 表。
 
 ---
 
@@ -372,7 +378,7 @@ interface MemorySuggestion {
 
 ### 7.2 模型工具 — `/tool`（`src/tool/index.ts`）
 
-经 `defineTool`（schemastery 参数 schema）注册八个工具，每个 5 秒超时、带转写 `render` 文本与 UI 卡片（`presentationMeta` + `presentCall`/`presentResult`）：
+经 `defineTool`（schemastery 参数 schema）注册十个工具，每个 5 秒超时、带转写 `render` 文本与 UI 卡片（`presentationMeta` + `presentCall`/`presentResult`）：
 
 | 工具 | 关键参数 | 结果 | 语义要点 |
 |---|---|---|---|
@@ -385,6 +391,7 @@ interface MemorySuggestion {
 | `memory_pin` | `id` | `{ pinned }` | id 不存在 → `pinned: false` |
 | `memory_unpin` | `id` | `{ unpinned }` | id 不存在 → `unpinned: false` |
 | `memory_forget` | `topic`, `scope?`, `category?`, `projectName?`, `confirm` | `{ removedCount, removedIds, pinnedSkipped? }` | **危险批量删除**——按 BM25 词法匹配（content 与 summary，含休眠条目）删除主题相关条目；无 `confirm: true` 拒绝；pinned 条目永不删除（经 `pinnedSkipped` 报告）；批量超过搜索上限一半拒绝（失控护栏）；每条删除独立记一条 `remove` 审计 |
+| `identity_update` | `kind`（`soul`\|`user`）、`content` | `{ updated, kind, version }` 或 `{ pending, suggestionId }` | **身份层唯一的作者面**（§7.10）：整文档替换一份自我文档，三重门——`identityEnabled`、按类别的字符预算（`soulCharLimit`/`userCharLimit`）、scanner；描述与结果文案承载告知纪律（改了什么要告诉用户）；confirm 模式下提案携带 `identityKind` 入队，人采纳前不写 |
 
 设计要点：
 
@@ -427,7 +434,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 - **项目名自动探测：** `inferProjectName(session)` 取 `session.header?.cwd` 的 basename；未显式携带 projectName 的 project 作用域提取结果继承它。
 - **防伪造归一化：** `flattenFragment` 在进 prompt 前抹平一切换行，会话文本无法伪造行式输出协议或破坏编号。快照行额外过 `redactBlocked`。
 - **提示词（固定 system prompts）：**
-  - `REVIEW_SYSTEM_PROMPT` —— 作用域路由规则、准入规则（瞬态/未验证内容永不入库；流程必须经工具执行验证；偏好/约定须显式要求或主题出现两次以上；**负面准则：仓库已记录的一切——代码结构、API、文件路径、git 历史、diff、已修复 bug 的经过——都不属于记忆**）、类别标签、以及当前记忆快照（`renderMemorySnapshot`）以便略过已存事实。
+  - `REVIEW_SYSTEM_PROMPT` —— 作用域路由规则、准入规则（瞬态/未验证内容永不入库；流程必须经工具执行验证；偏好/约定须显式要求或主题出现两次以上；**负面准则：仓库已记录的一切——代码结构、API、文件路径、git 历史、diff、已修复 bug 的经过——都不属于记忆**；身份文档的复述永不入库——见 §7.10 防回声）、类别标签、当前记忆快照（`renderMemorySnapshot`）以便略过已存事实，以及已注入的身份文档（`renderIdentityDocuments`）作为防回声规则的所指。
   - `PITFALL_SYSTEM_PROMPT` —— 将 `pitfall-resolved` 候选蒸馏为结构化条目 `project: [pitfall] 症状：…。根因：…。修复：…。`，只允许使用片段中出现过的证据。
   - `FLUSH_SYSTEM_PROMPT` —— 压缩/销毁版 review 规则，携带同样的负面准则。
   - `CURATOR_SYSTEM_PROMPT` —— 以 id 寻址的改写协议 `<id>: <rewritten line>`（§7.3.5）。
@@ -500,14 +507,17 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 #### 设置命名空间
 
-两个命名空间，均为 live：
+五个命名空间——每个插件配置卡片一个，全部实时生效。宿主的 Plugins 页签只在卡片 slot key 指向一个已注册命名空间时才分发该卡片，因此四个 memory 家族命名空间都由 `memory-context` 注册（一卡一命名空间；组合配置保持一份完整形状，各命名空间的 base 层投影自己的切片）：
 
 | 命名空间 | 持有者 | 键（默认值） |
 |---|---|---|
-| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30), `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100), `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
+| `memory` | `memory-context` | `memoryMode` (`index`), `memoryPolicyCustomText` (""), `memoryCharLimit` (5000), `memoryMaxEntries` (20), `maxSearchResults` (50), `decayDays` (30) |
+| `memory-notes` | `memory-context` | `notesEnabled` (true), `notesCharLimit` (4000), `notesMaxEntriesPerFile` (100) |
+| `memory-autorecall` | `memory-context` | `autoRecallEnabled` (false), `autoRecallLimit` (5), `autoRecallMinChars` (12), `hitSignalEnabled` (false), `hitSignalThreshold` (0.25) |
+| `memory-identity` | `memory-context` | `identityEnabled` (false), `soulCharLimit` (2000), `userCharLimit` (3000), `identitySeedDir` ("") |
 | `memory-review` | `memory-review` | `reviewEnabled` (true), `reviewCandidateThreshold` (10), `flushOnCompaction` (true), `flushOnDispose` (true), `extractionModelProvider` (""), `extractionModelModel` (""), `extractionBudget` (20), `judgeEnabled` (true), `consolidation` (`two-tier`), `pitfallStreakThreshold` (2), `curatorEnabled` (true), `curatorEveryNSessions` (20), `curatorMaxEntries` (5), `curatorMinChars` (400), `confirmBeforeWrite` (false), `sweepEnabled` (false), `sweepEveryNSessions` (20), `sweepTopN` (20) |
 
-两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`，`memory-review` 从 `memory` 拉 `decayDays`，`memory-notes` 经 `resolveNotesSettings` 拉 `notes*` 切片（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）。
+两者按相同分层 resolve：schema 默认 → 组合 `config:` base → 用户文档（`$DSH_HOME/settings.yaml`）；处理器逐事件重读 resolved 值。跨命名空间的消费方防御性读取：`tool-memory` 从 `memory` 拉 `maxSearchResults`、从 `memory-review` 拉 `confirmBeforeWrite`、从 `memory-identity` 拉身份门与预算；`memory-review` 从 `memory` 拉 `decayDays`；`memory-notes` 经 `resolveNotesSettings` 拉 `memory-notes` 命名空间（0.5.x 的 `notesDir`/`notesAgentsPointer` 值被静默忽略）；identity 插件经 `resolveIdentitySettings` 拉 `memory-identity`。
 
 #### 项目笔记投影（`src/notes/`，0.6 起 prompt-only）
 
@@ -524,7 +534,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 #### System prompt 注入段（`src/context/`）
 
-- 两个注入段：顺序 90 的 **`memory`** 与顺序 91 的 **`project-notes`**（都在工具指引 100–199 之前）。
+- 四个注入段：身份层启用时为顺序 80 的 **`soul`** 与顺序 81 的 **`user-profile`**（位于宿主 `deployment:persona`（order 0）之后、memory 之前），随后是顺序 90 的 **`memory`** 与顺序 91 的 **`project-notes`**（都在工具指引 100–199 之前）。
 - **冻结快照：** `session/created` 时（干净的 `compaction/end` 上重跑——被认可的前缀破坏点）`freezeFor(session)` 构建：
   - `content` —— `readMemorySnapshot`：健康条目的分作用域 `## <scope>` bullet 列表，逐行 `redactBlocked`、冲突标注（见下）、折叠掉软衰减条目时的尾部计数说明、截断到 `memoryCharLimit` **以及条目数上限 `memoryMaxEntries`（默认 20，0 = 无限制）**，末尾以 `≈N tokens` 估算收尾，使注入成本始终可见（4 字符/token 启发式）；
   - `index` —— `readMemoryIndex`：`renderMemoryIndex` 存在性行（`<scope/category> · <project> · <id> · <summary-or-content[:80]>`——条目的 `summary` 优先于截断正文），层级排序 project → user → global，预算耗尽时折叠为类别汇总行；
@@ -582,7 +592,7 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 
 ### 7.7 `@Remote` 服务 — `/remote-service`（`src/remote/`）
 
-`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露十五个可从浏览器调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
+`MemoryRemoteService extends TypertRemoteService`，由 `memory-remote` 行构造并挂到 `ctx.memoryRemote`。它包装 `MemoryStore`，暴露十八个可从浏览器调用的 `@Remote` 方法。写入依旧经 store 契约做扫描门控；错误以 `{ error }` 返回而非抛出。
 
 | 方法 | 线上请求 | 线上结果 | 说明 |
 |---|---|---|---|
@@ -601,26 +611,30 @@ system prompt 不动——该块只搭乘本步的消息通道，KV-cache 前缀
 | `health` | — | `{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` | 同步；`stale` 为软衰减计数透传，`backgroundFailures` 为按站点的后台失败计数透传 |
 | `projects` | — | `{ projects[] }` | 从 `store.list('project')` 聚合 distinct `projectName`（remote 层聚合，不改 store），供工作区选择器 |
 | `auditLog` | `MemoryAuditRequest` (limit?) | `{ entries[] }` | 最新尾部，默认 100 |
+| `identityList` | — | `{ soul?, user? }` | 两份文档的现行记录；字段缺失 = 从未写入（身份未启用或未播种）。读方法，不设门 |
+| `identityHistory` | `MemoryIdentityHistoryRequest` (kind) | `{ history[] }` | 保留的版本快照，新版本在前（每类 ≤20）。读方法，不设门 |
+| `identityRevert` | `MemoryIdentityRevertRequest` (kind, version) | `{ reverted?, error? }` | 异步；**治理阀门**——把一个保留版本恢复为新版本（历史永不销毁），受 `remoteWritesEnabled` 与独立开关 `identityRevertEnabled`（默认**开**）共同控制 |
 
-条目投影 `MemoryEntryJson` 含 `summary?` 与 `staleSince?`（软衰减/归档时间戳）；建议投影 `MemorySuggestionJson` 携带 `hits`、`firstSeenAt`/`lastSeenAt`、`targetEntryId?` 与溯源（`source`、`sessionId?`）。
+条目投影 `MemoryEntryJson` 含 `summary?` 与 `staleSince?`（软衰减/归档时间戳）；建议投影 `MemorySuggestionJson` 携带 `hits`、`firstSeenAt`/`lastSeenAt`、`targetEntryId?`、`identityKind?` 与溯源（`source`、`sessionId?`）；身份采纳以 `{ identity: { kind, version } }` 返回且无 `entry`（采纳前先读行上的类别，store 的 `undefined` 返回——身份为成功、条目为行已消失——据此在 wire 上区分）。
 
 线上类型在 `src/remote/index.ts`；客户端镜像为手写的 `typert.remote-client.*` 产物（以 `./remote` 导出，需随方法变更手动同步）。
 
-**部署安全（已核实宿主源码）：** 服务自身携带一个部署级写开关——`remoteWritesEnabled`（`memory-remote` row 的 Config，schemastery 缺省 `false`）：七个写方法（`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`）在触碰 store 前检查该开关，关闭时以各方法的 wire 形态拒绝（有 error 字段的返回 `{ error }`，其余返回 no-op），读方法不受影响；客户端把拒绝经 `actionError` 透传。这不是按请求鉴权——`trustedHosts` 是宿主侧配置本包读不到、网关也不向 `@Remote` 方法传请求头——所以传输层的 `api-request-trust` 栅栏（loopback / 部署派生 LAN 字面量 / 声明式 `trustedHosts`，防 DNS rebinding 与跨站请求）仍是第一道门，写开关是第二道：缺省部署下非本机调用方即使过了传输栅栏也写不进记忆库。
+**部署安全（已核实宿主源码）：** 服务自身携带一个部署级写开关——`remoteWritesEnabled`（`memory-remote` row 的 Config，schemastery 缺省 `false`）：八个写方法（`add`/`update`/`removeEntry`/`pin`/`archive`/`suggestAdopt`/`suggestReject`/`identityRevert`）在触碰 store 前检查该开关，关闭时以各方法的 wire 形态拒绝（有 error 字段的返回 `{ error }`，其余返回 no-op），读方法不受影响。`identityRevert` 在该开关之上还有独立的 `identityRevertEnabled`（默认**开**，§7.10 的治理阀门）：回滚恢复的是已存在过的内容（每个保留版本都过过 scanner 且曾是现行版），因此专属开关默认开，其存在意义是在已开放写入的部署上仍可单独关掉回滚；客户端把拒绝经 `actionError` 透传。这不是按请求鉴权——`trustedHosts` 是宿主侧配置本包读不到、网关也不向 `@Remote` 方法传请求头——所以传输层的 `api-request-trust` 栅栏（loopback / 部署派生 LAN 字面量 / 声明式 `trustedHosts`，防 DNS rebinding 与跨站请求）仍是第一道门，写开关是第二道：缺省部署下非本机调用方即使过了传输栅栏也写不进记忆库。
 
 ### 7.8 客户端 UI — `/client`（`src/client/`）
 
-客户端有两类界面：Plugins 页签内的**四张配置卡片**，以及 Settings 独立导航区的 **Memory 内容管理区**（二期：完整写路径——三个 tab 分别覆盖健康仪表盘、待确认提议审核队列、带写操作的条目管理）。
+客户端有两类界面：Plugins 页签内的**五张配置卡片**，以及 Settings 独立导航区的 **Memory 内容管理区**（二期：完整写路径——三个 tab 分别覆盖健康仪表盘、待确认提议审核队列、带写操作的条目管理）。**身份治理区**（id `identity`、order 26，紧随 Memory）是身份层的只读表面：两份文档带版本历史渲染、两步回滚阀门、markdown 导出——任何位置都没有编辑器；文档由 AI 在对话中书写，人只治理（§7.10）。身份层的*配置*不在这个区里，而在下文 Plugins 页签的 `memory-identity` 卡片。
 
 #### 配置卡片（`settings.plugin.item` slot）
 
-向 Settings → Plugins → Plugin configuration 贡献**四张卡片**，全部经 `ctx.settingsScope.bind({ namespace })` 绑定、实时生效：
+向 Settings → Plugins → Plugin configuration 贡献**五张卡片**，全部经 `ctx.settingsScope.bind({ namespace })` 绑定、实时生效。宿主的分发契约是**一卡一命名空间**：卡片的 slot key 必须是宿主已注册（`settings.describe` 可见）的 settings namespace，`memory-context` 因此在宿主侧注册全部五个：
 
-| 卡片（slot key） | 命名空间 | 组件 | 字段 |
-|---|---|---|---|
-| `memory` | `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
-| `memory-notes` | `memory` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
-| `memory-autorecall` | `memory` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1）, `hitSignalEnabled`, `hitSignalThreshold`（min 0） |
+| 卡片（slot key = namespace） | 组件 | 字段 |
+|---|---|---|
+| `memory` | 定制 `MemoryPluginCard` | `memoryMode` 下拉（policy-only/full/index/custom/off）、条件显示的自定义 policy 文本域、`memoryCharLimit`、`memoryMaxEntries`（min 0）、`maxSearchResults`、`decayDays` |
+| `memory-notes` | spec 驱动 `NamespaceCard` | `notesEnabled`, `notesCharLimit`, `notesMaxEntriesPerFile` |
+| `memory-autorecall` | spec 驱动 `NamespaceCard` | `autoRecallEnabled`, `autoRecallLimit`（min 1）, `autoRecallMinChars`（min 1）, `hitSignalEnabled`, `hitSignalThreshold`（min 0） |
+| `memory-identity` | spec 驱动 `NamespaceCard` | `identityEnabled`, `soulCharLimit`（min 0）, `userCharLimit`（min 0）, `identitySeedDir` |
 | `memory-review` | `memory-review` | spec 驱动 `NamespaceCard` | `reviewEnabled`, `reviewCandidateThreshold`, `flushOnCompaction`, `flushOnDispose`, `extractionModelProvider` + `extractionModelModel`（目录驱动下拉）, `extractionBudget`, `judgeEnabled`, `consolidation`（two-tier/legacy-judge 下拉）, `pitfallStreakThreshold`, `confirmBeforeWrite`, `curatorEnabled`, `curatorEveryNSessions`, `curatorMaxEntries`, `curatorMinChars`, `sweepEnabled`, `sweepEveryNSessions`, `sweepTopN` |
 
 机制：
@@ -656,11 +670,25 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 模块以 `@chenhw7/dsh-memory/benchmark` 导出（含类型），夹具与指标可在 spec 之外复用。
 
+### 7.10 身份层 — `/identity`（`src/identity/`）
+
+代理的自我文档：**SOUL.md**（它的人格）与 **USER.md**（它对用户的画像），由代理在对话中经 `identity_update` 工具生长——人不持有编辑器，只持有治理权。文档存于 store 的 `identity`/`identity_history` 表（§6.3）；SOUL.md/USER.md 是显示名，不是文件。
+
+- **分层（声明 vs 学习）：** soul/user-profile 注入段（order 80/81，§7.4）承载*自我书写*的身份——永不衰减、永不整合、永不冲突标注、不进索引/检索/自动召回（定义上就是 always-on）；memory 段保持*学到的*事实。prompt 内位阶：会话显式指令 > 宿主 `deployment:persona` > 身份段 > 学到的记忆。
+- **服务（`src/identity/`）：** `IdentityService.snapshotFor()` 返回两份文档的原始内容（预算在段组装时施加，沿 notes 先例）。**seed-once：**缺失的文档当会话即以内置中文种子供给，持久写入 fire-and-forget；插件此后永不覆盖已有文档。种子不含任何个人信息、不含防陈旧条款（画像纯自然生长，2026-09-08 裁定）。
+- **设置：** `memory-identity` 命名空间（`memory-context` 注册，§7.4）——`identityEnabled`（默认**关**）、`soulCharLimit`（2000）、`userCharLimit`（3000）、`identitySeedDir`（可选种子覆盖目录，含 `SOUL.md`/`USER.md`；部分覆盖时缺失的类别保留内置种子）。设置 UI 入口是 Plugins 页签的**身份卡片**（`memory-identity`，§7.8）；Identity 设置区保持只读治理。装载期 loud 门在 **`memory-context` 的 apply**——该命名空间的拥有者校验自己的组合层配置（目录不存在或种子文件未过 scanner 都使挂载失败）；设置叠层改动走可观测降级（记录失败 + 内置种子回退，经 `health()` 呈现），因为 cordis 会吞掉 `ctx.inject` 回调的 throw（已对装机运行时核实）。
+- **跨命名空间读取必须走 `ctx.inject`：** cordis 的服务属性在未 inject 该服务的纤程上抛 `cannot get property "settings" without inject`——identity 插件经 settings-injected 纤程读取 `memory` 命名空间，并以稳定的按调用间接层（tool 插件的 `defaultLimit` 模式）重读变量。在插件自身纤程上直接 `ctx.settings` 访问会静默降级为禁用默认；notes 模块的直接读取携带同一潜在缺陷（具名缺口——其预算在设置服务在场的部署里会静默回退默认值）。
+- **写路径（`identity_update`，§7.2）：**整文档替换过三重门——`identityEnabled`、按类别字符预算、scanner——随后 store 的原子版本写（经表 read-modify-write 计算 version+1，并发改写不会铸出同一版本）加每版一份全量历史快照。confirm 模式下提案作为身份建议（`identityKind`，§6.4）入队，人采纳前不写。告知纪律——「改了这份文件，告诉用户」——落在工具描述与结果文案里。
+- **防回声：**提取永不入库身份复述——review/flush 提示词携带规则并渲染身份文档作为所指，两个提取写缝各跑一道机械预筛（对已注入文档的 IDF 加权重叠 > 0.6；关于人格的*记忆*远低于该值）。身份层关闭时预筛自然失效（没有注入文档，没有可复述对象）。
+- **治理面（§7.8）：**只读 Identity 设置区——文档 + 版本历史 + 回滚阀门（`identityRevert`，受 `remoteWritesEnabled` 与 `identityRevertEnabled` 共同控制，§7.7）+ 导出；无内容编辑器、无导入。
+- **事件：**`identity/updated {kind, version}` 仅是声明词汇（§6.5）——无发射点；告知由工具结果承载，持久审计是 `identity_history`。
+- **Eval：**identity-v0 切片（`eval/datasets/identity-v0.jsonl`）与 `--identity` CLI 轴在 mock 巷道确定性度量注入面（soul/user-profile fence 与字符数，开关对照）；防回声预筛的端到端对照需要脚本化提取回复（noise-pilot 巷道）或真实模型判分——预筛本身由 `tests/extract.spec.ts` 夹具钉住，pilot 巷道证据记为已知缺口。决策与备选见 [Agent Note](../.agents/notes/implemented/feature/2026-09-08-identity-layer-soul-and-user-profile.zh.md)。
+
 ---
 
 ## 8. 配置
 
-两个命名空间按相同方式 resolve：schema 默认 → 组合 `config:` base → `$DSH_HOME/settings.yaml` 用户层（或设置 UI）。一切实时生效——下一个事件或组装即刻采纳。
+各命名空间按相同方式 resolve：schema 默认 → 组合 `config:` base → `$DSH_HOME/settings.yaml` 用户层（或设置 UI）。一切实时生效——下一个事件或组装即刻采纳。每个插件配置卡片对应一个命名空间：宿主的 Plugins 页签只在卡片 slot key 指向一个已注册命名空间时才分发该卡片，因此下述四个 memory 家族命名空间都由 `memory-context` 从同一份完整组合配置注册，各命名空间的 base 层投影自己的切片。
 
 ### `memory` 命名空间（`memory-context` 持有）
 
@@ -674,9 +702,21 @@ memory:
   maxSearchResults: 50           # memory_search / memory_list 默认上限（0 = 不限）
   decayDays: 30                  # janitor 窗口（0 = 禁用）；project 硬衰减、
                                  #   global/user 软衰减
+```
+
+### `memory-notes` 命名空间（`memory-context` 持有）
+
+```yaml
+memory-notes:
   notesEnabled: true             # project-notes prompt 段注入总开关
   notesCharLimit: 4000           # 注入 project-notes 段的预算
-  notesMaxEntriesPerFile: 100    # 渲染条目上限（保留最新；键名保留 0.5.x 兼容）
+  notesMaxEntriesPerFile: 100    # 渲染条目上限（保留最新）
+```
+
+### `memory-autorecall` 命名空间（`memory-context` 持有）
+
+```yaml
+memory-autorecall:
   autoRecallEnabled: false       # 步级 <recalled-memory> 围栏（opt-in）
   autoRecallLimit: 5             # 单围栏最大条数
   autoRecallMinChars: 12         # 用户文本低于该长度跳过召回
@@ -685,6 +725,19 @@ memory:
                                  #   绝不驱动删除
   hitSignalThreshold: 0.25       # 作答对本条目 token 的 IDF 加权覆盖率达到
                                  #   该值才计一次命中
+```
+
+### `memory-identity` 命名空间（`memory-context` 持有）
+
+```yaml
+memory-identity:
+  identityEnabled: false         # 身份层（soul + user-profile 注入段、
+                                 #   identity_update 工具面）；opt-in
+  soulCharLimit: 2000            # soul 段注入预算（0 = 禁用）
+  userCharLimit: 3000            # user-profile 段注入预算（0 = 禁用）
+  identitySeedDir: ""            # 可选种子覆盖目录（SOUL.md / USER.md）；
+                                 #   空用内置中文种子；缺失文件保留该类别的
+                                 #   内置种子（部分覆盖）
 ```
 
 ### `memory-store` 行配置（store 插件持有）
@@ -766,6 +819,7 @@ memory:
 | 对话内容流向第三方 provider | `extractionModelProvider`/`extractionModelModel` 把提取、整合与 curator 调用——连同对话摘录与已存条目——路由到它们指定的 provider。两者默认为 `""`，即复用会话自身的路由，因此只有显式覆盖才会出现这条数据通路；指定 provider 等同于把对话内容授予它 |
 | 同网段其他主机读写记忆库 | 双层闸门（见 §7.7）：宿主的传输层信任围栏（`trustedHosts`）仍是第一道门；其后的 `remoteWritesEnabled`（缺省 `false`）让远程**写**方法缺省拒绝——过宽的 `trustedHosts` 配置下写入通道缺省关闭，读仍放行（浏览器管理需部署显式开启写开关）。写入内容进入后续会话 system prompt 的持久注入通道因此需要两个条件同时成立：栅栏放行 + 部署显式开启写 |
 | 检索质量悄然回退 | Golden-set CI 地板值（success@5 ≥ 0.85、MRR ≥ 0.75、P@1 ≥ 0.6、zh ≥ 0.8）——分词器/权重/预算回退会使构建失败 |
+| 诱导的 `identity_update` 改写持久化进此后每个会话的系统提示（SEC-04 同类，有意开放的有界通道） | 每次身份写入的 scanner 门；字符预算限定爆炸半径；版本历史使每次改写可回滚（`identityRevert`，受 `remoteWritesEnabled` 与 `identityRevertEnabled` 共同控制）且在只读 UI 可见；告知纪律把变更在对话内呈现；可选 confirm 模式让提案走人审队列；eval 场景钉住注入面 |
 
 ### 9.2 失效矩阵
 

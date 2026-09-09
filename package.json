@@ -49,6 +49,10 @@
       "types": "./lib/notes/index.d.ts",
       "default": "./lib/notes/index.js"
     },
+    "./identity": {
+      "types": "./lib/identity/index.d.ts",
+      "default": "./lib/identity/index.js"
+    },
     "./invariant": {
       "types": "./lib/invariant.d.ts",
       "default": "./lib/invariant.js"

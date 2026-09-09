@@ -37,11 +37,15 @@
 | `SystemPrompt.section({name, order, text})` 注册有序段 | `packages/core/system-prompt/src/index.ts:381` |
 | `assemble(context)` 组装（变量插值、排序、waterfall） | `packages/core/system-prompt/src/index.ts:467` |
 | `AssembleContext`（含可选 `agent` 字段，段渲染函数借此拿 session） | `packages/core/system-prompt/src/index.ts:42` |
+| `SECTION_ORDERS` 段序全景常量表（harness 自有段的名字→序号） | `packages/core/system-prompt/src/index.ts:121` |
+| `PERSONA_SECTION`（`'deployment:persona'`，部署所有的人格槽位名） | `packages/core/system-prompt/src/index.ts:172` |
 
 **契约要点**：
 - section `text` 可以是 `(context) => string` 函数，**每次组装时求值**——KV-cache 冻结靠我们自己把快照存进 per-session WeakMap，而不是宿主保证。
 - 同名 section 靠 scope shadowing；重复注册同名全局段会抛错，effect disposer 必须交给 `ctx.effect()` 管理。
 - 渲染期 `{{var}}` 引用未知变量直接 throw——我们的段文案不含变量引用，若将来加，需同时注册 variable。
+- **段序全景（2026-09-08 核实，身份层落位依据）：**`HARNESS_IDENTITY(-1000) → DEPLOYMENT_PERSONA(0) → PLAN_POLICY(500) → PTC_ONLY(800) → FILE_REFERENCE(900) → TOOL_*（1000+，工具段） → TOOLS_SDK(5000) → STRUCTURED_OUTPUT(9900)`。我们的段序：`soul`(80) / `user-profile`(81) 落在 deployment persona 之后、policy 之前的 0–500 带；`memory`(90) / `project-notes`(91) 同带；插件自有工具指引在 100–199。
+- **`deployment:persona` 是部署所有的静态人格槽位**（`PERSONA_SECTION`，order 0；`dsh-persona` preset 行只能按 agent scope 同名遮蔽，全局同名注册在注册表处撞车 fail loud）。我们的 `soul` 段与它是**共存而非替代**关系；位阶链（会话显式指令 > 部署任命 > 身份段 > 学到的记忆）写进段文案并由测试钉住。
 
 ## 4. 会话事件面
 
@@ -99,7 +103,14 @@
 | bundle patch 清单字段 `dsh.bundle.patch`（cordis.patch.yml 即包本体） | `packages/bundle/base/src/index.ts:3`、`web-app/src/index.ts:3` |
 | `settings.section` slot（根级 list，id/order/label/inject） | `packages/client/ui-settings/src/client/contract/slots.ts:53` |
 | `settings.plugin.item` slot（Plugins 页卡片） | `packages/client/ui-settings-plugins/src/client/index.ts:79,83` |
+| 卡片分发规则：插件配置页按「slot key ∈ Host 已注册 settings namespace」逐 namespace 分发 | `packages/client/ui-settings-plugins/src/client/tab-store.ts:89-91`（`served.has(entry.options.key)`，served 来自 `settings.describe` mirror）、`ConfigurablePluginsTab.tsx:37`（`entryKey: ns`，一 namespace 一次分发） |
+| keyed 槽位每个 key 只渲染**第一个**匹配条目 | `packages/client/ui-renderer/src/client/scoped-slots.tsx:800-806`（`find(e => e.options.key === entryKey)`） |
 | 客户端模块扫描器只发现**根导出行**的 dsh.client（子路径跳过） | 本仓库踩坑记录：root 包 no-op 行见 `src/index.ts` 尾注 |
+
+**契约要点**：
+- `settings.plugin.item` 是 keyed 槽位，契约即"卡片 key = 它编辑的 settings namespace"（`ui-settings-plugins/src/client/slot-contract.ts:3-10`）。插件要在 Host 侧注册同名 settings namespace（`settings.installSection`），浏览器侧用同一个 key 注册卡片，tab 才会把两者配对；key 不是已注册 namespace 的卡片**静默不可见**（不报错、不进列表）。
+- 多张卡共享一个 namespace 无法工作：keyed 槽位只取第一个匹配条目，其余条目永不渲染。插件若要多卡，必须每卡注册自己的 namespace（本仓库四个 memory 家族 namespace 即此形态，见 [Agent Note](../.agents/notes/implemented/bug-fix/2026-09-09-plugin-cards-need-served-namespaces.zh.md)）。
+- 该规则自 ui-settings-plugins 的 namespace-pairing 设计起即存在（dsh-v0.1.1-rc.2 与 dsh-v0.1.2-alpha.1/2 均已强制）；harness 升级时按 §9 清单核对卡片 key 与 namespace 注册的一致性。
 
 ## 9. 日志通道：cordis 内置 `ctx.logger`
 
@@ -116,7 +127,7 @@
 
 1. §1 KvTable 接口形状 / 域 version 语义是否变化；
 2. §2 installSettingsSection hooks 形状（setSource/onChange）是否变化；
-3. §3 AssembleContext.agent 是否仍透传给 section text 函数；
+3. §3 AssembleContext.agent 是否仍透传给 section text 函数；`SECTION_ORDERS` 表是否有新增/改序条目落在我们的 0–500 带内（soul 80 / user-profile 81 / memory 90 / project-notes 91），`PERSONA_SECTION` 名称是否变化；
 4. §4 compaction/end 的 `error` 字段类型与 shadowedSeqs 回放路径；
 5. §4 agent/pre-step 的 payload/决策形状；
 6. §6 finish reason 枚举与 BlockAssembler API；

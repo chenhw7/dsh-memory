@@ -66,6 +66,9 @@ describe('sqlite migration (Step 3.2, real composition)', () => {
       const first = await store.add({ scope: 'global', content: '迁移前的第一条', source: 'ui', anchors: ['mig'] })
       const second = await store.add({ scope: 'project', content: '迁移前的第二条', projectName: 'demo', source: 'ui' })
       const beforeAuditCount = store.exportAuditLog().length
+      // Identity documents (with version history) migrate like every other table.
+      await store.updateIdentity('soul', '人格文档（迁移前）', { source: 'seed' })
+      await store.updateIdentity('soul', '人格文档（第二版）', { source: 'tool' })
       await seed.root.dispose()
 
       // Now boot sqlite over the same home: the import must run.
@@ -86,16 +89,31 @@ describe('sqlite migration (Step 3.2, real composition)', () => {
       expect(importedSecond.createdAt).toBe(second.entry.createdAt)
       // The audit trail carries over verbatim.
       expect(sqlite.exportAuditLog().length).toBe(beforeAuditCount)
+      // Identity import fidelity: current record + full version history.
+      const identity = sqlite.getIdentity('soul')
+      expect(identity?.content).toBe('人格文档（第二版）')
+      expect(identity?.version).toBe(2)
+      expect(identity?.seedVersion).toBe(1)
+      expect(sqlite.listIdentityHistory('soul').map(record => record.version)).toEqual([2, 1])
       // The medium now carries the marker in its meta table — and its data
       // tables are cleared: leftover rows would trip the both-sides guard on
       // the next sqlite boot over its own migration leftovers.
       const medium = JSON.parse(await readFile(`${dir}/storages/memory.json`, 'utf8')) as {
-        tables?: { entries?: Record<string, unknown>; audit?: Record<string, unknown>; suggestions?: Record<string, unknown>; meta?: Record<string, { key?: string }> }
+        tables?: {
+          entries?: Record<string, unknown>
+          audit?: Record<string, unknown>
+          suggestions?: Record<string, unknown>
+          identity?: Record<string, unknown>
+          identity_history?: Record<string, unknown>
+          meta?: Record<string, { key?: string }>
+        }
       }
       expect(medium.tables?.meta?.[SQLITE_MIGRATION_MARKER]?.key).toBe('medium')
       expect(Object.keys(medium.tables?.entries ?? {})).toHaveLength(0)
       expect(Object.keys(medium.tables?.audit ?? {})).toHaveLength(0)
       expect(Object.keys(medium.tables?.suggestions ?? {})).toHaveLength(0)
+      expect(Object.keys(medium.tables?.identity ?? {})).toHaveLength(0)
+      expect(Object.keys(medium.tables?.identity_history ?? {})).toHaveLength(0)
       await root.dispose()
 
       // The migrating home re-opens clean (the eval's two-session flow is
@@ -104,6 +122,8 @@ describe('sqlite migration (Step 3.2, real composition)', () => {
       const reopenedStore = reopened.ctx.get('memory') as unknown as SqliteMemoryStore
       expect(reopenedStore.list()).toHaveLength(2)
       expect(reopenedStore.list().find(entry => entry.id === first.entry.id)?.content).toBe('迁移前的第一条')
+      expect(reopenedStore.getIdentity('soul')?.content).toBe('人格文档（第二版）')
+      expect(reopenedStore.listIdentityHistory('soul')).toHaveLength(2)
       await reopened.root.dispose()
     } finally {
       rmSync(dir, { recursive: true, force: true })

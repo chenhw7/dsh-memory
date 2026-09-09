@@ -18,6 +18,8 @@
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
+  IdentityHistoryJson,
+  IdentityRecordJson,
   MemoryEntryJson,
   MemoryHealthResult,
   MemoryProjectsResult,
@@ -80,6 +82,11 @@ export interface MemoryRemoteApi {
   suggestAdopt(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
   suggestReject(request: { id: string }): Rpc<{ rejected: boolean; error?: string }>
   getRaw(request: { id: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean }>
+  // Identity RPCs (optional: an older deployment without them degrades the
+  // identity section to its empty state — see identity-section-store).
+  identityList?(): Rpc<{ soul?: IdentityRecordJson; user?: IdentityRecordJson }>
+  identityHistory?(request: { kind: 'soul' | 'user' }): Rpc<{ history: readonly IdentityHistoryJson[] }>
+  identityRevert?(request: { kind: 'soul' | 'user'; version: number }): Rpc<{ reverted?: IdentityRecordJson; error?: string }>
 }
 
 /** Page snapshot. */

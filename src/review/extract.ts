@@ -23,6 +23,8 @@ import { scanContent, redactBlocked } from '../scanner.ts'
 import type { AddMemoryInput, AuditSource, MemoryCategory, MemoryEntry, MemoryScope } from '../types.ts'
 import type { MemoryId } from '../brand.ts'
 import type { MemoryStore } from '../index.ts'
+import type { IdentityService } from '../identity/index.ts'
+import { buildCorpusStats, uniqueTokens, weightedOverlapSimilarity } from '../store/bm25.ts'
 import { PITFALL_RESOLVED_SIGNAL, type MemoryCandidate } from './accumulator.ts'
 import { findDuplicate, mergeContent, toDedupCandidate, type JudgeVerdict, JUDGE_SYSTEM_PROMPT, buildJudgePrompt, parseJudgeVerdict } from './dedup.ts'
 import { applyConsolidation } from './consolidate.ts'
@@ -47,6 +49,7 @@ export const REVIEW_SYSTEM_PROMPT =
   + '\n- Transient states, one-time events, and unverified hypotheses are never persisted.'
   + '\n- Procedural memories (how to do X, including failure workarounds and tool quirks) are admitted only when the action was verified by tool execution within the session. If the procedure was merely discussed but not executed, omit it.'
   + '\n- Preference/convention memories are admitted only when the user explicitly demands them ("remember", "from now on", 记住, 以后都) or the same preference theme appears at least twice across the fragments and the current snapshot. One-off situational preferences are never persisted.'
+  + '\n- Statements that merely restate the identity documents (the SOUL.md / USER.md blocks shown in the prompt) are never persisted — they are already permanently injected every session.'
   + '\n\nDate prefixes: NEVER write a date, timestamp, or git branch prefix onto the content (e.g. "(2026-08-25)", "[git main]"). The store stamps createdAt/updatedAt automatically; handwritten prefixes are stripped.'
   + '\n\nCategory tags — prefix the content with one of these when it applies:'
   + '\n- "[procedure] " for verified procedures (see the rule above).'
@@ -77,6 +80,7 @@ export const FLUSH_SYSTEM_PROMPT =
   + '\n- Anything the repository already records: code structure, APIs, file paths, git history, diffs, and the step-by-step narrative of bugs that are already fixed. If someone could re-derive it by reading the code or running git log, it does not belong in memory.'
   + '\n- Transient states, one-time events, and unverified hypotheses are never persisted.'
   + '\n- Procedural memories (how to do X, including failure workarounds and tool quirks) are admitted only when the action was verified by tool execution within the session. If the procedure was merely discussed but not executed, omit it.'
+  + '\n- Statements that merely restate the injected identity documents (SOUL.md / USER.md) are never persisted — they are already permanently injected every session.'
   + '\n- For verified procedures, prefix the content with "[procedure] " so they can be tagged with the procedure category.'
   + '\n\nAnchors and project tags — end the line with "[anchors: token1, token2]" when the memory contains hard tokens (numbers, version numbers, identifiers, tool names, repository names, or file paths); when the conversation names a repository or project path, that name MUST appear in the anchors list AND, on "project"-scoped lines, as a trailing "[project: name]" tag using the exact name.'
   + '\n\nDate prefixes: NEVER write a date, timestamp, or git branch prefix onto the content (e.g. "(2026-08-25)", "[git main]"). The store stamps createdAt/updatedAt automatically; handwritten prefixes are stripped.'
@@ -311,15 +315,75 @@ function renderEntry(entry: MemoryEntry): string {
 }
 
 /**
+ * Render the currently-injected identity documents for the extraction judges
+ * (the anti-echo rule's referent): the raw snapshot — seeds and grown records
+ * alike, exactly what the model sees. Empty when the service is absent or the
+ * layer disabled, in which case the rule and the prefilter are both inert.
+ * @param identity - the identity service, or `undefined` when not composed.
+ * @returns the rendered identity block; empty string when nothing is injected.
+ */
+export function renderIdentityDocuments(identity: IdentityService | undefined): string {
+  if (identity === undefined) return ''
+  const snapshot = identity.snapshotFor()
+  const blocks = [
+    ...snapshot.soul.length > 0 ? [`Identity document (SOUL.md) — the assistant's character file:\n${snapshot.soul}`] : [],
+    ...snapshot.user.length > 0 ? [`Identity document (USER.md) — the working profile of the human user:\n${snapshot.user}`] : [],
+  ]
+  if (blocks.length === 0) return ''
+  return `Identity documents (already permanently injected every session — omit anything that merely restates them):\n${blocks.join('\n\n')}`
+}
+
+/**
+ * IDF-weighted overlap between an extracted candidate and an identity
+ * document above which the candidate counts as a mere restatement (an echo)
+ * and is skipped — identity echoes never become memory entries. Sits well
+ * above the suggestion-dup line (0.3): a restatement is near-verbatim, while
+ * a memory ABOUT the persona ("the assistant speaks playfully") stays far
+ * below it. Calibrated by the anti-echo fixtures in extract.spec.
+ */
+const IDENTITY_ECHO_THRESHOLD = 0.6
+
+/** Precomputed identity document input for the anti-echo prefilter. */
+interface IdentityEchoDoc {
+  readonly text: string
+  readonly tokens: ReadonlySet<string>
+}
+
+/**
+ * The currently-injected identity documents and their tokens (the prefilter's
+ * comparison set). Absent service or disabled layer → no documents, so the
+ * prefilter is inert.
+ */
+function identityEchoDocuments(ctx: Context): IdentityEchoDoc[] {
+  const snapshot = ctx.get('identity')?.snapshotFor()
+  if (snapshot === undefined) return []
+  return [snapshot.soul, snapshot.user]
+    .filter(text => text.length > 0)
+    .map(text => ({ text, tokens: uniqueTokens(text) }))
+}
+
+/** Whether a normalized candidate merely restates one of the identity documents. */
+function isIdentityEcho(content: string, docs: readonly IdentityEchoDoc[]): boolean {
+  const contentTokens = uniqueTokens(content)
+  for (const { text, tokens } of docs) {
+    const stats = buildCorpusStats([content, text])
+    if (weightedOverlapSimilarity(stats, contentTokens, tokens) > IDENTITY_ECHO_THRESHOLD) return true
+  }
+  return false
+}
+
+/**
  * Build the messages for the periodic-review extraction prompt.
  * @param memorySnapshot - rendered current memory text (possibly empty).
  * @param candidates - the accumulated candidate fragments.
+ * @param identitySnapshot - rendered identity documents (possibly empty).
  * @returns the model-facing user message list.
  */
-export function buildReviewMessages(memorySnapshot: string, candidates: readonly MemoryCandidate[]): Message[] {
+export function buildReviewMessages(memorySnapshot: string, candidates: readonly MemoryCandidate[], identitySnapshot = ''): Message[] {
   const fragments = candidates.map((c, i) => `[${i + 1}] (${c.signal}) ${flattenFragment(c.text)}`).join('\n')
   const parts = [
     memorySnapshot.length === 0 ? '' : `${memorySnapshot}\n\n`,
+    identitySnapshot.length === 0 ? '' : `${identitySnapshot}\n\n`,
     'Conversation fragments to extract memories from:\n',
     fragments,
   ]
@@ -527,6 +591,10 @@ export async function suggestMemories(
   const memory = ctx.get('memory')
   if (memory === undefined) return
   const existing = memory.list().map(toDedupCandidate)
+  // Anti-echo (identity layer): candidates that merely restate an injected
+  // identity document never join the queue — they are already permanently
+  // injected, and queueing them would double them.
+  const identityEchoDocs = identityEchoDocuments(ctx)
   for (const entry of parsed) {
     let category = entry.category ?? attachCategory
     const stripped = stripContentTag(entry.content)
@@ -535,6 +603,7 @@ export async function suggestMemories(
     if (content.length === 0) continue
     const scan = scanContent(content)
     if (!scan.allowed) continue
+    if (identityEchoDocs.length > 0 && isIdentityEcho(content, identityEchoDocs)) continue
     const targetEntryId = findDuplicate(content, entry.scope, existing)
     try {
       await memory.observeSuggestion({
@@ -618,6 +687,10 @@ export async function storeMemories(
   }
   const memory = ctx.get('memory')
   if (memory === undefined) return
+  // Anti-echo (identity layer): normalized candidates that merely restate an
+  // injected identity document are dropped before either write path — the
+  // mechanical half of the anti-echo rule (the prompt rule is the other).
+  const identityEchoDocs = identityEchoDocuments(ctx)
   // Per-entry normalization shared by both paths: category tag resolution,
   // model-date prefix stripping, and the content scan — every surviving
   // entry is clean before either write path sees it.
@@ -635,6 +708,7 @@ export async function storeMemories(
     if (content.length === 0) continue
     const scan = scanContent(content)
     if (!scan.allowed) continue
+    if (identityEchoDocs.length > 0 && isIdentityEcho(content, identityEchoDocs)) continue
     normalized.push({
       scope: entry.scope,
       content,
@@ -786,6 +860,7 @@ export async function runReviewExtraction(
 ): Promise<number> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
+  const identitySnapshot = renderIdentityDocuments(ctx.get('identity'))
   const projectName = inferProjectName(agent.session)
   let stored = 0
 
@@ -803,7 +878,7 @@ export async function runReviewExtraction(
 
   const rest = candidates.filter(c => c.signal !== PITFALL_RESOLVED_SIGNAL)
   if (rest.length > 0) {
-    const messages = buildReviewMessages(snapshot, rest)
+    const messages = buildReviewMessages(snapshot, rest, identitySnapshot)
     const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages, undefined, modelOverride)
     // A correction-only batch maps naturally to the `correction` category;
     // explicitly tagged entries override this default inside storeMemories.

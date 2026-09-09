@@ -5,6 +5,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { scanContent, validateProjectScope } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery } from '../src/tool/index.ts'
+import type { IdentityKind, IdentityRecord, UpdateIdentityInput } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 
 import * as tool from '../src/tool/index.ts'
@@ -116,6 +117,26 @@ class TestMemoryStore extends MemoryStore {
   override markRecalled(ids: readonly string[]): void {
     this.recalledIds.push(...ids)
   }
+
+  // ─── Identity stand-in (identity_update tests) ─────────────────────────────
+  private readonly identityDocs = new Map<IdentityKind, IdentityRecord>()
+
+  override getIdentity(kind: IdentityKind): IdentityRecord | undefined {
+    return this.identityDocs.get(kind)
+  }
+
+  override async updateIdentity(kind: IdentityKind, content: string, input: UpdateIdentityInput): Promise<IdentityRecord> {
+    const existing = this.identityDocs.get(kind)
+    const record: IdentityRecord = {
+      kind,
+      content,
+      version: (existing?.version ?? 0) + 1,
+      updatedAt: Date.now(),
+      seedVersion: existing?.seedVersion ?? input.seedVersion ?? 1,
+    }
+    this.identityDocs.set(kind, record)
+    return record
+  }
 }
 
 /**
@@ -155,6 +176,11 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const { ctx } = await setup()
       const names = ctx.tools.schemas().map(s => s.name).filter(n => n.startsWith('memory_'))
       expect(names.sort()).toEqual(['memory_add', 'memory_forget', 'memory_get', 'memory_list', 'memory_pin', 'memory_remove', 'memory_replace', 'memory_search', 'memory_unpin'])
+    })
+
+    it('registers identity_update (the identity-layer write tool)', async () => {
+      const { ctx } = await setup()
+      expect(ctx.tools.schemas().some(s => s.name === 'identity_update')).toBe(true)
     })
 
     it('has the namespace-plugin export shape (no stray default)', () => {
@@ -931,5 +957,60 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const def = ctx.tools.get('memory_get')!
       expect(def.presentCall?.({ id: 'x' })).toMatchObject({ card: 'generic', kind: 'search' })
     })
+  })
+})
+
+describe('identity_update (the identity-layer write tool)', () => {
+  /** Boot the tools with a fake `memory-identity` settings namespace and the identity stand-in store. */
+  async function setupIdentity(settingsValue: Record<string, unknown> = { identityEnabled: true }): Promise<{ ctx: Context; store: TestMemoryStore }> {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const store = new TestMemoryStore()
+    ctx.provide('memory', store)
+    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? settingsValue : undefined })
+    await ctx.plugin(tool, { maxSearchResults: 50 })
+    return { ctx, store }
+  }
+
+  it('disabled: the call fails loud with the enablement hint', async () => {
+    const { ctx } = await setupIdentity({ identityEnabled: false })
+    const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '文档' })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('identity layer is disabled')
+  })
+
+  it('writes the document and reports the new version', async () => {
+    const { ctx, store } = await setupIdentity()
+    const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '第一版人格文档：帮到实处。' })
+    expect(result.isError).toBe(false)
+    const value = (result as { value: unknown }).value as { updated?: boolean; kind?: string; version?: number }
+    expect(value.updated).toBe(true)
+    expect(value.kind).toBe('soul')
+    expect(value.version).toBe(1)
+    expect(store.getIdentity('soul')?.content).toBe('第一版人格文档：帮到实处。')
+  })
+
+  it('rejects content over the document budget with the precise numbers', async () => {
+    const { ctx, store } = await setupIdentity({ identityEnabled: true, soulCharLimit: 10 })
+    const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '这份文档远远超过十个字符的预算限制' })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('exceeds the soul document budget')
+    expect(store.getIdentity('soul')).toBeUndefined()
+  })
+
+  it('a zero budget rejects the write outright', async () => {
+    const { ctx } = await setupIdentity({ identityEnabled: true, soulCharLimit: 0 })
+    const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '文档' })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('budget is 0')
+  })
+
+  it('rejects scanner-violating content at the tool boundary', async () => {
+    const { ctx, store } = await setupIdentity()
+    const result = await callTool(ctx, 'identity_update', { kind: 'user', content: 'sk-abcdef0123456789abcdef0123456789ab' })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('content rejected')
+    expect(store.getIdentity('user')).toBeUndefined()
   })
 })

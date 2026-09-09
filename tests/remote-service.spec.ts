@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { MemoryId, scanContent, validateProjectScope, validateContent } from '../src/index.ts'
-import type { AddMemoryInput, AuditEntry, MemoryEntry, MemoryHealth, MemorySearchQuery } from '../src/index.ts'
+import type { AddMemoryInput, AddSuggestionInput, AuditEntry, IdentityHistoryRecord, IdentityKind, IdentityRecord, MemoryEntry, MemoryHealth, MemorySearchQuery, MemorySuggestion, UpdateIdentityInput } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
 import { Config as RemoteServiceConfig, MemoryRemoteService } from '../src/remote/index.ts'
 import type { MemoryEntryJson, RemoteConfig } from '../src/remote/index.ts'
@@ -175,6 +175,77 @@ class TestMemoryStore extends MemoryStore {
 
   override exportAuditLog(): readonly AuditEntry[] {
     return [...this.auditLog]
+  }
+
+  // ─── Identity + suggestion stand-ins (identity governance tests) ──────────
+  private readonly identityDocs = new Map<IdentityKind, IdentityRecord>()
+  private readonly identityHistory: IdentityHistoryRecord[] = []
+  private readonly suggestionRows = new Map<string, MemorySuggestion>()
+  private suggestionSeq = 0
+
+  override getIdentity(kind: IdentityKind): IdentityRecord | undefined {
+    return this.identityDocs.get(kind)
+  }
+
+  override async updateIdentity(kind: IdentityKind, content: string, input: UpdateIdentityInput): Promise<IdentityRecord> {
+    const existing = this.identityDocs.get(kind)
+    const record: IdentityRecord = {
+      kind,
+      content,
+      version: (existing?.version ?? 0) + 1,
+      updatedAt: Date.now(),
+      seedVersion: existing?.seedVersion ?? input.seedVersion ?? 1,
+    }
+    this.identityDocs.set(kind, record)
+    this.identityHistory.unshift({ kind, version: record.version, content, ts: record.updatedAt, source: input.source })
+    return record
+  }
+
+  override listIdentityHistory(kind: IdentityKind): readonly IdentityHistoryRecord[] {
+    return this.identityHistory.filter(record => record.kind === kind)
+  }
+
+  override async revertIdentity(kind: IdentityKind, version: number): Promise<IdentityRecord> {
+    const snapshot = this.identityHistory.find(record => record.kind === kind && record.version === version)
+    if (snapshot === undefined) throw new Error(`identity history has no version ${String(version)} for '${kind}'`)
+    return this.updateIdentity(kind, snapshot.content, { source: 'ui' })
+  }
+
+  override async observeSuggestion(input: AddSuggestionInput): Promise<MemorySuggestion> {
+    const now = Date.now()
+    const suggestion: MemorySuggestion = {
+      id: `sug-${++this.suggestionSeq}` as never,
+      scope: input.scope,
+      content: input.content,
+      hits: 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      source: input.source,
+      ...(input.identityKind !== undefined ? { identityKind: input.identityKind } : {}),
+    }
+    this.suggestionRows.set(suggestion.id as string, suggestion)
+    return suggestion
+  }
+
+  override listSuggestions(): readonly MemorySuggestion[] {
+    return [...this.suggestionRows.values()]
+  }
+
+  override getSuggestion(id: string): MemorySuggestion | undefined {
+    return this.suggestionRows.get(id)
+  }
+
+  override async adoptSuggestion(id: string): Promise<MemoryEntry | undefined> {
+    const suggestion = this.suggestionRows.get(id)
+    if (suggestion === undefined) return undefined
+    if (suggestion.identityKind !== undefined) {
+      await this.updateIdentity(suggestion.identityKind, suggestion.content, { source: 'ui' })
+      this.suggestionRows.delete(id)
+      return undefined
+    }
+    // Entry proposals stay the base no-op — this stand-in serves the identity
+    // governance tests; entry adoption is covered by the real-store suites.
+    return super.adoptSuggestion(id as never)
   }
 }
 
@@ -420,6 +491,7 @@ describe('memoryRemote write guard (SEC-04)', () => {
     { method: 'archive', call: (s: MemoryRemoteService) => s.archive({ id: 'mem-1', archived: true }), expectError: false },
     { method: 'suggestAdopt', call: (s: MemoryRemoteService) => s.suggestAdopt({ id: 'sug-1' }), expectError: true },
     { method: 'suggestReject', call: (s: MemoryRemoteService) => s.suggestReject({ id: 'sug-1' }), expectError: false },
+    { method: 'identityRevert', call: (s: MemoryRemoteService) => s.identityRevert({ kind: 'soul', version: 1 }), expectError: true },
   ] as const
 
   it('the deployed schema default denies remote writes even with no config row', async () => {
@@ -504,5 +576,77 @@ describe('memoryRemote write guard (SEC-04)', () => {
     await service.add({ scope: 'global', content: 'should not land' })
     expect(addSpy).not.toHaveBeenCalled()
     expect(store.list()).toHaveLength(1)
+  })
+})
+
+// The identity governance surface (the identity layer): ungated reads, the
+// write-gated revert valve, and the identity adoption result shape.
+describe('memoryRemote identity governance surface', () => {
+  it('reads are ungated: identityList and identityHistory work under the default write fence', async () => {
+    const { store, service } = setup()
+    await store.updateIdentity('soul', '第一版人格', { source: 'seed' })
+    await store.updateIdentity('soul', '第二版人格', { source: 'tool' })
+
+    const records = service.identityList()
+    expect(records.soul?.content).toBe('第二版人格')
+    expect(records.soul?.version).toBe(2)
+    expect(records.user).toBeUndefined()
+    const history = service.identityHistory({ kind: 'soul' })
+    expect(history.history.map(record => record.version)).toEqual([2, 1])
+    expect(history.history[0]?.source).toBe('tool')
+  })
+
+  it('the deployed schema default for identityRevertEnabled is true', () => {
+    const result = (RemoteServiceConfig as { '~standard': { validate(v: unknown): { value?: RemoteConfig } } })['~standard'].validate(undefined)
+    expect(result.value?.identityRevertEnabled).toBe(true)
+  })
+
+  it('remoteWritesEnabled: false refuses identityRevert even when its dedicated flag is enabled', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: false, identityRevertEnabled: true })
+    await store.updateIdentity('user', '画像 v1', { source: 'seed' })
+    await store.updateIdentity('user', '画像 v2', { source: 'tool' })
+
+    const result = await service.identityRevert({ kind: 'user', version: 1 })
+    expect(result).toEqual({ error: 'identity revert is disabled on this deployment' })
+    expect(store.getIdentity('user')?.version).toBe(2)
+    expect(store.listIdentityHistory('user')).toHaveLength(2)
+  })
+
+  it('identityRevertEnabled: false refuses the valve with the wire-shaped error', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true, identityRevertEnabled: false })
+    await store.updateIdentity('soul', '人格', { source: 'seed' })
+    const result = await service.identityRevert({ kind: 'soul', version: 1 })
+    expect(result).toEqual({ error: 'identity revert is disabled on this deployment' })
+    expect(store.getIdentity('soul')?.version).toBe(1)
+  })
+
+  it('identityRevert restores history when both write gates are enabled', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true, identityRevertEnabled: true })
+    await store.updateIdentity('user', '画像 v1', { source: 'seed' })
+    await store.updateIdentity('user', '画像 v2', { source: 'tool' })
+
+    const result = await service.identityRevert({ kind: 'user', version: 1 })
+    expect(result.reverted?.content).toBe('画像 v1')
+    expect(result.reverted?.version).toBe(3)
+    expect(store.listIdentityHistory('user')[0]?.source).toBe('ui')
+  })
+
+  it('suggestAdopt returns the identity result (no entry) for an identity proposal', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true })
+    const proposal = await store.observeSuggestion({ scope: 'global', content: '提案版人格', source: 'tool', identityKind: 'soul' })
+
+    const adopted = await service.suggestAdopt({ id: proposal.id as string })
+    expect(adopted.found).toBe(true)
+    expect(adopted.identity).toEqual({ kind: 'soul', version: 1 })
+    expect(adopted.entry).toBeUndefined()
+    expect(store.getIdentity('soul')?.content).toBe('提案版人格')
+    expect(store.listSuggestions()).toHaveLength(0)
+  })
+
+  it('suggestList projects identityKind so the UI can render identity proposals', async () => {
+    const { store, service } = setup([], { remoteWritesEnabled: true })
+    await store.observeSuggestion({ scope: 'global', content: '画像提案', source: 'tool', identityKind: 'user' })
+    const list = service.suggestList()
+    expect(list.suggestions[0]?.identityKind).toBe('user')
   })
 })

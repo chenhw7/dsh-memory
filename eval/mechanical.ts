@@ -12,7 +12,7 @@
  */
 
 /** Fence tags that carry memory material in the opening system prompt. */
-export const MEMORY_FENCE_TAGS = ['memory-context', 'memory-index', 'project-notes'] as const
+export const MEMORY_FENCE_TAGS = ['memory-context', 'memory-index', 'project-notes', 'soul', 'user-profile'] as const
 export type MemoryFenceTag = (typeof MEMORY_FENCE_TAGS)[number]
 
 /** One extracted memory-bearing fence (body excludes the tags). */
