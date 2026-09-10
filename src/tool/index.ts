@@ -1,8 +1,8 @@
 /**
- * Model-facing tools over the long-term memory service. Registers eight tools
+ * Model-facing tools over the long-term memory service. Registers ten tools
  * on `ctx.tools`: `memory_search`, `memory_add`, `memory_replace`,
- * `memory_remove`, `memory_forget`, `memory_list`, `memory_get`, and
- * `identity_update`. Each tool reads the
+ * `memory_remove`, `memory_forget`, `memory_list`, `memory_get`,
+ * `memory_pin`, `memory_unpin`, and `identity_update`. Each tool reads the
  * optional `memory` service through `ctx.get('memory')` and fails loud when no
  * provider is composed. Write paths run content through {@link scanContent} at
  * the tool boundary so the model sees a clean rejection before the store is
@@ -486,7 +486,7 @@ export function apply(ctx: Context, config: Config): void {
       content: { type: 'string', required: true, description: 'Human-readable memory content to persist.' },
       category: { type: 'string', enum: [...CATEGORIES], description: 'Categorized lesson type; omit for plain facts.' },
       summary: { type: 'string', description: 'Optional short summary for index/auto-recall rendering; improves progressive disclosure.' },
-      importance: { type: 'integer', description: 'Self-assessed importance 1–5 (optional). High values extend the decay grace window and break search ties; omit when unsure — ranking treats absent as mid-range, not as unimportant.' },
+      importance: { type: 'integer', description: 'Self-assessed importance 1–5 (optional). High values extend the decay grace window and break search ties; omit when unsure — the tie-break reads absent as 0, so unassessed entries sort below assessed ones at equal relevance.' },
       projectName: { type: 'string', description: 'Project name; required when scope is `project`.' },
     },
     output: {
@@ -809,9 +809,10 @@ export function apply(ctx: Context, config: Config): void {
           : { removedCount: 0, removedIds: [] }
       }
       // Runaway guard: a broad topic word on a large store must not delete
-      // half of it in one call. Forgetting entriesCap/2 rows in one pass is
-      // almost always a token mistake — refuse and let the caller narrow
-      // the filters or split the batch.
+      // half of it in one call. Forgetting more than half the live search
+      // ceiling (maxSearchResults/2) in one pass is almost always a token
+      // mistake — refuse and let the caller narrow the filters or split
+      // the batch.
       const maxBatch = Math.max(1, Math.floor(defaultLimit() / 2))
       if (deletable.length > maxBatch) {
         throw new Error(`memory_forget matched ${deletable.length} entries, above the batch ceiling of ${maxBatch} — narrow with scope/category/projectName, or use a more specific topic`)

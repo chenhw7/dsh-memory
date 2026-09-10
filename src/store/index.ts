@@ -805,9 +805,9 @@ export class DomainMemoryStore extends MemoryStore {
       ranked = candidates.map(entry => ({ entry, score: 0 }))
     }
     // Rank by BM25 relevance (desc), then pinned entries (desc), then the
-    // model-assessed importance (desc; absent reads as mid-range so unassessed
-    // entries are not penalized), then by recency (updatedAt desc). Pinned
-    // entries surface early even among equal-relevance matches — pin means
+    // model-assessed importance (desc; absent reads as 0, so unassessed
+    // entries sort below assessed ones on ties), then by recency (updatedAt
+    // desc). Pinned entries surface early even among equal-relevance matches — pin means
     // "the user wants this remembered"; importance is the model's weaker,
     // optional version of the same judgment.
     const pinOf = (entry: MemoryEntry): number => entry.pinned === true ? 1 : 0

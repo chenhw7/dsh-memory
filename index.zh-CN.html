@@ -5,19 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
 <title>Cairn — DeepSeek Harness 长期记忆插件</title>
-<meta name="description" content="Cairn（@chenhw7/dsh-memory）：给 DeepSeek Harness 的持久化跨会话记忆。一条命令安装，九个模型工具，五种注入模式；自动提取、BM25 检索、全量审计——重启之后，它还记得。">
+<meta name="description" content="Cairn（@chenhw7/dsh-memory）：给 DeepSeek Harness 的持久化跨会话记忆。一条命令安装，九个记忆工具 + 一个身份工具，六种注入模式；自动提取、BM25 检索、全量审计——重启之后，它还记得。">
 <link rel="canonical" href="https://chenhw7.github.io/dsh-memory/index.zh-CN.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Cairn">
 <meta property="og:title" content="Cairn — DeepSeek Harness 长期记忆插件">
-<meta property="og:description" content="持久化跨会话记忆：一条命令安装，九个模型工具，五种注入模式；自动提取、BM25 检索、全量审计。">
+<meta property="og:description" content="持久化跨会话记忆：一条命令安装，九个记忆工具 + 一个身份工具，六种注入模式；自动提取、BM25 检索、全量审计。">
 <meta property="og:url" content="https://chenhw7.github.io/dsh-memory/index.zh-CN.html">
 <meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
 <meta property="og:locale" content="zh_CN">
 <meta property="og:locale:alternate" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Cairn — DeepSeek Harness 长期记忆插件">
-<meta name="twitter:description" content="持久化跨会话记忆：一条命令安装，九个模型工具，五种注入模式。重启之后，它还记得。">
+<meta name="twitter:description" content="持久化跨会话记忆：一条命令安装，九个记忆工具 + 一个身份工具，六种注入模式。重启之后，它还记得。">
 <meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero-zh-CN.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0a0e1f" media="(prefers-color-scheme: dark)">
@@ -58,7 +58,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <svg class="hero-logo" viewBox="0 0 100 100" role="img" aria-label="Cairn 标志"><g fill="currentColor"><rect x="19" y="65" width="30" height="14" rx="7"/><rect x="33" y="50" width="27" height="13" rx="6.5"/><rect x="47" y="36" width="24" height="12" rx="6"/></g><rect x="60" y="22.5" width="20" height="10.5" rx="5.25" fill="var(--accent)"/></svg>
     <div class="kick">DEEPSEEK HARNESS · 长期记忆插件</div>
     <h1 class="hero-title">重启之后，<em>它还记得。</em></h1>
-    <p class="hero-sub"><b>Cairn</b> 是给 <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> 的持久化跨会话记忆——<b>一条命令安装 · 九个模型工具 · 五种注入模式</b>。事实、偏好、约定与踩坑跨会话存活：每个新会话一开始，智能体就带着上一次的经验。</p>
+    <p class="hero-sub"><b>Cairn</b> 是给 <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> 的持久化跨会话记忆——<b>一条命令安装 · 九个记忆工具 + 一个身份工具 · 六种注入模式</b>。事实、偏好、约定与踩坑跨会话存活：每个新会话一开始，智能体就带着上一次的经验。</p>
     <div class="install">
       <div class="install-label">INSTALL · 安装</div>
       <div class="install-code"><span class="prompt">$</span><code>dsh plugin add --profile web @chenhw7/dsh-memory</code></div>
@@ -89,7 +89,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <div class="card rv" style="--d:.15s">
         <div class="ic">WITH CAIRN · 装上 Cairn</div>
         <h3>说过一次，就沉淀一次</h3>
-        <p>值得记的信号被自动提取、安全扫描、审计入库；下个会话开场，相关的记忆就以索引形式在场，需要全文时按需召回。使用即保鲜，遗忘有规则。</p>
+        <p>值得记的信号被自动提取、安全扫描、审计入库；下个会话开场，记忆的类目与主题词摘要已经在场，需要全文时用 memory_search / memory_get 按需召回。使用即保鲜，遗忘有规则。</p>
         <div class="tags"><span class="tag">自动沉淀</span><span class="tag">按需召回</span><span class="tag">衰减有度</span></div>
       </div>
     </div>
@@ -101,13 +101,13 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-kick">CAPABILITIES · 它能做什么</div>
-      <h2 class="sec-title">四大能力</h2>
+      <h2 class="sec-title">五大能力</h2>
     </div>
     <div class="grid2">
       <div class="card rv" style="--d:.02s">
         <div class="ic">01 · 持久存储</div>
         <h3>双后端 KV 存储，全量审计</h3>
-        <p>JSON（宿主存储域）或 SQLite（<code>node:sqlite</code>，零额外依赖）两种后端，迁移一次完成；跨进程单写者检测防止并发覆盖。entries / audit / suggestions / meta 四张表，每次变更都有来源与审计。卸载插件，记忆不丢。</p>
+        <p>JSON（宿主存储域）或 SQLite（<code>node:sqlite</code>，零额外依赖）两种后端，迁移一次完成；跨进程单写者检测防止并发覆盖。entries / audit / suggestions / meta / identity / identity_history 六张表，每次变更都有来源与审计。卸载插件，记忆不丢。</p>
         <div class="tags"><span class="tag">survives restarts</span><span class="tag">单写者检测</span></div>
       </div>
       <div class="card rv" style="--d:.1s">
@@ -124,9 +124,15 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       </div>
       <div class="card rv" style="--d:.26s">
         <div class="ic">04 · 上下文注入</div>
-        <h3>五种模式，KV 前缀稳定</h3>
-        <p>会话创建时冻结记忆快照，整个会话复用——前缀不变，KV-cache 全中。五种注入模式（默认 index 存在性索引）按需渐进披露，常驻成本随时可见（<code>≈N tokens</code> 标注）。步级自动召回（可选）走消息通道，不碰系统提示。</p>
+        <h3>六种模式，KV 前缀稳定</h3>
+        <p>会话创建时冻结记忆快照，整个会话复用——前缀不变，KV-cache 全中。六种注入模式（默认 digest 摘要）按需渐进披露，常驻成本随时可见（<code>≈N tokens</code> 标注）。步级自动召回（可选）走消息通道，不碰系统提示。</p>
         <div class="tags"><span class="tag">渐进式披露</span><span class="tag">成本可见</span></div>
+      </div>
+      <div class="card rv" style="--d:.34s">
+        <div class="ic">05 · 身份层（可选）</div>
+        <h3>SOUL.md 与 USER.md，助手自己写的身份</h3>
+        <p>SOUL.md 是助手的人格，USER.md 是它对你的工作画像。内容由助手在对话中经 <code>identity_update</code> 整文重写——每版留快照、可回滚；你在「身份」设置区审阅历史，但不直接编辑。默认关闭，开启后注入系统提示。</p>
+        <div class="tags"><span class="tag">identity_update</span><span class="tag">版本可回滚</span></div>
       </div>
     </div>
   </div>
@@ -140,11 +146,11 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <h2 class="sec-title">指标经过 CI 守门，<em>不靠体感</em></h2>
     </div>
     <div class="statwall rv" style="--d:.1s">
-      <div class="stat"><b>9</b><span>个模型可用工具</span><div class="src">memory_search → memory_forget</div></div>
+      <div class="stat"><b>9+1</b><span>个模型工具</span><div class="src">9 记忆工具 + identity_update（身份层默认关闭）</div></div>
       <div class="stat"><b>100<small>%</small></b><span>success@5 · 检索命中率</span><div class="src">35×35 中英 golden set · CI 下限 85%</div></div>
       <div class="stat"><b>0.902</b><span>MRR · 排名质量</span><div class="src">同 golden set · CI 下限 0.75</div></div>
       <div class="stat"><b>≈344</b><span>tokens · policy-only 常驻注入</span><div class="src">与记忆库大小无关</div></div>
-      <div class="stat"><b>967</b><span>个测试用例</span><div class="src">961 通过 + 6 需密钥跳过 · 每次 push 必跑</div></div>
+      <div class="stat"><b>1096</b><span>个测试用例</span><div class="src">1090 通过 + 6 需密钥跳过 · 每次 push 必跑</div></div>
       <div class="stat"><b>3</b><span>层作用域</span><div class="src">global · project · user</div></div>
     </div>
   </div>
@@ -168,7 +174,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       </div>
       <div class="step rv" style="--d:.25s">
         <h3>下个会话 · 注入</h3>
-        <p>会话创建时冻结快照（默认 index 索引模式），模型看见「存了什么」，用 memory_get 按需取全文；步级还可自动召回相关记忆，全部带 token 成本标注。</p>
+        <p>会话创建时冻结快照，首个 step 附上一份类目计数与主题词清单（默认 digest 摘要模式），全文用 memory_search / memory_get 按需取；步级还可自动召回相关记忆，全部带 token 成本标注。</p>
       </div>
     </div>
 
@@ -264,7 +270,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
         </div>
       </div>
     </div>
-    <p class="small rv" style="margin-top:16px">上表为界面示意（数据非真实）。设置中的四张卡——记忆、项目笔记、自动召回、自动提取——改完实时生效，无需重启；界面中英双语。插件不向你的仓库写入任何文件。</p>
+    <p class="small rv" style="margin-top:16px">上表为界面示意（数据非真实）。设置中的五张卡——记忆、项目笔记、自动召回、身份、自动提取——改完实时生效，无需重启；界面中英双语。插件不向你的仓库写入任何文件。</p>
   </div>
 </section>
 
@@ -284,7 +290,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <div class="card rv" style="--d:.15s">
         <div class="ic">LIMITS · 已知限制</div>
         <h3>诚实说在前面</h3>
-        <p>检索是纯词法的：BM25 不做语义向量，换一种说法的查询不会命中（同义改写靠 summary 入索引兜底）；提取质量跟随会话模型，不引入额外按键；宿主 DeepSeek Harness 处于 alpha 渠道（0.1.2-alpha），插件随之演进；远程管理面仅受信任主机保护，写操作默认关闭。</p>
+        <p>检索是纯词法的：BM25 不做语义向量，换一种说法的查询不会命中（同义改写靠 summary 入索引兜底）；提取质量跟随会话模型，不引入额外按键；宿主 DeepSeek Harness 处于 alpha 渠道（0.1.2-alpha.2），插件随之演进；远程管理面仅受信任主机保护，写操作默认关闭。</p>
       </div>
     </div>
   </div>
@@ -300,23 +306,23 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <div class="statusgrid rv" style="--d:.1s">
       <div class="st-cell">
         <div class="sl">当前版本</div>
-        <b id="stVer">v0.9.1</b>
+        <b id="stVer">v0.9.3</b>
         <div class="ss" id="stVerSrc">npm registry · 静态快照</div>
       </div>
       <div class="st-cell">
         <div class="sl">累计提交</div>
-        <b id="stCommits">207</b>
+        <b id="stCommits">241</b>
         <div class="ss" id="stCommitsSrc">stats.json · 静态快照</div>
       </div>
       <div class="st-cell">
         <div class="sl">最近更新</div>
-        <b id="stUpdated">2026-09-07</b>
+        <b id="stUpdated">2026-09-09</b>
         <div class="ss" id="stUpdatedSrc">stats.json · 静态快照</div>
       </div>
       <div class="st-cell">
         <div class="sl">测试用例</div>
-        <b>967</b>
-        <div class="ss">961 通过 + 6 需密钥跳过</div>
+        <b>1096</b>
+        <div class="ss">1090 通过 + 6 需密钥跳过</div>
       </div>
     </div>
     <p class="small rv" style="margin-top:16px">版本与提交数在页面打开时直接读取 npm registry 与仓库 stats.json（CI 每日刷新）；离线时显示上述烘焙的静态快照。</p>

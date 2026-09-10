@@ -73,10 +73,10 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <p class="hero-sub">It starts with "we use pnpm from now on" — how it gets captured, gated, stored, consolidated, recalled, injected, and how it ages out and says goodbye. Every station is a mechanism that really runs in the source; four of them are running live in your browser right now.</p>
     <div class="hero-lang"><a href="memory-architecture.zh-CN.html" hreflang="zh">中文版 →</a> · <a href="index.html">Home →</a></div>
     <div class="hero-stats">
-      <div class="hstat"><b>9</b><span>model-facing tools</span></div>
+      <div class="hstat"><b>9+1</b><span>model-facing tools</span></div>
       <div class="hstat"><b>100<i>%</i></b><span>success@5 · golden set</span></div>
-      <div class="hstat"><b>967</b><span>test cases</span></div>
-      <div class="hstat"><b>4</b><span>durable tables</span></div>
+      <div class="hstat"><b>1096</b><span>test cases</span></div>
+      <div class="hstat"><b>6</b><span>durable tables</span></div>
     </div>
   </div>
   <div class="scroll-hint">SCROLL ↓</div>
@@ -106,13 +106,13 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     </div>
     <div class="flow-loop rv" style="--d:.16s"><i>↺</i> Decay and sweeps recycle in the background: entries in use stay fresh, the ignored quietly step aside — then the loop begins again.</div>
 
-    <p class="lede rv" style="margin-top:44px">Under the hood it is seven Cordis rows: <code>memory-store</code> opens the storage domain and registers the <code>ctx.memory</code> service; <code>tool-memory</code> exposes the nine model-facing tools; <code>memory-review</code> runs auto-extraction and consolidation; <code>memory-context</code> owns system-prompt injection; <code>memory-notes</code> renders conventions and pitfalls into the <code>project-notes</code> section (writing nothing into your repository); <code>memory-remote</code> backs the memory console in Settings (remote writes denied by default); <code>memory-root</code> only discovers client modules. All rows share one storage domain.</p>
+    <p class="lede rv" style="margin-top:44px">Under the hood it is eight Cordis rows: <code>memory-store</code> opens the storage domain and registers the <code>ctx.memory</code> service; <code>tool-memory</code> exposes the nine memory tools plus the <code>identity_update</code> identity tool; <code>memory-review</code> runs auto-extraction and consolidation; <code>memory-notes</code> renders conventions and pitfalls into the <code>project-notes</code> section (writing nothing into your repository); <code>memory-identity</code> seeds and reads the identity documents (SOUL.md / USER.md, off by default); <code>memory-context</code> owns system-prompt injection; <code>memory-remote</code> backs the memory console in Settings (remote writes denied by default); <code>memory-root</code> only discovers client modules. All rows share one storage domain.</p>
     <p class="rv" style="--d:.06s">The data lands in <code>$DSH_HOME/storages/memory.json</code> (the default host-medium backend) or <code>$DSH_HOME/storages/memory.db</code> (the SQLite backend) — uninstalling the plugin never deletes your memories.</p>
 
     <div class="whybox rv" style="--d:.1s">
       <div class="wq">WHY · WHY DESIGNED THIS WAY</div>
       <h4>Why ship as one package with zero-dependency kernels?</h4>
-      <p>One npm package carries all seven rows: host services are declared as peer dependencies, provided by the DeepSeek Harness you already have — never re-installed. The retrieval, tokenization, and scanning kernels are hand-rolled with zero third-party dependencies (a recorded engineering constraint), and SQLite rides Node's built-in <code>node:sqlite</code>. The tarball ships prebuilt, so the install path runs no build scripts — the smaller the supply chain, the smaller the trusted surface.</p>
+      <p>One npm package carries all eight rows: host services are declared as peer dependencies, provided by the DeepSeek Harness you already have — never re-installed. The retrieval, tokenization, and scanning kernels are hand-rolled with zero third-party dependencies (a recorded engineering constraint), and SQLite rides Node's built-in <code>node:sqlite</code>. The tarball ships prebuilt, so the install path runs no build scripts — the smaller the supply chain, the smaller the trusted surface.</p>
     </div>
   </div>
 </section>
@@ -173,7 +173,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       </div>
       <div class="spec-row rv" style="--d:.1s">
         <span class="spec-k">Admission</span>
-        <p>The extraction prompt is itself a gate: <em>anything the repository already records, transient states and unverified assumptions, procedures never verified by a tool</em> are excluded; preferences need an explicit ask or a recurring topic. The line protocol emits <code>[anchors:…]</code> and <code>[project]</code> tags, with projectName taken from the highest-precedence source.</p>
+        <p>The extraction prompt is itself a gate: <em>anything the repository already records, transient states and unverified assumptions, procedures never verified by a tool</em> are excluded; preferences need an explicit ask or a recurring topic. The line protocol emits <code>[anchors:…]</code> and <code>[project]</code> tags, with projectName taken from the highest-precedence source. With the identity layer on, a mechanical anti-echo prefilter also runs: candidates whose IDF-weighted overlap with the injected identity documents exceeds 0.6 are dropped — the documents' own echo never gets copied into the store.</p>
       </div>
       <div class="spec-row rv" style="--d:.16s">
         <span class="spec-k">Curation</span>
@@ -244,10 +244,10 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
         <div class="anat-item"><b>② category</b><span>seven classes of lesson: failure / correction / insight / preference / convention / tool-quirk / procedure</span></div>
         <div class="anat-item"><b>③ summary</b><span>an optional short summary — rendered first by the index and auto-recall (progressive disclosure), and indexed so paraphrased queries still hit</span></div>
         <div class="anat-item"><b>④ anchors</b><span>anchor labels produced at extraction — key evidence for hit signals and sweep pairing</span></div>
-        <div class="anat-item"><b>⑤ importance</b><span>1–5, model-assessed: high values extend the decay grace window and act as a weak search tie-break</span></div>
+        <div class="anat-item"><b>⑤ importance</b><span>1–5, model-assessed: ≥4 extends the soft-decay grace window ×1.5 (the project hard-delete path has no grace), and acts as a weak search tie-break</span></div>
         <div class="anat-item"><b>⑥ pinned</b><span>pinned means immune to decay and exempt from batch forgetting — "the user wants this remembered"</span></div>
         <div class="anat-item"><b>⑦ status</b><span>the only path allowed to flip status: the old entry turns superseded and points at its replacement (station 03)</span></div>
-        <div class="anat-item"><b>⑧ accessCount</b><span>+1 on every hit, refreshing lastRecalledAt — use is the preservative; capacity eviction removes the least-used first</span></div>
+        <div class="anat-item"><b>⑧ accessCount</b><span>+1 on tool and read hits, refreshing lastRecalledAt (injection-fence hits refresh the timestamp only) — use is the preservative; capacity eviction removes the least-used first</span></div>
         <div class="anat-item"><b>⑨ hitCount</b><span>answer-echo hits (v0.9, opt-in): +1 when an injected entry is echoed by the answer — feeds the sweep only, never deletion</span></div>
         <div class="anat-item"><b>⑩ staleSince</b><span>the soft-decay stamp: hidden from injection surfaces once stamped, still searchable, revivable by recall</span></div>
       </div>
@@ -258,6 +258,14 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <div class="tbl rv" style="--d:.1s"><h4>audit</h4><div class="tb-sub">cap = 200 rows · monotonic seq</div><p>Every successful change appends: action, source (tool / review / flush / ui / janitor), content preview. Who wrote it and when is forever queryable.</p></div>
       <div class="tbl rv" style="--d:.18s"><h4>suggestions</h4><div class="tb-sub">cap = 200 rows</div><p>The review mode's pending queue. A proposal is not a memory — not injected, not searchable, not decayed; it waits for a human verdict (station 07).</p></div>
       <div class="tbl rv" style="--d:.26s"><h4>meta</h4><div class="tb-sub">new in v0.9</div><p>System metadata: the SQLite migration watermark (preventing a second migration), whole-store sweep progress and cooldown, consolidation-pipeline bookkeeping.</p></div>
+      <div class="tbl rv" style="--d:.34s"><h4>identity</h4><div class="tb-sub">new in v0.9.2 · one row per document</div><p>The current record of each identity document (SOUL.md / USER.md): content, version, and seed version, keyed by kind.</p></div>
+      <div class="tbl rv" style="--d:.42s"><h4>identity_history</h4><div class="tb-sub">20 versions kept per document</div><p>Version snapshots of the identity documents: every rewrite keeps one; a revert can only restore inside the window, and never destroys history.</p></div>
+    </div>
+
+    <div class="whybox rv" style="--d:.1s">
+      <div class="wq">IDENTITY · THE IDENTITY LAYER (OPT-IN, OFF BY DEFAULT)</div>
+      <h4>SOUL.md and USER.md: two documents the assistant maintains itself</h4>
+      <p>The last two tables serve a separate opt-in layer (<code>identityEnabled</code>). SOUL.md is the assistant's character; USER.md is its working profile of you — the assistant rewrites them whole through <code>identity_update</code> in conversation (budgets: soul 2000 / user 3000 chars), and every rewrite keeps a version snapshot. The Identity settings section stays read-only: review history, revert to any retained version, never edit directly. When enabled, both documents inject as their own prompt sections (station 05); the extraction pipeline's anti-echo prefilter keeps the documents' own echo out of the memory store (station 01).</p>
     </div>
 
     <p class="lede rv" style="margin-top:56px">Storage has two backends behind one config switch:</p>
@@ -297,13 +305,13 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
         <div class="flow">
           <div class="fnode"><b>New entry</b><span>extraction output</span></div>
           <div class="farrow">→</div>
-          <div class="fnode"><b>Prefilter</b><span>IDF-weighted overlap ≥ 0.15</span></div>
+          <div class="fnode"><b>Prefilter</b><span>IDF-weighted overlap ≥ 0.2</span></div>
           <div class="farrow">→</div>
           <div class="fnode"><b>Two-tier consolidation</b><span>one LLM call per batch</span></div>
           <div class="farrow">→</div>
           <div class="fnode"><b>Per-pair verdicts</b><span>merge / update /<br>conflict / new</span></div>
         </div>
-        <div class="flow-loop">The prefilter threshold is calibrated with true and false pairs (order-of-magnitude separation) and costs zero LLM calls — it removes the vast majority of unrelated pairs, including cross-scope ones.</div>
+        <div class="flow-loop">The prefilter threshold is calibrated with true and false pairs (order-of-magnitude separation), with rare-anchor co-occurrence (df ≤ 2) as an OR signal, and costs zero LLM calls — it removes the vast majority of unrelated pairs, including cross-scope ones. The old path's 0.15 threshold stays behind <code>consolidation: 'legacy-judge'</code>.</div>
         <div class="queue" style="border-top:none;padding-top:6px">
           <div class="q-row"><div class="hits">merge</div><div class="qt">"this project uses pnpm" + "the package manager is pnpm" → merged into one entry, keeping the fuller wording</div></div>
           <div class="q-row"><div class="hits">update</div><div class="qt">"CI runs jest" ⟵ new observation "CI actually runs vitest" → the existing entry is updated, audit trail intact</div></div>
@@ -317,7 +325,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <div class="spec">
       <div class="spec-row rv" style="--d:.04s">
         <span class="spec-k">Sweep</span>
-        <p>A <strong>whole-store sweep</strong> (opt-in, off by default): every 20 session creations, the top 20 pairs ranked by the use signal go through the verdict protocol again — built to catch synonymous rewrites sharing zero tokens; progress and cooldown (≥1 hour) persist in the meta table.</p>
+        <p>A <strong>whole-store sweep</strong> (opt-in, off by default): every 20 session creations (plus one startup pass on the first session), the top 20 entries by use signal (hitCount / accessCount / recency) are paired exhaustively (candidate pairs capped at 20) and go through the verdict protocol again. Pairing still passes the lexical gate — overlap > 0.2, so pairs sharing zero tokens are filtered all the same; the sweep's real gain is the existing-vs-existing pairing surface and the use-signal ranking. Progress and cooldown (≥1 hour) persist in the meta table.</p>
       </div>
       <div class="spec-row rv" style="--d:.1s">
         <span class="spec-k">Hits</span>
@@ -342,7 +350,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     </div>
     <p class="sec-sub rv" style="--d:.08s">No vector store, no embedding model — a hand-rolled Okapi BM25 with CJK-aware tokenization and conservative Latin stemming.</p>
 
-    <p class="lede rv" style="margin-top:40px">Retrieval is two steps: <strong>structured filters first</strong> (scope / category / projectName), then BM25 scores the survivors — with document frequencies computed over the full corpus, so common words can't inflate inside a small candidate pool. The tokenizer splits Latin words and strips one conservative suffix to fold forms (<code>uses→use</code>, <code>studies→study</code>; <code>class</code> and <code>basis</code> are never damaged); for CJK it emits <strong>single-character unigrams plus adjacent bigrams</strong> — bigrams stop "记忆" from matching every entry containing "记", unigrams keep single-character queries alive. summary joins the index alongside content. Final order: <strong>relevance ↓ → pinned ↓ → importance (absent reads mid-range) ↓ → recency ↓</strong>.</p>
+    <p class="lede rv" style="margin-top:40px">Retrieval is two steps: <strong>structured filters first</strong> (scope / category / projectName), then BM25 scores the survivors — with document frequencies computed over the full corpus, so common words can't inflate inside a small candidate pool. The tokenizer splits Latin words and strips one conservative suffix to fold forms (<code>uses→use</code>, <code>studies→study</code>; <code>class</code> and <code>basis</code> are never damaged); for CJK it emits <strong>single-character unigrams plus adjacent bigrams</strong> — bigrams stop "记忆" from matching every entry containing "记", unigrams keep single-character queries alive. summary joins the index alongside content. Final order: <strong>relevance ↓ → pinned ↓ → importance (absent reads 0, losing ties) ↓ → recency ↓</strong>.</p>
 
     <div class="formula rv" style="--d:.05s">score = Σ <i>IDF(term)</i> × <b>tf·(k₁+1) / (tf + k₁·(1−b + b·|d|/avgdl))</b>　　<span class="dim">k₁ = 1.2, b = 0.75, non-negative IDF variant</span></div>
 
@@ -377,15 +385,16 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     </div>
     <p class="sec-sub rv" style="--d:.08s">How memory enters the context decides every token it saves the model.</p>
 
-    <p class="lede rv" style="margin-top:40px">Each session <strong>freezes a memory snapshot</strong> at creation and reuses it for the whole session — prefix unchanged, KV-cache fully warm. The only re-freeze is compaction (the prompt is rebuilt anyway), so memories learned mid-session slip in exactly there. The memory section sits at system-prompt order 90 (before tool guidance), with project-notes right behind at 91.</p>
+    <p class="lede rv" style="margin-top:40px">Each session <strong>freezes a memory snapshot</strong> at creation and reuses it for the whole session — prefix unchanged, KV-cache fully warm. The only re-freeze is compaction (the prompt is rebuilt anyway), so memories learned mid-session slip in exactly there. The memory section sits at system-prompt order 6000 (right after the host's tool-guidance section at 5000), with project-notes right behind at 6001; with the identity layer on, the soul and user-profile sections sit further ahead at 80 / 81.</p>
 
     <figure class="demo rv">
       <div class="demo-panel">
-        <span class="fig-tag">Demo 3 · five injection modes (interactive)</span>
+        <span class="fig-tag">Demo 3 · six injection modes (interactive)</span>
         <div class="modes" id="modeBtns">
+          <button class="mode-btn on" data-m="digest">digest</button>
           <button class="mode-btn" data-m="policy">policy-only</button>
           <button class="mode-btn" data-m="full">full</button>
-          <button class="mode-btn on" data-m="index">index</button>
+          <button class="mode-btn" data-m="index">index</button>
           <button class="mode-btn" data-m="custom">custom</button>
           <button class="mode-btn" data-m="off">off</button>
         </div>
@@ -399,8 +408,8 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
 
     <div class="whybox rv" style="--d:.1s">
       <div class="wq">WHY · WHY DESIGNED THIS WAY</div>
-      <h4>Why is index the default mode?</h4>
-      <p>The existence index's size grows with <strong>category count</strong>, not entry count — standing cost stays bounded and budgetable (policy-only is a flat ≈344 tokens; full mode dual-budgets 5000 chars / 20 entries). The model sees what exists and pulls full text via <code>memory_get</code> on demand: progressive disclosure preserves both KV-prefix stability and the token budget.</p>
+      <h4>Why is digest the default mode?</h4>
+      <p>Standing cost should decouple from store size: policy-only is a flat ≈344 tokens, and digest adds only a one-time ≈126-token category-and-topics inventory on the first step — the model knows roughly what the store holds and pulls full text via <code>memory_search</code> / <code>memory_get</code> on demand. No entry data enters the system prompt at all, so the KV prefix stays perfectly stable; stores that want a stronger presence can still switch to index or full (dual budget: 5000 chars / 20 entries).</p>
     </div>
   </div>
 </section>
@@ -486,7 +495,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <figcaption>Proposals observed repeatedly accumulate hits and float up — what the model raises most often is what most deserves your own eyes. <strong>The model never self-promotes.</strong></figcaption>
     </figure>
 
-    <p class="rv" style="--d:.06s">Finally, the <strong>remote boundary</strong>: the memory console's 15 RPC methods are read-only by default — writes sit behind one deployment-level switch (<code>remoteWritesEnabled</code>). What is trusted is the transport fence (loopback / LAN / trusted hosts, owned by the host), not the storage face: a wider trust scope never silently grows into whole-store write access.</p>
+    <p class="rv" style="--d:.06s">Finally, the <strong>remote boundary</strong>: the memory console's 18 RPC methods are read-only by default — 10 reads and 8 writes, the writes sitting behind one deployment-level switch (<code>remoteWritesEnabled</code>); identity governance owns three methods of its own (identityList / identityHistory / identityRevert), and a revert must also pass a second switch (<code>identityRevertEnabled</code>). What is trusted is the transport fence (loopback / LAN / trusted hosts, owned by the host), not the storage face: a wider trust scope never silently grows into whole-store write access.</p>
   </div>
 </section>
 
@@ -503,9 +512,9 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <table class="cmp">
         <tr><th>Layer</th><th>What it measures</th><th>How it runs</th></tr>
         <tr><td>L0</td><td>golden-set retrieval benchmark (35 entries × 35 queries, en / zh / mixed, with synonym and Latin-inflection slices)</td><td>CI gates: success@5 ≥ 0.85 · MRR ≥ 0.75 · P@1 ≥ 0.6 · zh-slice success@5 ≥ 0.8</td></tr>
-        <tr><td>L1</td><td>behavioral eval: core-v0, 32 scenarios / 132 questions + noise-v0, 6 long-noise scenarios</td><td>runs the real harness with a deterministic mock model — no credentials, green on every push</td></tr>
+        <tr><td>L1</td><td>behavioral eval: core-v0, 32 scenarios / 132 questions + noise-v0, 6 long-noise scenarios + identity-v0, 3 scenarios / 6 questions</td><td>runs the real harness with a deterministic mock model — no credentials, green on every push</td></tr>
         <tr><td>L2</td><td>real-model judged scoring, versioned rubrics (storage-v2 / recall-v2)</td><td>environment-gated; the judge is deliberately never the model under test — no self-grading bias</td></tr>
-        <tr><td>Unit</td><td>967 test cases (961 passing + 6 key-gated skips)</td><td>the store contract runs against three backends: in-memory / JSON domain / SQLite</td></tr>
+        <tr><td>Unit</td><td>1096 test cases (1090 passing + 6 key-gated skips)</td><td>the store contract runs against three backends: in-memory / JSON domain / SQLite</td></tr>
       </table>
     </div>
 
@@ -529,9 +538,10 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       src/review/ · capture, extraction &amp; consolidation<br>
       src/store/ · dual-backend storage + BM25 retrieval<br>
       src/context/ · injection policy &amp; conflict annotations<br>
-      src/tool/ · the nine model-facing tools<br>
+      src/tool/ · the nine memory tools + identity_update<br>
       src/scanner.ts · the bidirectional content fence<br>
-      src/notes/ · project-notes projection
+      src/notes/ · project-notes projection<br>
+      src/identity/ · the SOUL.md / USER.md identity layer
     </div>
   </div>
 </footer>
@@ -667,7 +677,7 @@ function tokenizeForSearch(text){
   const re=/[a-z0-9]+|[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+/g;
   let m;while((m=re.exec(lowered))!==null){
     const run=m[0];
-    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf]/.test(run)){tokens.push(stemLatin(run));continue}
+    if(!/[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]/.test(run)){tokens.push(stemLatin(run));continue}
     const chars=[...run];
     for(const ch of chars)tokens.push(ch);
     for(let i=0;i+1<chars.length;i++)tokens.push(chars[i]+chars[i+1]);
@@ -754,6 +764,27 @@ search();
 (function(){
 const view=document.getElementById('modeView'),cap=document.getElementById('modeCap');
 const views={
+digest:`<span class="fx">&lt;memory-policy&gt;</span>
+Persistent memory is available through memory tools.
+<span class="hl2">Do not assume memory has already been loaded.</span>
+Use memory_search when the task may depend on durable
+context from previous sessions…
+<span class="cm">+ mode hint: a one-time &lt;memory-digest&gt; inventory rides
+  the first step; per-step hits arrive in &lt;recalled-memory&gt;
+  fences — both are pointers, not content</span>
+<span class="fx">&lt;/memory-policy&gt;</span>
+
+<span class="cm"># one-time message appended at the first step's tail (re-sent after compaction):</span>
+<span class="fx">&lt;memory-digest&gt;</span>
+Stored memory inventory, injected once per session.
+These are counts and topics, not content…
+project · dsh-memory: convention ×2, procedure ×1, failure ×1
+user: preference ×2, correction ×1
+global: tool-quirk ×1, insight ×1, procedure ×1
+Topics: pnpm, commit message, vitest, 8080
+[10 entries]
+<span class="fx">&lt;/memory-digest&gt;</span>
+<span class="cm">[memory-digest fence: 504 characters ≈126 tokens]</span>`,
 policy:`<span class="fx">&lt;memory-policy&gt;</span>
 Persistent memory is available through memory tools.
 <span class="hl2">Do not assume memory has already been loaded.</span>
@@ -791,9 +822,10 @@ off:`<span class="cm">// no memory section is injected
 // 0 chars, 0 token cost in the system prompt</span>`
 };
 const caps={
+digest:'<b>The default (since v0.9.2).</b> The system prompt carries only the policy plus a mode hint (≈434 tokens standing); a one-time category-count and topic-word inventory lands on the first step (≈126 tokens) and never enters the KV prefix. The model knows roughly what the store holds; full text is pulled on demand via memory_search / memory_get.',
 policy:'<b>Policy-only.</b> Injects guidance only, no content — the model calls memory_search on demand. Lowest standing cost: a flat ≈344 tokens, independent of store size.',
 full:'<b>Full mode.</b> Frozen snapshot + guidance injected together — the model sees every healthy memory out of the box (dual budget: 5000 chars / 20 entries). Best for small, curated stores.',
-index:'<b>The default (since 0.8) · progressive disclosure.</b> One existence-index line per entry; past the budget the tail folds into per-category count lines — index size grows with category count, not entry count.',
+index:'<b>Existence index · progressive disclosure.</b> One existence-index line per entry; past the budget the tail folds into per-category count lines — index size grows with category count, not entry count.',
 custom:'<b>Custom.</b> Your own policy text, verbatim — you own the memory section\'s wording entirely.',
 off:'<b>Off.</b> The section is absent; the tool layer is unaffected.'
 };
@@ -803,7 +835,7 @@ btns.forEach(b=>b.onclick=()=>{
   view.style.opacity=0;
   setTimeout(()=>{view.innerHTML=views[b.dataset.m];cap.innerHTML=caps[b.dataset.m];view.style.opacity=1},220);
 });
-view.innerHTML=views.index;cap.innerHTML=caps.index;
+view.innerHTML=views.digest;cap.innerHTML=caps.digest;
 })();
 
 /* ═════════ Demo 4 · decay simulator ═════════ */

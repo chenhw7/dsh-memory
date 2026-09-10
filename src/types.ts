@@ -149,8 +149,8 @@ export interface AddMemoryInput {
   readonly sessionId?: string | undefined
   /**
    * Model-supplied importance (1–5); optional. Clamped into range on write.
-   * Absent means "not assessed", not "unimportant" — ranking treats absent
-   * and mid-range alike rather than penalizing unassessed entries.
+   * Absent means "not assessed": the ranking tie-break reads absent as 0,
+   * so unassessed entries sort below every assessed one at equal relevance.
    */
   readonly importance?: number | undefined
   /**

@@ -5,19 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon.png">
 <title>Cairn — long-term memory for DeepSeek Harness</title>
-<meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. One command to install — nine model-facing tools, five injection modes; auto-extraction, BM25 retrieval, full audit. Restart the session — it still remembers.">
+<meta name="description" content="Cairn (@chenhw7/dsh-memory): persistent cross-session memory for DeepSeek Harness. One command to install — nine memory tools plus an identity tool, six injection modes; auto-extraction, BM25 retrieval, full audit. Restart the session — it still remembers.">
 <link rel="canonical" href="https://chenhw7.github.io/dsh-memory/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Cairn">
 <meta property="og:title" content="Cairn — long-term memory for DeepSeek Harness">
-<meta property="og:description" content="Persistent cross-session memory: one command to install, nine model-facing tools, five injection modes; auto-extraction, BM25 retrieval, full audit.">
+<meta property="og:description" content="Persistent cross-session memory: one command to install, nine memory tools plus an identity tool, six injection modes; auto-extraction, BM25 retrieval, full audit.">
 <meta property="og:url" content="https://chenhw7.github.io/dsh-memory/">
 <meta property="og:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="zh_CN">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Cairn — long-term memory for DeepSeek Harness">
-<meta name="twitter:description" content="Persistent cross-session memory: one command to install, nine model-facing tools, five injection modes. Restart the session — it still remembers.">
+<meta name="twitter:description" content="Persistent cross-session memory: one command to install, nine memory tools plus an identity tool, six injection modes. Restart the session — it still remembers.">
 <meta name="twitter:image" content="https://chenhw7.github.io/dsh-memory/assets/memory-architecture-hero.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0a0e1f" media="(prefers-color-scheme: dark)">
@@ -58,7 +58,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <svg class="hero-logo" viewBox="0 0 100 100" role="img" aria-label="Cairn logo"><g fill="currentColor"><rect x="19" y="65" width="30" height="14" rx="7"/><rect x="33" y="50" width="27" height="13" rx="6.5"/><rect x="47" y="36" width="24" height="12" rx="6"/></g><rect x="60" y="22.5" width="20" height="10.5" rx="5.25" fill="var(--accent)"/></svg>
     <div class="kick">DEEPSEEK HARNESS · LONG-TERM MEMORY PLUGIN</div>
     <h1 class="hero-title">Restart the session.<br><em>It still remembers.</em></h1>
-    <p class="hero-sub"><b>Cairn</b> is persistent cross-session memory for the <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> — <b>one command to install · nine model-facing tools · five injection modes</b>. Facts, preferences, conventions, and hard-won lessons survive across sessions: every new conversation starts with last time's experience already on the table.</p>
+    <p class="hero-sub"><b>Cairn</b> is persistent cross-session memory for the <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">DeepSeek Harness</a> — <b>one command to install · nine memory tools + one identity tool · six injection modes</b>. Facts, preferences, conventions, and hard-won lessons survive across sessions: every new conversation starts with last time's experience already on the table.</p>
     <div class="install">
       <div class="install-label">INSTALL</div>
       <div class="install-code"><span class="prompt">$</span><code>dsh plugin add --profile web @chenhw7/dsh-memory</code></div>
@@ -89,7 +89,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <div class="card rv" style="--d:.15s">
         <div class="ic">WITH CAIRN</div>
         <h3>Say it once — it stays said</h3>
-        <p>Worthwhile signals are extracted, scanned, audited, and stored; the next session opens with the relevant memories present as an index, full text recalled on demand. Use keeps them fresh, forgetting follows rules.</p>
+        <p>Worthwhile signals are extracted, scanned, audited, and stored; the next session opens with a digest of category counts and topic words already present, full text recalled on demand via memory_search / memory_get. Use keeps them fresh, forgetting follows rules.</p>
         <div class="tags"><span class="tag">auto-distilled</span><span class="tag">recalled on demand</span><span class="tag">decay with rules</span></div>
       </div>
     </div>
@@ -101,13 +101,13 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
   <div class="wrap">
     <div class="sec-head rv">
       <div class="sec-kick">CAPABILITIES · WHAT IT DOES</div>
-      <h2 class="sec-title">Four capabilities</h2>
+      <h2 class="sec-title">Five capabilities</h2>
     </div>
     <div class="grid2">
       <div class="card rv" style="--d:.02s">
         <div class="ic">01 · Persistent storage</div>
         <h3>Dual-backend KV store, fully audited</h3>
-        <p>JSON (the host storage domain) or SQLite (<code>node:sqlite</code>, zero extra dependencies) backends with a one-time migration; cross-process single-writer detection guards against concurrent clobbering. Four tables — entries / audit / suggestions / meta — and every change is attributed and audited. Uninstall the plugin, keep the memories.</p>
+        <p>JSON (the host storage domain) or SQLite (<code>node:sqlite</code>, zero extra dependencies) backends with a one-time migration; cross-process single-writer detection guards against concurrent clobbering. Six tables — entries / audit / suggestions / meta / identity / identity_history — and every change is attributed and audited. Uninstall the plugin, keep the memories.</p>
         <div class="tags"><span class="tag">survives restarts</span><span class="tag">single-writer detection</span></div>
       </div>
       <div class="card rv" style="--d:.1s">
@@ -124,9 +124,15 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       </div>
       <div class="card rv" style="--d:.26s">
         <div class="ic">04 · Context injection</div>
-        <h3>Five modes, KV-prefix stability</h3>
-        <p>The memory snapshot freezes at session creation and is reused all session — prefix unchanged, KV-cache fully warm. Five injection modes (index, the default, is an existence index) disclose progressively, with standing cost always visible (<code>≈N tokens</code> footer). Optional step-level auto-recall rides the message channel and never touches the system prompt.</p>
+        <h3>Six modes, KV-prefix stability</h3>
+        <p>The memory snapshot freezes at session creation and is reused all session — prefix unchanged, KV-cache fully warm. Six injection modes (digest, the default, ships category counts and topic words) disclose progressively, with standing cost always visible (<code>≈N tokens</code> footer). Optional step-level auto-recall rides the message channel and never touches the system prompt.</p>
         <div class="tags"><span class="tag">progressive disclosure</span><span class="tag">visible cost</span></div>
+      </div>
+      <div class="card rv" style="--d:.34s">
+        <div class="ic">05 · Identity layer (opt-in)</div>
+        <h3>SOUL.md &amp; USER.md — written by the assistant itself</h3>
+        <p>SOUL.md is the assistant's character; USER.md is its working profile of you. The assistant rewrites them whole via <code>identity_update</code> in conversation — every version is snapshotted and revertible; you review history in the Identity settings section but never edit directly. Off by default; when enabled, both inject into the system prompt.</p>
+        <div class="tags"><span class="tag">identity_update</span><span class="tag">versioned &amp; revertible</span></div>
       </div>
     </div>
   </div>
@@ -140,11 +146,11 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <h2 class="sec-title">Metrics with <em>CI gates</em></h2>
     </div>
     <div class="statwall rv" style="--d:.1s">
-      <div class="stat"><b>9</b><span>model-facing tools</span><div class="src">memory_search → memory_forget</div></div>
+      <div class="stat"><b>9+1</b><span>model-facing tools</span><div class="src">9 memory tools + identity_update (identity layer off by default)</div></div>
       <div class="stat"><b>100<small>%</small></b><span>success@5 · retrieval hit rate</span><div class="src">35×35 en+zh golden set · CI floor 85%</div></div>
       <div class="stat"><b>0.902</b><span>MRR · ranking quality</span><div class="src">same golden set · CI floor 0.75</div></div>
       <div class="stat"><b>≈344</b><span>tokens · policy-only standing injection</span><div class="src">independent of store size</div></div>
-      <div class="stat"><b>967</b><span>test cases</span><div class="src">961 passing + 6 key-gated skips · every push</div></div>
+      <div class="stat"><b>1096</b><span>test cases</span><div class="src">1090 passing + 6 key-gated skips · every push</div></div>
       <div class="stat"><b>3</b><span>scopes</span><div class="src">global · project · user</div></div>
     </div>
   </div>
@@ -168,7 +174,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       </div>
       <div class="step rv" style="--d:.25s">
         <h3>Next session · inject</h3>
-        <p>The snapshot freezes at session creation (index mode by default): the model sees what exists and pulls full text via memory_get; step-level auto-recall can add relevant memories on the fly — all with visible token cost.</p>
+        <p>The snapshot freezes at session creation, and a one-time digest of category counts and topic words lands on the first step (digest mode by default): the model pulls full text via memory_search / memory_get; step-level auto-recall can add relevant memories on the fly — all with visible token cost.</p>
       </div>
     </div>
 
@@ -264,7 +270,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
         </div>
       </div>
     </div>
-    <p class="small rv" style="margin-top:16px">The mock above illustrates the console UI (numbers are not real). The four settings cards — Memory, Project Notes, Auto Recall, Automatic Extraction — apply live with no restart; the UI is bilingual. The plugin never writes files into your repository.</p>
+    <p class="small rv" style="margin-top:16px">The mock above illustrates the console UI (numbers are not real). The five settings cards — Memory, Project Notes, Auto Recall, Identity, Automatic Extraction — apply live with no restart; the UI is bilingual. The plugin never writes files into your repository.</p>
   </div>
 </section>
 
@@ -284,7 +290,7 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
       <div class="card rv" style="--d:.15s">
         <div class="ic">LIMITS · KNOWN LIMITS</div>
         <h3>Said up front, honestly</h3>
-        <p>Retrieval is purely lexical: BM25 does no semantic vectors, so a paraphrased query misses (synonyms ride on summary indexing). Extraction quality tracks the session model — no extra keys. The host DeepSeek Harness is on the alpha channel (0.1.2-alpha); the plugin moves with it. The remote console is transport-trust only, writes off by default.</p>
+        <p>Retrieval is purely lexical: BM25 does no semantic vectors, so a paraphrased query misses (synonyms ride on summary indexing). Extraction quality tracks the session model — no extra keys. The host DeepSeek Harness is on the alpha channel (0.1.2-alpha.2); the plugin moves with it. The remote console is transport-trust only, writes off by default.</p>
       </div>
     </div>
   </div>
@@ -300,23 +306,23 @@ document.documentElement.dataset.theme=(t==='dark'||t==='light')?t:(matchMedia('
     <div class="statusgrid rv" style="--d:.1s">
       <div class="st-cell">
         <div class="sl">CURRENT VERSION</div>
-        <b id="stVer">v0.9.1</b>
+        <b id="stVer">v0.9.3</b>
         <div class="ss" id="stVerSrc">npm registry · baked snapshot</div>
       </div>
       <div class="st-cell">
         <div class="sl">TOTAL COMMITS</div>
-        <b id="stCommits">207</b>
+        <b id="stCommits">241</b>
         <div class="ss" id="stCommitsSrc">stats.json · baked snapshot</div>
       </div>
       <div class="st-cell">
         <div class="sl">LAST UPDATE</div>
-        <b id="stUpdated">2026-09-07</b>
+        <b id="stUpdated">2026-09-09</b>
         <div class="ss" id="stUpdatedSrc">stats.json · baked snapshot</div>
       </div>
       <div class="st-cell">
         <div class="sl">TEST CASES</div>
-        <b>967</b>
-        <div class="ss">961 passing + 6 key-gated skips</div>
+        <b>1096</b>
+        <div class="ss">1090 passing + 6 key-gated skips</div>
       </div>
     </div>
     <p class="small rv" style="margin-top:16px">Version and commit figures are read live from the npm registry and the repo's stats.json (refreshed daily by CI) when you open the page; offline you see the baked snapshot above.</p>
