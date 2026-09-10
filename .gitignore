@@ -8,6 +8,10 @@ node_modules/
 lib/
 *.tsbuildinfo
 
+# Generated at Pages-deploy time into the site artifact — never committed
+# (.github/workflows/site-pages.yml builds it; a local --out run previews it)
+/stats.json
+
 # Environment & secrets
 .env
 .env.*
