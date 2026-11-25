@@ -246,6 +246,70 @@ describe('suggestion queue (P1-1)', () => {
 // Identity proposals in the queue (the identity layer's confirm-mode path):
 // dedup by document kind, adoption through the identity write path, and the
 // dedup-dimension separation from entry proposals.
+describe('lifecycle proposals survive the durable round-trip', () => {
+  it('keeps the action through the storage schema', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'a fact to delete' })
+    await store.observeSuggestion({
+      scope: 'global',
+      content: entry.content,
+      targetEntryId: entry.id,
+      action: 'remove',
+      source: 'tool',
+    })
+    // `domainTable` validates on read with the durable schema; a field missing
+    // from that schema is stripped here and the proposal would adopt as an
+    // update instead of a removal.
+    const [row] = store.listSuggestions()
+    expect(row!.action).toBe('remove')
+  })
+
+  it('adopting a removal proposal deletes the target and writes nothing', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'a fact to delete' })
+    const proposal = await store.observeSuggestion({
+      scope: 'global',
+      content: entry.content,
+      targetEntryId: entry.id,
+      action: 'remove',
+      source: 'tool',
+    })
+    const adopted = await store.adoptSuggestion(proposal.id)
+    expect(adopted).toBeUndefined()
+    expect(store.get(entry.id)).toBeUndefined()
+    expect(store.listSuggestions()).toHaveLength(0)
+  })
+
+  it('adopting a pin proposal pins the target without touching its content', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'keep me' })
+    const proposal = await store.observeSuggestion({
+      scope: 'global',
+      content: entry.content,
+      targetEntryId: entry.id,
+      action: 'pin',
+      source: 'tool',
+    })
+    await store.adoptSuggestion(proposal.id)
+    expect(store.get(entry.id)!.pinned).toBe(true)
+    expect(store.get(entry.id)!.content).toBe('keep me')
+  })
+
+  it('a legacy row without an action keeps the add-or-update inference', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'original' })
+    const proposal = await store.observeSuggestion({
+      scope: 'global',
+      content: 'rewritten',
+      targetEntryId: entry.id,
+      source: 'tool',
+    })
+    expect(store.listSuggestions()[0]!.action).toBeUndefined()
+    await store.adoptSuggestion(proposal.id)
+    expect(store.get(entry.id)!.content).toBe('rewritten')
+  })
+})
+
 describe('identity proposals in the queue (DomainMemoryStore)', () => {
   function makeIdentityStore(): DomainMemoryStore {
     return new DomainMemoryStore(memTable(), memTable(), memTable(), memTable(), 200, 200, undefined, 500, {

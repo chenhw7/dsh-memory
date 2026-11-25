@@ -124,6 +124,11 @@ const suggestionSchema = zod.object({
   firstSeenAt: zod.number(),
   lastSeenAt: zod.number(),
   targetEntryId: zod.string().optional(),
+  // The operation adoption performs. Optional so rows written before this
+  // field existed keep loading (they fall back to the add-or-update
+  // inference); without this line the schema would strip the field on the
+  // medium round-trip and a queued removal would silently adopt as an update.
+  action: zod.enum(['add', 'update', 'remove', 'pin', 'unpin']).optional(),
   source: zod.enum(['tool', 'review', 'flush', 'ui', 'janitor']),
   sessionId: zod.string().optional(),
 })
