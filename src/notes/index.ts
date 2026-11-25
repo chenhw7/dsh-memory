@@ -15,9 +15,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: merges the `settings` service (SettingsProvider) into the Context
-// so `ctx.settings` types in this module.
-import type {} from '@deepseek-ai/dsh-settings'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { scanContent } from '../scanner.ts'
 import type { MemoryStore } from '../index.ts'
