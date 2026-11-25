@@ -33,20 +33,24 @@ sequenceDiagram
 
     Host->>Tool: apply(ctx, config) [inject: tools]
     Tool->>Store: ctx.get('memory')（懒解析，每次调用）
-    Tool->>Host: 注册 8 个 memory_* 工具<br/>ctx.inject(['settings']) → 实时 maxSearchResults（memory ns）<br/>+ 实时 confirmBeforeWrite（memory-review ns）
+    Tool->>Host: 注册 9 个 memory_* 工具<br/>maxSearchResults 取自 ctx.memory.settings()<br/>+ confirmBeforeWrite 取自 ctx.memoryReview.settings()
 
     Host->>Review: apply(ctx, config) [inject: llm]
-    Review->>Review: installSettingsSection('memory-review', Config)<br/>（… + confirmBeforeWrite，默认 false）
+    Review->>Review: ctx.provide('memoryReview', { settings() })<br/>（… + confirmBeforeWrite，默认 false）<br/>decayDays 取自 ctx.memory.settings()
     Review->>Review: ctx.inject(['sessionProjections']) →<br/>注册累加器（stateVersion 2）
     Review->>Host: agent/pre-step drain · compaction/end flush ·<br/>session/disposed flush · session/created janitor + curator
 
-    Host->>Notes: apply(ctx) [无 inject]
-    Notes->>Notes: resolveNotesSettings(ctx.settings.get('memory'))
+    Host->>Notes: apply(ctx, config) [无 inject]
+    Notes->>Notes: Config = NOTES_FIELDS → resolveNotesSettings(config)
     Notes->>Host: ctx.provide('projectNotes', ProjectNotesServiceImpl)<br/>agent/pre-step 脏检查（2s 去抖）
 
+    Host->>Identity: apply(ctx, config) [无 inject]
+    Identity->>Host: ctx.provide('identity', IdentityServiceImpl)<br/>settings() = 解析后的 Config（种子目录、预算）
+
     Host->>Context: apply(ctx, config) [inject: systemPrompt]
-    Context->>Context: installSettingsSection('memory', MemoryConfig)
-    Context->>Notes: ctx.get('projectNotes')（可选，冻结时使用）
+    Context->>Context: Config = AutoRecallSettings（memory-autorecall 条目）
+    Context->>Store: ctx.get('memory')?.settings()（注入切片）
+    Context->>Notes: ctx.get('projectNotes')?.settings()（可选，冻结时使用）
     Context->>Host: systemPrompt.section('memory', order 6000)<br/>systemPrompt.section('project-notes', order 6001)<br/>session/created 冻结 · compaction/end 重冻结 + 清单重布防<br/>agent/pre-step 消息尾部注入中间件
 
     Host->>Remote: apply(ctx) [inject: memory]
@@ -628,38 +632,36 @@ sequenceDiagram
 
 ---
 
-## 12. 客户端设置界面（五张卡片 + Memory 区）
+## 12. 客户端设置界面（bundle 配置页 + Memory 区）
 
-浏览器向「设置 → 插件 → 插件配置」注册五张卡片，外加独立的 **Memory** 区（`settings.section`，id `memory`，order 25）及其三个 tab（Overview / Review / Manage）；卡片用户编辑本地暂存的草稿，保存时提交为持久 revision-fenced 字段写入。
+浏览器向「设置 → 插件 → bundle 自己的页面」注册**一个**配置页（`plugins.bundle.config`，key `@chenhw7/dsh-memory`），内含五个 section（每个条目一个），外加独立的 **Memory** 区（`settings.section`，id `memory`，order 25）及其三个 tab（Overview / Review / Manage）；每个 section 编辑本地暂存的草稿，保存时提交为**一次** revision-fenced `mutate`。
 
 ```mermaid
 sequenceDiagram
     participant Browser as Browser
     participant Client as client/index.ts
-    participant Card as MemoryPluginCard / NamespaceCard
+    participant Card as MemorySection / NamespaceSection
     participant Section as MemorySection + memory-section-store
     participant Catalog as connection.api.llm.models
-    participant Scope as SettingsScope（按命名空间绑定）
-    participant Host as dsh settings.yaml（user 层）
+    participant Form as ConfigForm（ctx.configForms，按条目）
+    participant Host as profile 条目 config（user 层）
     participant Remote as memoryRemote（经 /api RPC）
     participant Runtime as context/review/tool 处理器
 
     Note over Browser,Client: 阶段 1：插件加载与注册
 
-    Browser->>Client: apply(ctx) [inject: slots, locale, settingsScope, connection]
+    Browser->>Client: apply(ctx) [inject: slots, locale, connection, configForms]
     Client->>Client: ctx.locale.register('settings.memory', { zh, en })
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
-    loop 5 张卡片，各占一个已注册命名空间：memory · memory-notes · memory-autorecall · memory-identity · memory-review（… confirmBeforeWrite）
-        Client->>Scope: ctx.settingsScope.bind({ namespace })
-        Client->>Browser: slots.inject('settings.plugin.item', key, component)
-    end
+    Client->>Form: whileServed([memory · memory-notes · memory-autorecall · memory-identity · memory-review])<br/>→ 逐条目 configForms.get(entryId)
+    Client->>Browser: slots.register('plugins.bundle.config', key '@chenhw7/dsh-memory', SettingsPage)
     Client->>Browser: slots.register('settings.section', id 'memory', order 25)
     Note over Browser,Section: Memory 区挂载：Overview（健康仪表盘）·<br/>Review（suggestList 队列，采纳/拒绝可带修改）·<br/>Manage（浏览 + 编辑/置顶/归档/删除）
 
     Note over Card,Catalog: 阶段 2：用户展开卡片
 
-    Browser->>Card: render（status !== 'ready' → null）
-    Card->>Scope: getSnapshot() → { value（resolved）, user, writable, status }
+    Browser->>Card: 渲染 section（status !== 'ready' → null）
+    Card->>Form: getSnapshot() → { value（resolved）, user, writable, revision, status }
     Card->>Card: draft = { defaults, ...committed }【本地暂存】
 
     opt 含 select 字段的卡片（提取 provider/model）
@@ -672,16 +674,14 @@ sequenceDiagram
 
     Browser->>Card: 编辑字段 → 更新 draft（Save 由 dirty && valid 门控）
     Browser->>Card: 点击 Save
-    loop draft ≠ committed 的字段
-        Card->>Scope: set(field, value) | unset(field)
-        Scope->>Host: 持久 revision-fenced 文档变更（并行下发）
-    end
+    Card->>Form: mutate([{op:'set',path,value} | {op:'unset',path} …], revision)
+    Form->>Host: 整段草稿一次 revision-fenced 写入
     Host-->>Card: push 新快照 → draft 重新播种
 
     Note over Runtime: 阶段 4：实时生效（无需重启）
 
-    Runtime->>Runtime: 下次组装/事件重读 resolved 设置
-    Note over Runtime: context：注入段文本逐次组装重建（快照冻结到 compaction）<br/>review：旋钮逐事件重解析 · tool-memory：搜索上限 + confirmBeforeWrite 逐调用读取<br/>notes：每次 snapshotFor 运行设置解析器
+    Runtime->>Runtime: 宿主对被改动的条目重跑 apply(ctx, config)
+    Note over Runtime: context：注入段逐次组装重建，并对重启清空了快照的会话惰性重冻结<br/>review：旋钮逐事件重解析 · tool-memory：搜索上限取自 ctx.memory，<br/>confirmBeforeWrite 取自 ctx.memoryReview · notes/identity：由各自服务暴露 settings()
 
     Note over Browser,Remote: 阶段 5：Memory 区数据面（三个 tab）
 
@@ -710,9 +710,9 @@ graph TB
     end
 
     subgraph "工具层"
-        Tool["tool/index.ts<br/>8 个 memory_* 工具（人审感知，<br/>memory_list 智能视图 + 时间窗）"]
-        SettingsNS["settings 'memory' ns<br/>maxSearchResults 实时读取"]
-        ReviewNS["settings 'memory-review' ns<br/>confirmBeforeWrite 实时读取"]
+        Tool["tool/index.ts<br/>9 个 memory_* 工具（人审感知，<br/>memory_list 智能视图 + 时间窗）"]
+        SettingsNS["ctx.memory.settings()<br/>maxSearchResults 读取"]
+        ReviewNS["ctx.memoryReview.settings()<br/>confirmBeforeWrite 读取"]
     end
 
     subgraph "评估层"
@@ -744,10 +744,10 @@ graph TB
 
     subgraph "远端与前端层"
         Remote["remote/index.ts<br/>MemoryRemoteService：14 个 @Remote 方法<br/>（CRUD、pin/archive、suggest*、health、projects、audit）"]
-        Client["client/index.ts<br/>4 张设置卡片 + 三 tab Memory 区"]
+        Client["client/index.ts<br/>bundle 配置页（5 个 section）+ 三 tab Memory 区"]
         SectionStore["client/memory-section-store.ts<br/>Controller + 写路径操作"]
         ModelCatalog["client/model-catalog.ts<br/>provider/model 选项解析器"]
-        SettingsDoc["dsh-settings<br/>settings.yaml（user 层）"]
+        SettingsDoc["ctx.configForms<br/>每个条目的 ConfigForm（user 层）"]
     end
 
     Tool -->|"validate + scanContent"| Scanner
@@ -770,12 +770,12 @@ graph TB
     Context -->|"readMemorySnapshot/Index"| Store
     Context -->|"buildMemorySectionText / buildAutoRecallBlock"| PolicyMod
     Context -->|"annotateConflicts"| Conflict
-    Context -.->|"autoRecall* 键"| SettingsNS
+    Context -.->|"注入切片"| SettingsNS
     NotesSvc --> Matrix
     NotesSvc --> Render
     NotesSvc --> Writer
     NotesSvc -->|"memory.list / health"| Store
-    NotesSvc -.->|"notes* 键"| SettingsNS
+    NotesSvc -.->|"settings()"| SettingsNS
     Context -->|"snapshotFor(cwd)"| NotesSvc
 
     Remote -->|"store.* + 建议队列"| Store

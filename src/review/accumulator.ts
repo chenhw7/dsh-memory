@@ -222,19 +222,17 @@ export function toolSignature(name: string, argumentsJson: string): string {
 
 /**
  * Extract a truncated failure description from a `tool/result` event that
- * carries an error: the error identity plus the result's text blocks (nested
- * inside each `tool-result` block's `content`).
+ * carries an error: the error identity plus the result message's text blocks.
+ * A tool result is its own `tool`-role message, so the text sits directly on
+ * the message's content.
  * @param event - a `tool/result` session event with `data.error` present.
  * @returns the failure description text (≤ {@link STREAK_ERROR_TEXT_LIMIT} chars).
  */
 function failureDescription(event: SessionEvent<'tool/result'>): string {
   const data = event.data
   const parts: string[] = []
-  for (const block of data.message?.content ?? []) {
-    if (block.type !== 'tool-result') continue
-    for (const inner of block.content) {
-      if (inner.type === 'text' && typeof inner.text === 'string') parts.push(inner.text)
-    }
+  for (const block of data.message.content) {
+    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
   }
   const errorInfo = `tool error: ${data.error!.name} (${data.error!.code})`
   const text = parts.length > 0 ? `${errorInfo} — ${parts.join(' ')}` : errorInfo
@@ -278,12 +276,11 @@ export function applyAccumulator(state: AccumulatorState, event: SessionEvent, p
     return { ...state, openCalls }
   }
   if (event.type === 'tool/result') {
-    const block = event.data.message?.content?.[0]
-    const callId = block !== undefined && block.type === 'tool-result' ? String(block.toolCallId) : undefined
-    const call = callId !== undefined ? state.openCalls[callId] : undefined
+    const callId = String(event.data.message.toolCallId)
+    const call = state.openCalls[callId]
     if (call === undefined) return state
     const openCalls = { ...state.openCalls }
-    delete openCalls[callId!]
+    delete openCalls[callId]
     if (event.data.error !== undefined) {
       // Failure: start or extend the streak for this signature.
       const existing = state.openStreaks[call.signature]

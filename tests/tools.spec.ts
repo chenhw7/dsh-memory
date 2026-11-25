@@ -3,10 +3,15 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { scanContent, validateProjectScope } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery } from '../src/tool/index.ts'
 import type { IdentityKind, IdentityRecord, UpdateIdentityInput } from '../src/index.ts'
 import { MemoryStore } from '../src/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
+import { DEFAULT_IDENTITY_SETTINGS } from '../src/identity/settings.ts'
+import type { IdentitySettings } from '../src/identity/settings.ts'
 
 import * as tool from '../src/tool/index.ts'
 
@@ -22,6 +27,17 @@ class TestMemoryStore extends MemoryStore {
   private seq = 0
   /** Ids handed to markRecalled — lets tests assert recall-stamp behavior. */
   readonly recalledIds: string[] = []
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private readonly injection: MemoryInjectionSettings
+
+  constructor(injection: Partial<MemoryInjectionSettings> = {}) {
+    super()
+    this.injection = resolveInjectionSettings(injection)
+  }
+
+  override settings(): MemoryInjectionSettings {
+    return this.injection
+  }
 
   /** Seed one entry verbatim, bypassing add() so tests control every field. */
   seed(entry: Omit<MemoryEntry, 'id'> & { id?: string }): MemoryEntry {
@@ -142,13 +158,17 @@ class TestMemoryStore extends MemoryStore {
 /**
  * Mount the memory tool plugin on a real ToolRuntime with a TestMemoryStore
  * registered as the `memory` service. Only the storage backend is a stand-in;
- * the tool, the registry, and the execute pipeline are the shipping code.
+ * the tool, the registry, the executor, and the execute pipeline are the
+ * shipping code. The search cap rides the store entry's settings (the tool
+ * reads it back from `ctx.memory.settings()`), so the parameter configures
+ * that slice rather than the tool's own config.
  */
 async function setup(maxSearchResults = 50): Promise<{ ctx: Context; store: TestMemoryStore }> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
-  const store = new TestMemoryStore()
+  await ctx.plugin(NativeExecutor)
+  const store = new TestMemoryStore({ maxSearchResults })
   // The memory service is optional; provide it directly so ctx.get('memory')
   // resolves the test store.
   ctx.provide('memory', store)
@@ -157,13 +177,19 @@ async function setup(maxSearchResults = 50): Promise<{ ctx: Context; store: Test
 }
 
 let callCounter = 0
-function callTool(ctx: Context, name: string, args: unknown) {
-  return ctx.tools.execute({
+/**
+ * Run one tool through the real execute pipeline and unwrap its settled
+ * outcome. The host's execute entry takes a batch of model tool-call blocks
+ * and settles one result per call in input order.
+ */
+async function callTool(ctx: Context, name: string, args: unknown) {
+  const batch = await ctx.tools.execute({
     signal: testToolSignal,
-    callId: CallId(`call-${++callCounter}`),
-    name,
-    arguments: args,
+    calls: [{ type: 'tool-call', id: CallId(`call-${++callCounter}`), name, arguments: JSON.stringify(args) }],
   })
+  const settled = batch.results[0]
+  if (settled === undefined) throw new Error(`no settled result for ${name}`)
+  return settled.result
 }
 
 function text(result: { content: { type: string; text?: string }[] }): string {
@@ -194,6 +220,7 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
+      await ctx.plugin(NativeExecutor)
       const store = new TestMemoryStore()
       ctx.provide('memory', store)
       const fiber = await ctx.plugin(tool, { maxSearchResults: 50 })
@@ -403,6 +430,7 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
+      await ctx.plugin(NativeExecutor)
       await ctx.plugin(tool, { maxSearchResults: 50 })
       const result = await callTool(ctx, 'memory_add', { scope: 'global', content: 'x' })
       expect(result.isError).toBe(true)
@@ -845,6 +873,7 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
+      await ctx.plugin(NativeExecutor)
       await ctx.plugin(tool, { maxSearchResults: 50 })
       const result = await callTool(ctx, 'memory_list', {})
       expect(result.isError).toBe(true)
@@ -886,6 +915,7 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
+      await ctx.plugin(NativeExecutor)
       await ctx.plugin(tool, { maxSearchResults: 50 })
       const result = await callTool(ctx, 'memory_get', { id: 'x' })
       expect(result.isError).toBe(true)
@@ -961,14 +991,19 @@ describe('@deepseek-ai/dsh-tool-memory', () => {
 })
 
 describe('identity_update (the identity-layer write tool)', () => {
-  /** Boot the tools with a fake `memory-identity` settings namespace and the identity stand-in store. */
-  async function setupIdentity(settingsValue: Record<string, unknown> = { identityEnabled: true }): Promise<{ ctx: Context; store: TestMemoryStore }> {
+  /**
+   * Boot the tools over the identity entry's settings (published through the
+   * `identity` service, which is where the tool reads the enablement gate and
+   * the two document budgets) and the identity stand-in store.
+   */
+  async function setupIdentity(settingsValue: Partial<IdentitySettings> = { identityEnabled: true }): Promise<{ ctx: Context; store: TestMemoryStore }> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     const store = new TestMemoryStore()
     ctx.provide('memory', store)
-    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? settingsValue : undefined })
+    ctx.provide('identity', { settings: () => ({ ...DEFAULT_IDENTITY_SETTINGS, ...settingsValue }) } as never)
     await ctx.plugin(tool, { maxSearchResults: 50 })
     return { ctx, store }
   }

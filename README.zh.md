@@ -49,7 +49,7 @@
 - **步级自动召回（默认开）** — 每个 agent step 用该步用户文本对 store 做 BM25 搜索，追加一块带围栏的 `<recalled-memory>` 消息；不触碰 system prompt，保持 KV-cache 前缀稳定。围栏命中只刷新条目的最近召回时间，不计入访问计数——查询词的运气不会污染逐出信号。
 - **压缩时自动落盘** — 当压缩使旧上下文失效时，扫描原始事件并保留值得记住的内容。
 - **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
-- **前端可配置** — 所有设置通过 dsh 设置界面的五张卡片暴露，实时生效。
+- **前端可配置** — 所有设置在 dsh 设置界面的 bundle 页面上暴露，实时生效。
 - **可选的写入前人工确认** — 打开一个开关（`confirmBeforeWrite`）后，自动提取*与*工具调用产生的写入一律先进入待确认队列（同一提议反复出现会累计次数并置顶）；采纳才落库（可先编辑），拒绝即丢弃。模型永不自我提升：对既有条目的修改提议在你采纳前不会改动原文。
 - **记忆管理中心** — dsh 设置界面新增独立「记忆」区，三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、懒加载条目列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
 - **时间窗浏览 + 智能列表视图** — `memory_list` 默认按最新在前返回，附带 `earliest`/`latest`/`hasStale` 元数据，支持 `since`/`until` 毫秒时间戳边界（「上周学了什么」这类查询直接在窗口内分页）；过滤条件命中 0 条但库非空时，会提示放宽过滤条件。
@@ -89,10 +89,11 @@
 - 准备一个要添加记忆能力的 profile（本文以 `web` 为例）。
 
 > [!IMPORTANT]
-> **Harness 渠道：`alpha`（0.1.2-alpha.x）。** 本 bundle 按 `@deepseek-ai/dsh-settings`
-> 0.1.2-alpha API（`ctx.settings.installSection`）构建，peer 范围为 `^0.1.2-alpha.2`。
-> 请从 `alpha` 渠道安装 dsh——rc（`next`）线仍带着已被移除的模块级 helper，无法加载
-> 本 bundle。见[已知限制](#已知限制)。
+> **Harness：0.2.x 线，且 ≥ 0.2.2。** 本 bundle 面向 0.2 宿主契约——每个条目自带
+> 插件 `Config`（不再有 `ctx.settings.installSection`）、`plugins.bundle.config` 设置页、
+> 由生产者各自声明的消息来源、tool 结果为独立 tool 角色消息。peer 声明 `^0.2.2-rc.1`、
+> `engines.dsh: ">=0.2.2-rc.1 <0.3.0"`，因此插件管理器会拒绝过旧或不兼容的宿主，
+> 而不是加载一个坏掉的 bundle。见[已知限制](#已知限制)。
 
 ### 从 npm 安装（推荐）
 
@@ -168,7 +169,7 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 （源码构建的 dsh：在 `deepseek-harness` 目录下执行 `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory`。）这会在 profile 目录里执行 `pnpm remove` 并同步层列表，七个 `memory-*` 行会从组合后的配置中消失——可以用下面的 `--dump-config` 检查确认。
 
-卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下，具体文件由 `memory-store` 行的 `storage` 配置决定：`host-medium`（默认）全部保存在 `memory.json`；`sqlite` 经一次性迁移把 store 移入插件自有的 `memory.db`（此后 `memory.json` 只保留迁移标记）：
+卸载**不会**删除你已保存的记忆。它们存放在 dsh 存储目录下，具体文件由 `memory` 行的 `storage` 配置决定：`host-medium`（默认）全部保存在 `memory.json`；`sqlite` 经一次性迁移把 store 移入插件自有的 `memory.db`（此后 `memory.json` 只保留迁移标记）：
 
 ```sh
 # macOS/Linux
@@ -198,21 +199,23 @@ dsh --profile web --dump-config | grep memory
 ```
 - id: memory-root
   name: '@chenhw7/dsh-memory'
-- id: memory-store
+- id: memory
   name: '@chenhw7/dsh-memory/store'
-- id: tool-memory
+- id: memory-tools
   name: '@chenhw7/dsh-memory/tool'
 - id: memory-review
   name: '@chenhw7/dsh-memory/review'
 - id: memory-notes
   name: '@chenhw7/dsh-memory/notes'
-- id: memory-context
+- id: memory-identity
+  name: '@chenhw7/dsh-memory/identity'
+- id: memory-autorecall
   name: '@chenhw7/dsh-memory/context'
 - id: memory-remote
   name: '@chenhw7/dsh-memory/remote-service'
 ```
 
-然后启动 dsh，检查设置界面是否显示 `memory` 命名空间：
+然后启动 dsh，打开 **设置 → 插件 → @chenhw7/dsh-memory**，它的页面承载五个配置 section：
 
 ```sh
 dsh web
@@ -220,15 +223,15 @@ dsh web
 
 ## 配置
 
-本 bundle 拥有**五个设置命名空间**——每个插件配置卡片一个（宿主的 Plugins 页签只在卡片 slot key 指向一个已注册 settings namespace 时才分发该卡片），且**全部实时生效**——改动在下一次事件或调用时即生效，无需重启：
+每个 bundle 行都自带设置（`Config`），**行 id 就是宿主寻址它的设置命名空间**。bundle 在**设置 → 插件**里的页面把五个可编辑条目渲染成 section；每个 section 写入拥有该字段的条目，且改动**全部实时生效**——宿主用新配置重跑插件，因此在下一次事件或调用时即生效，无需重启：
 
-- **`memory`**（卡片：*Memory*）——注入模式与记忆预算。由 `memory-context` 持有。
-- **`memory-notes`**（卡片：*Project Notes*）——项目笔记 prompt 段开关与预算。由 `memory-context` 持有。
-- **`memory-autorecall`**（卡片：*Auto Recall*）——步级召回围栏与使用命中信号。由 `memory-context` 持有。
-- **`memory-identity`**（卡片：*Identity*）——身份层开关、预算与种子目录。由 `memory-context` 持有。
-- **`memory-review`**（卡片：*Automatic Extraction*）——提取管线、模型路由、去重裁决、失败序列踩坑、curator pass。由 `memory-review` 插件持有。
+- **`memory`**——store：注入模式、记忆预算、检索上限、衰减窗口、存储后端。由 `/store` 行持有。
+- **`memory-notes`**——项目笔记 prompt 段开关与预算。由 `/notes` 持有。
+- **`memory-autorecall`**——步级召回围栏与使用命中信号。由 `/context` 持有。
+- **`memory-identity`**——身份层开关、预算与种子目录。由 `/identity` 持有。
+- **`memory-review`**——提取管线、模型路由、去重裁决、失败序列踩坑、curator pass、人审闸门。由 `/review` 持有。
 
-每个命名空间按分层 resolve：schema 默认 → 组合 `config:` 条目（base）→ `$DSH_HOME/settings.yaml` 中的用户文档。用户层缺失的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。当无 settings 服务挂载时（如 headless profile），各插件回退到组合条目，行为与组合配置完全一致。
+每个值按分层 resolve：schema 默认 → profile patch 中该行的 `config:` 条目 → 设置页保存的值。未动的字段继承组合值，因此部署可以固定默认值，用户只覆盖所需部分。兄弟插件之间不直接读对方的配置：拥有某个旋钮的条目通过自己的服务发布它（`ctx.memory.settings()`、`ctx.projectNotes.settings()`、`ctx.identity.settings()`、`ctx.memoryReview.settings()`）——这就是 `maxSearchResults` 与 `decayDays` 落在 `memory`、而 `confirmBeforeWrite` 落在 `memory-review` 的原因。
 
 ### `memory` 命名空间
 
@@ -251,7 +254,7 @@ dsh web
 | `notesPitfallsCharLimit` | `800` | 项目笔记「踩坑」半区的字符预算，约定区不再能把它挤死。同样按冻结时应用、同样折叠计数行。 |
 | `notesMaxEntriesPerFile` | `100` | 选中进项目笔记段落的最大条目数（置顶优先，其次重要性、再新鲜度）；其余折叠为计数行。 |
 
-> **设置迁移**：0.9.x 的合并键 `notesCharLimit` 仍然生效——当只有它被设置时，两个半区按 60%/40%（约定/踩坑）派生；每设置一个新键即接管对应半区。把 `$DSH_HOME/settings.yaml`（或 composition `config:`）中的键改名即完成迁移。
+> **设置迁移**：0.9.x 的合并键 `notesCharLimit` 仍然生效——当只有它被设置时，两个半区按 60%/40%（约定/踩坑）派生；每设置一个新键即接管对应半区。把 `memory-notes` 行的 `config:`（或设置页）里的键改名即完成迁移。
 
 ### `memory-autorecall` 命名空间
 
@@ -291,14 +294,15 @@ dsh web
 | `curatorMinChars` | `400` | 只有长度不小于该值的条目才会被选中改写。 |
 | `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在设置「记忆」区（待确认页）采纳。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
 
-> 特意**没有独立的 `tool-memory` 设置命名空间**：工具插件从上面的 `memory` 命名空间实时读取 `maxSearchResults`。其组合配置 `config.maxSearchResults` 仅作为无 settings 服务挂载时的回退 base。
+> 特意**没有 `memory-tools` 设置条目**：工具行本身不拥有旋钮。它从 `ctx.memory.settings()` 读 `maxSearchResults`、从 `ctx.memoryReview.settings()` 读 `confirmBeforeWrite`、从 `ctx.identity.settings()` 读身份开关与预算。它自己的 `config.maxSearchResults` 只在没有 store 组合时兜底。
 
 ### 组合配置与 UI 设置
 
-各命名空间均接受来自两个层的相同键。组合 `config:` 条目设置 base；UI 在其上写入用户层。四个 memory 家族命名空间共享一个组合行（`memory-context` 的 `config:` 承载它们全部键），而用户文档为每个命名空间保留独立的 section。例如，要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
+每个条目都接受来自两个层的相同键：profile patch 中该行的 `config:` 块是组合默认值，设置页在其上写用户层。要把 `maxSearchResults: 100` 钉为部署默认值（用户仍可覆盖）：
 
 ```yaml
-memory:
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
   config:
     maxSearchResults: 100
 ```
@@ -306,54 +310,65 @@ memory:
 默认情况下，提取、去重裁决和 curation 使用**与用户对话相同的模型**——即会话的 provider/model 路由。若要在专用廉价模型上运行，设置 `extractionModelProvider` 和 `extractionModelModel`（在组合配置或 UI 中均可——UI 提供由宿主模型目录驱动的下拉框）。在此指定 provider 会把对话摘录与已存条目发送给它，因此请选择你愿意托付对话内容的一方；两者留空则不会新增任何数据通路，只用你本来就在对话的模型：
 
 ```yaml
-memory-review:
+- id: memory-review
+  name: '@chenhw7/dsh-memory/review'
   config:
     extractionModelProvider: deepseek
     extractionModelModel: deepseek-chat
 ```
 
-`$DSH_HOME/settings.yaml` 示例（全部命名空间）：
+profile patch 示例（把每个条目的默认值钉住；设置页写入的也是同一批键）：
 
 ```yaml
-memory:
-  memoryMode: digest
-  memoryPolicyCustomText: ""
-  memoryCharLimit: 5000
-  memoryDigestCharLimit: 800
-  memoryMaxEntries: 20
-  maxSearchResults: 50
-  decayDays: 30
-memory-notes:
-  notesEnabled: true
-  notesConventionsCharLimit: 1600
-  notesPitfallsCharLimit: 800
-  notesMaxEntriesPerFile: 100
-memory-autorecall:
-  autoRecallEnabled: true
-  autoRecallLimit: 5
-  autoRecallMinChars: 12
-  hitSignalEnabled: false
-  hitSignalThreshold: 0.25
-memory-identity:
-  identityEnabled: false
-  soulCharLimit: 2000
-  userCharLimit: 3000
-  identitySeedDir: ""
-memory-review:
-  reviewEnabled: true
-  reviewCandidateThreshold: 10
-  flushOnCompaction: true
-  flushOnDispose: true
-  extractionModelProvider: ""
-  extractionModelModel: ""
-  extractionBudget: 20
-  judgeEnabled: true
-  pitfallStreakThreshold: 2
-  curatorEnabled: true
-  curatorEveryNSessions: 20
-  curatorMaxEntries: 5
-  curatorMinChars: 400
-  confirmBeforeWrite: false
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
+  config:
+    memoryMode: digest
+    memoryPolicyCustomText: ''
+    memoryCharLimit: 5000
+    memoryDigestCharLimit: 800
+    memoryMaxEntries: 20
+    maxSearchResults: 50
+    decayDays: 30
+- id: memory-notes
+  name: '@chenhw7/dsh-memory/notes'
+  config:
+    notesEnabled: true
+    notesConventionsCharLimit: 1600
+    notesPitfallsCharLimit: 800
+    notesMaxEntriesPerFile: 100
+- id: memory-autorecall
+  name: '@chenhw7/dsh-memory/context'
+  config:
+    autoRecallEnabled: true
+    autoRecallLimit: 5
+    autoRecallMinChars: 12
+    hitSignalEnabled: false
+    hitSignalThreshold: 0.25
+- id: memory-identity
+  name: '@chenhw7/dsh-memory/identity'
+  config:
+    identityEnabled: false
+    soulCharLimit: 2000
+    userCharLimit: 3000
+    identitySeedDir: ''
+- id: memory-review
+  name: '@chenhw7/dsh-memory/review'
+  config:
+    reviewEnabled: true
+    reviewCandidateThreshold: 10
+    flushOnCompaction: true
+    flushOnDispose: true
+    extractionModelProvider: ''
+    extractionModelModel: ''
+    extractionBudget: 20
+    judgeEnabled: true
+    pitfallStreakThreshold: 2
+    curatorEnabled: true
+    curatorEveryNSessions: 20
+    curatorMaxEntries: 5
+    curatorMinChars: 400
+    confirmBeforeWrite: false
 ```
 
 `memoryPolicyCustomText` 是可选的，仅在 `memoryMode` 为 `custom` 时使用。
@@ -361,9 +376,11 @@ memory-review:
 当 `memoryMode` 为 `custom` 时，`memoryPolicyCustomText` 会作为 memory 段落原样注入。它支持使用 YAML 的 `|` 写多行文本。例如：
 
 ```yaml
-memory:
-  memoryMode: custom
-  memoryPolicyCustomText: |
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
+  config:
+    memoryMode: custom
+    memoryPolicyCustomText: |
     <memory-policy>
     Persistent memory is available through memory tools. Do not assume memory has already been loaded into the prompt.
 
@@ -387,11 +404,12 @@ memory:
 | 行 | 导出 | 作用 |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | 无操作根条目，供 client-module 扫描器发现 |
-| `memory-store` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列 + meta 四张表），注册 `ctx.memory`（BM25 检索 + 两层衰减） |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（人审模式下写入改为入队） |
+| `memory` | `@chenhw7/dsh-memory/store` | 打开 `memory` 域（entries + audit + 待确认队列 + meta 四张表），注册 `ctx.memory`（BM25 检索 + 两层衰减），并通过 `ctx.memory.settings()` 发布共享的注入/召回设置 |
+| `memory-tools` | `@chenhw7/dsh-memory/tool` | 九个模型可用工具（人审模式下写入改为入队） |
 | `memory-review` | `@chenhw7/dsh-memory/review` | 自动提取（投影 + 失败序列踩坑 + flush + 去重 + janitor + curator + 人审队列），持有 `memory-review` 设置命名空间 |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影（渲染约定/踩坑进 `project-notes` 段落；0.6 起不写仓库文件），注册 `ctx.projectNotes`；会话创建时清理 ≤0.5.x 的文件导出残留 |
-| `memory-context` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @6000 + `project-notes` @6001，位于工具指引之后）、消息尾部注入（一次性清单 + 每步召回围栏），持有 `memory` 设置命名空间 |
+| `memory-identity` | `@chenhw7/dsh-memory/identity` | 注册 `ctx.identity`：从 store 的身份表播种并读取两份自我文档（SOUL.md / USER.md） |
+| `memory-autorecall` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @6000 + `project-notes` @6001，位于工具指引之后）与消息尾部注入（一次性清单 + 每步召回围栏），持有 auto-recall 设置 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（设置「记忆」区经 `/api` 通道消费） |
 
 **存储**：本 bundle **不**插入 `storage-json` / `storage-domain` 行。`dsh-web-app` bundle 已经提供它们（并在 `$DSH_HOME/storages` 下使用正确的根路径）。如果在这里重复插入，会覆盖已有配置（patch 会替换整行，后写覆盖先写）。memory store provider 将 `storageDomain` 服务作为 peer dependency 使用。
@@ -418,7 +436,7 @@ memory:
 - **会话中途的提取在下次压缩或新会话前不会出现在提示里** — 注入段落为 KV-cache 稳定性而冻结；步级自动召回（默认开）提供逐步新鲜度，一次性清单在压缩后补发一次。
 - **远程管理访问同时依赖传输信任与部署开关** — 任何被 dsh 宿主 `trustedHosts` 放行的主机都能调用读取 RPC；普通远程记忆写入默认拒绝（`remoteWritesEnabled: false`），只有显式启用后才开放，且 `identityRevert` 在写开关之上还要求独立的 `identityRevertEnabled` 开关（默认 `true`）——它恢复的是通过 scanner 的历史版本，而非接受任意新内容。应收紧 `trustedHosts`，且除非放行的每台主机都可信，否则保持远程写入关闭（见[威胁模型](docs/TECH_DESIGN.zh.md)）。
 - **dsh 仍处于开发者预览阶段** — 可能会有破坏性变更；本 bundle 的 peer dependency 范围跟随 dsh 发布线。
-- **要求 alpha 渠道（0.1.2-alpha.x）** — 本 bundle 使用 0.1.2-alpha 的 settings API（`ctx.settings.installSection`、host-only 投影注册），peer 范围为 `^0.1.2-alpha.2`。rc（`next`）线仍是旧的模块级 `installSettingsSection` helper，无法加载本 bundle；请从 `alpha` dist-tag 安装 dsh。client bundle 同样对齐 alpha 客户端包（`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`），它们取代了已移除的 `dsh-client-runtime`。
+- **要求 Harness 0.2.x** — 本 bundle 使用 0.2 宿主契约（每条目插件 `Config`、`plugins.bundle.config` 设置页、生产者自声明消息来源、tool 结果为 tool 角色消息），peer 声明 `^0.2.2-rc.1` 且 `engines.dsh: ">=0.2.2-rc.1 <0.3.0"`。0.1.x 宿主无法加载：其 `ctx.settings.installSection` 模型在 0.2 已移除，且 0.2 去掉了 `dsh-invariants`。本 bundle 0.10.0 之前的版本面向 0.1.x 线——若你仍在 0.1 宿主上，请钉住那些版本。
 
 ## 许可证
 

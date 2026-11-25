@@ -10,8 +10,12 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId as CallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { scanContent, validateProjectScope, MemoryStore } from '../src/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
+import { DEFAULT_IDENTITY_SETTINGS } from '../src/identity/settings.ts'
 import { setAllowlist, getAllowlist } from '../src/scanner.ts'
 import type { AddMemoryInput, AddSuggestionInput, AuditSource, MemoryEntry, MemoryId, MemoryHealth, MemorySearchQuery, MemorySuggestion } from '../src/types.ts'
 
@@ -42,6 +46,17 @@ class ScriptedTimeStore extends MemoryStore {
   readonly rows = new Map<string, MemoryEntry>()
   readonly proposals: AddSuggestionInput[] = []
   private seq = 0
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private readonly injection: MemoryInjectionSettings
+
+  constructor(injection: Partial<MemoryInjectionSettings> = {}) {
+    super()
+    this.injection = resolveInjectionSettings(injection)
+  }
+
+  override settings(): MemoryInjectionSettings {
+    return this.injection
+  }
 
   /** Timestamps handed to successive add() calls. */
   clock: number[] = []
@@ -118,31 +133,37 @@ class ScriptedTimeStore extends MemoryStore {
   }
 }
 
+/**
+ * Mount the tool plugin over a scripted store. The search cap rides the store
+ * entry's settings and the confirm gate rides the `memory-review` entry's
+ * service — the two places the tool reads them back from under the host's
+ * per-entry configuration model. Leaving `settings` undefined composes no
+ * memory-review service at all, which is the "automatic writes" deployment.
+ */
 async function setup(settings?: { maxSearchResults?: number; confirmBeforeWrite?: boolean }): Promise<{ ctx: Context; store: ScriptedTimeStore }> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
-  const store = new ScriptedTimeStore()
+  await ctx.plugin(NativeExecutor)
+  const store = new ScriptedTimeStore({ maxSearchResults: settings?.maxSearchResults ?? 50 })
   ctx.provide('memory', store)
   if (settings !== undefined) {
-    ctx.provide('settings', {
-      get: (ns: string) => ns === 'memory-review'
-        ? { confirmBeforeWrite: settings.confirmBeforeWrite ?? false }
-        : { maxSearchResults: settings.maxSearchResults ?? 50 },
-    })
+    ctx.provide('memoryReview', { settings: () => ({ confirmBeforeWrite: settings.confirmBeforeWrite ?? false }) } as never)
   }
   await ctx.plugin(tool, { maxSearchResults: 50 })
   return { ctx, store }
 }
 
 let callCounter = 0
-function callTool(ctx: Context, name: string, args: unknown) {
-  return ctx.tools.execute({
+/** Run one tool through the real execute pipeline and unwrap its settled outcome. */
+async function callTool(ctx: Context, name: string, args: unknown) {
+  const batch = await ctx.tools.execute({
     signal: testToolSignal,
-    callId: CallId(`call-${++callCounter}`),
-    name,
-    arguments: args,
+    calls: [{ type: 'tool-call', id: CallId(`call-${++callCounter}`), name, arguments: JSON.stringify(args) }],
   })
+  const settled = batch.results[0]
+  if (settled === undefined) throw new Error(`no settled result for ${name}`)
+  return settled.result
 }
 
 describe('memory_list time windows (P1-5)', () => {
@@ -225,19 +246,17 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
   })
 
   it('identity_update queues an identity proposal (identityKind) instead of writing', async () => {
-    // Dedicated composition: the shared setup's namespaces carry no identity
-    // keys, and identity_update refuses before confirm mode without
-    // identityEnabled — so this case wires its own settings fake.
+    // Dedicated composition: the shared setup composes no identity entry, and
+    // identity_update refuses before confirm mode without identityEnabled —
+    // so this case supplies its own identity and memory-review services.
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     const store = new ScriptedTimeStore()
     ctx.provide('memory', store)
-    ctx.provide('settings', {
-      get: (ns: string) => ns === 'memory-review'
-        ? { confirmBeforeWrite: true }
-        : ns === 'memory-identity' ? { identityEnabled: true } : { maxSearchResults: 50 },
-    })
+    ctx.provide('memoryReview', { settings: () => ({ confirmBeforeWrite: true }) } as never)
+    ctx.provide('identity', { settings: () => ({ ...DEFAULT_IDENTITY_SETTINGS, identityEnabled: true }) } as never)
     await ctx.plugin(tool, { maxSearchResults: 50 })
 
     const result = await callTool(ctx, 'identity_update', { kind: 'soul', content: '提案版人格文档' })
@@ -313,6 +332,7 @@ describe('scannerAllowlist production wiring (§3.10)', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     ctx.provide('memory', new ScriptedTimeStore())
     await ctx.plugin(tool, { maxSearchResults: 50 })
     expect(getAllowlist()).toEqual({})
@@ -323,6 +343,7 @@ describe('scannerAllowlist production wiring (§3.10)', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     const store = new ScriptedTimeStore()
     ctx.provide('memory', store)
     // Config-driven: the allowlist arrives through the tool plugin's Config,
@@ -343,6 +364,7 @@ describe('scannerAllowlist production wiring (§3.10)', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     const store = new ScriptedTimeStore()
     ctx.provide('memory', store)
     await ctx.plugin(tool, {
@@ -361,6 +383,7 @@ describe('scannerAllowlist production wiring (§3.10)', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeExecutor)
     const store = new ScriptedTimeStore()
     ctx.provide('memory', store)
     await ctx.plugin(tool, {

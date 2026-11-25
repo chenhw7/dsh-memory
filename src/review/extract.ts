@@ -13,6 +13,7 @@
  * @module @chenhw7/dsh-memory/review/extract
  */
 
+import { MEMORY_REVIEW_SOURCE } from '../sources.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -33,7 +34,7 @@ import { applyConsolidation } from './consolidate.ts'
 export type ConsolidationMode = 'two-tier' | 'legacy-judge'
 
 /** Producer attribution for the synthetic extraction request message. */
-const PLUGIN_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
+const PLUGIN_SOURCE = MEMORY_REVIEW_SOURCE
 
 /** System prompt for the periodic-review extraction. */
 export const REVIEW_SYSTEM_PROMPT =

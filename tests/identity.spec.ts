@@ -14,6 +14,7 @@ import * as identityPlugin from '../src/identity/index.ts'
 import * as context from '../src/context/index.ts'
 import { SOUL_SEED, USER_SEED, validateSeedDir } from '../src/identity/seeds.ts'
 import type { IdentityHistoryRecord, IdentityKind, IdentityRecord } from '../src/types.ts'
+import type { IdentitySettings } from '../src/identity/settings.ts'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -43,15 +44,17 @@ function makeStore(): { store: DomainMemoryStore; warns: string[] } {
   return { store, warns }
 }
 
-/** Boot the identity plugin over a fake `settings` service and a real store. */
-async function setup(settingsValue: Record<string, unknown>, opts: { withStore?: boolean; withSettings?: boolean } = {}) {
+/**
+ * Boot the identity plugin over a real store. The entry config IS the
+ * settings surface under the host's per-entry configuration model, so the
+ * value goes to `apply` rather than to a shared namespace; `withConfig: false`
+ * leaves it absent, which is the deployment-default case.
+ */
+async function setup(settingsValue: Partial<IdentitySettings>, opts: { withStore?: boolean; withConfig?: boolean } = {}) {
   const ctx = new Context()
-  if (opts.withSettings !== false) {
-    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? settingsValue : undefined })
-  }
   const { store, warns } = makeStore()
   if (opts.withStore !== false) ctx.provide('memory', store)
-  await ctx.plugin(identityPlugin)
+  await ctx.plugin(identityPlugin, opts.withConfig === false ? {} : settingsValue)
   return { ctx, store, warns, service: ctx.get('identity')! }
 }
 
@@ -91,8 +94,8 @@ describe('identity service — seeding', () => {
     expect(store.getIdentity('user')).toBeUndefined()
   })
 
-  it('no settings service: disabled by default, empty snapshot', async () => {
-    const { service } = await setup({}, { withSettings: false })
+  it('no entry config: disabled by default, empty snapshot', async () => {
+    const { service } = await setup({}, { withConfig: false })
     expect(service.snapshotFor()).toEqual({ soul: '', user: '' })
   })
 
@@ -127,7 +130,11 @@ describe('identity service — seedDir override', () => {
       writeFileSync(join(dir, 'SOUL.md'), 'sk-abcdef0123456789abcdef0123456789ab', 'utf8')
       const ctx = new Context()
       ctx.provide('systemPrompt', { section: () => () => {} })
-      await expect(ctx.plugin(context, { identityEnabled: true, identitySeedDir: dir } as never)).rejects.toThrow(/rejected by scanner/)
+      // The seed directory is the identity ENTRY's config now; memory-context
+      // assembles the identity sections, so its mount is where the loud gate
+      // fires — reading the value back from the identity service.
+      await ctx.plugin(identityPlugin, { identityEnabled: true, identitySeedDir: dir })
+      await expect(ctx.plugin(context)).rejects.toThrow(/rejected by scanner/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -136,7 +143,8 @@ describe('identity service — seedDir override', () => {
   it('a missing composition-layer seed directory fails the memory-context mount loudly', async () => {
     const ctx = new Context()
     ctx.provide('systemPrompt', { section: () => () => {} })
-    await expect(ctx.plugin(context, { identityEnabled: true, identitySeedDir: join(tmpdir(), 'dsh-memory-no-such-seed-dir-xyz') } as never)).rejects.toThrow('not a directory')
+    await ctx.plugin(identityPlugin, { identityEnabled: true, identitySeedDir: join(tmpdir(), 'dsh-memory-no-such-seed-dir-xyz') })
+    await expect(ctx.plugin(context)).rejects.toThrow('not a directory')
   })
 })
 
@@ -184,7 +192,6 @@ describe('identity seeds — gating', () => {
 describe('identity service — degradation', () => {
   it('a throwing store read degrades to the empty snapshot and reports the failure', async () => {
     const ctx = new Context()
-    ctx.provide('settings', { get: (ns: string) => ns === 'memory-identity' ? { identityEnabled: true } : undefined })
     const warns: string[] = []
     class ThrowingIdentityStore extends DomainMemoryStore {
       override getIdentity(_kind: IdentityKind): IdentityRecord | undefined { throw new Error('boom') }
@@ -193,7 +200,7 @@ describe('identity service — degradation', () => {
       identity: memTable<'soul' | 'user', IdentityRecord>(),
       identityHistory: memTable<string, IdentityHistoryRecord>(),
     }))
-    await ctx.plugin(identityPlugin)
+    await ctx.plugin(identityPlugin, { identityEnabled: true })
     expect(ctx.get('identity')!.snapshotFor()).toEqual({ soul: '', user: '' })
     expect(warns.some(warn => warn.includes('identity-snapshot'))).toBe(true)
   })

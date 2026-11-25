@@ -4,6 +4,8 @@ Status: implemented
 
 English | [中文](2026-08-31-align-settings-seam-with-dsh-settings-0.1.2-alpha.zh.md)
 
+> Superseded 2026-11-25 by [The bundle moves to the DSH 0.2 host contract](2026-11-25-dsh-0.2-per-entry-settings-and-client-page.md) — DSH 0.2 removed `installSettingsSection` / `ctx.settings.get` entirely and moved settings onto per-entry `Config`. The seam principle (consume the host's settings surface, never invent one) still holds; the mechanism recorded here does not.
+
 ## Problem
 
 `@chenhw7/dsh-memory` 0.6.0 is compiled against the rc-era `@deepseek-ai/dsh-settings` API (0.1.0-rc.8 in the lockfile; peer range `^0.1.0-rc.5 || ^0.1.1-rc.1`). Under the harness's `0.1.2-alpha` channel the plugin fails to load.

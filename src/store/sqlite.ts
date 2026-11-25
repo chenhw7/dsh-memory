@@ -34,6 +34,8 @@ import {
 import { scanContent } from '../scanner.ts'
 import { buildCorpusStatsFromTokens, Bm25Index, tokenizeForSearch } from './bm25.ts'
 import { nextIdentityRecord } from './identity-util.js'
+import { DEFAULT_INJECTION_SETTINGS } from './settings.ts'
+import type { MemoryInjectionSettings } from './settings.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -156,6 +158,8 @@ export interface SqliteStoreOptions {
   readonly suggestionCap?: number | undefined
   /** Entries cap (§ write-path governance); default 500. */
   readonly entriesCap?: number | undefined
+  /** The resolved `memory` entry settings published to sibling plugins. */
+  readonly settings?: MemoryInjectionSettings | undefined
 }
 
 /**
@@ -171,12 +175,14 @@ export class SqliteMemoryStore extends MemoryStore {
   private readonly auditCap: number
   private readonly suggestionCap: number
   private readonly entriesCap: number
+  private readonly injectionSettings: MemoryInjectionSettings
   private readonly failureCounts = new Map<string, number>()
   private auditSeq = 0
 
   constructor(options: SqliteStoreOptions) {
     super()
     this.failureLogger = options.failureLogger
+    this.injectionSettings = options.settings ?? DEFAULT_INJECTION_SETTINGS
     this.auditCap = options.auditCap ?? 200
     this.suggestionCap = options.suggestionCap ?? 200
     this.entriesCap = options.entriesCap ?? 500
@@ -198,6 +204,11 @@ export class SqliteMemoryStore extends MemoryStore {
       CREATE TABLE IF NOT EXISTS identity (kind TEXT PRIMARY KEY, ${IDENTITY_COLUMNS.filter(column => column !== 'kind').join(', ')});
       CREATE TABLE IF NOT EXISTS identity_history (id TEXT PRIMARY KEY, ${IDENTITY_HISTORY_COLUMNS.filter(column => column !== 'id').join(', ')});
     `)
+  }
+
+  /** The resolved `memory` entry settings; see {@link MemoryStore.settings}. */
+  settings(): MemoryInjectionSettings {
+    return this.injectionSettings
   }
 
   override reportFailure(site: string, error?: unknown): void {

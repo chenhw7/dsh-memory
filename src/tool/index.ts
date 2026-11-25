@@ -13,9 +13,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-// Type-only: merges the `settings` service (SettingsProvider) into the Context
-// so `sctx.settings` types in this module.
-import type {} from '@deepseek-ai/dsh-settings'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {
   IdentityKind,
@@ -33,14 +30,7 @@ import { DEFAULT_SOUL_CHAR_LIMIT, DEFAULT_USER_CHAR_LIMIT } from '../identity/se
 export const name = 'tool-memory'
 export const inject = ['tools']
 
-/** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
-const MEMORY_NS = 'memory'
-/** The `memory-review` settings namespace — read cross-namespace (owned by memory-review). */
-const REVIEW_NS = 'memory-review'
-/** The `memory-identity` settings namespace — read cross-namespace (owned by memory-context). */
-const IDENTITY_NS = 'memory-identity'
-
-/** Default for the search-result cap when the namespace value is absent. */
+/** Default for the search-result cap when no store service is composed. */
 const DEFAULT_MAX_SEARCH_RESULTS = 50
 
 /** The valid memory scopes, as a runtime tuple for schema enums. */
@@ -297,50 +287,28 @@ export function apply(ctx: Context, config: Config): void {
   // suppressible from cordis.yml without code changes. Idempotent — each
   // apply overwrites the module-level allowlist wholesale.
   setAllowlist(config.scannerAllowlist ?? {})
-  // Live-read `maxSearchResults` from the `memory` namespace (owned by
-  // memory-context); fall back to the composition entry when no settings
-  // service is mounted. Same cross-namespace pattern as memory-notes.
+  // Cross-entry settings read through the owning service (the host's
+  // per-entry configuration model gives this plugin only its own `Config`, so
+  // shared knobs ride the services that own them).
+  /** Search cap from the store entry (`memory`); the composition entry is the fallback. */
   const compositionCap = config.maxSearchResults
-  let fromSettings = (): number => compositionCap
-  // Human-confirm mode (P1-1): when the memory-review namespace enables it,
-  // model writes land in the pending-review queue instead of the store. Read
-  // live per call so flipping the setting applies to the very next tool call;
-  // a deployment without memory-review composed keeps automatic writes.
-  let confirmMode = (): boolean => false
-  // The `memory-identity` namespace, read live per call — the enabled gate
-  // plus the two document budgets. Defaults match the settings schema so a
-  // namespace-less deployment behaves like the disabled default.
-  let identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => ({
-    identityEnabled: false,
-    soulCharLimit: DEFAULT_SOUL_CHAR_LIMIT,
-    userCharLimit: DEFAULT_USER_CHAR_LIMIT,
-  })
-  ctx.inject(['settings'], (sctx) => {
-    fromSettings = (): number => {
-      try {
-        const ns = sctx.settings.get(MEMORY_NS) as { maxSearchResults?: number } | undefined
-        const v = ns?.maxSearchResults
-        if (typeof v === 'number' && v >= 0) return v
-      } catch { /* namespace not registered yet — fall through */ }
-      return compositionCap
+  const fromSettings = (): number => ctx.get('memory')?.settings().maxSearchResults ?? compositionCap
+  // Human-confirm mode (P1-1): when the memory-review entry enables it, model
+  // writes land in the pending-review queue instead of the store. Read per
+  // call so flipping the setting applies to the very next tool call; a
+  // deployment without memory-review composed keeps automatic writes.
+  const confirmMode = (): boolean => ctx.get('memoryReview')?.settings().confirmBeforeWrite === true
+  // The identity entry, read per call — the enabled gate plus the two
+  // document budgets. Defaults match the entry schema so a composition
+  // without the identity service behaves like the disabled default.
+  const identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => {
+    const settings = ctx.get('identity')?.settings()
+    return {
+      identityEnabled: settings?.identityEnabled === true,
+      soulCharLimit: settings?.soulCharLimit ?? DEFAULT_SOUL_CHAR_LIMIT,
+      userCharLimit: settings?.userCharLimit ?? DEFAULT_USER_CHAR_LIMIT,
     }
-    confirmMode = (): boolean => {
-      try {
-        const ns = sctx.settings.get(REVIEW_NS) as { confirmBeforeWrite?: boolean } | undefined
-        return ns?.confirmBeforeWrite === true
-      } catch { /* namespace not registered yet — confirm mode stays off */ }
-      return false
-    }
-    identityConfig = (): { identityEnabled: boolean; soulCharLimit: number; userCharLimit: number } => {
-      try {
-        const ns = sctx.settings.get(IDENTITY_NS) as { identityEnabled?: boolean; soulCharLimit?: number; userCharLimit?: number } | undefined
-        const soulCharLimit = typeof ns?.soulCharLimit === 'number' && ns.soulCharLimit >= 0 ? ns.soulCharLimit : DEFAULT_SOUL_CHAR_LIMIT
-        const userCharLimit = typeof ns?.userCharLimit === 'number' && ns.userCharLimit >= 0 ? ns.userCharLimit : DEFAULT_USER_CHAR_LIMIT
-        return { identityEnabled: ns?.identityEnabled === true, soulCharLimit, userCharLimit }
-      } catch { /* namespace not registered yet — the disabled default stands */ }
-      return { identityEnabled: false, soulCharLimit: DEFAULT_SOUL_CHAR_LIMIT, userCharLimit: DEFAULT_USER_CHAR_LIMIT }
-    }
-  })
+  }
   const defaultLimit = (): number => fromSettings()
 
   ctx.tools.register(defineTool({

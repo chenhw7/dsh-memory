@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> Superseded 2026-11-25 by [The bundle moves to the DSH 0.2 host contract](../architecture/2026-11-25-dsh-0.2-per-entry-settings-and-client-page.md) — DSH 0.2 removed the namespace-keyed `settings.plugin.item` slot, so the pairing rule recorded here no longer has a subject. Its lesson survives in the new form: the bundle page registers only while the Host serves at least one entry it edits (`ctx.configForms.whileServed`).
+
 ## Problem
 
 The bundle's client registered five cards into `settings.plugin.item`, but only two ever rendered in the live console's Plugin configuration: *Memory* and *Automatic Extraction*. The *Project Notes*, *Auto Recall*, and *Identity* cards (the identity card was this branch's new surface) were silently missing — the plugins tab showed no trace, no error, and the console logs stayed clean. The five-cards claim in the README and the client header had never been true on the installed harness line: the root cause predates the identity layer.

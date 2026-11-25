@@ -14,6 +14,7 @@
 
 import { MemoryId, AuditId, SuggestionId } from './brand.ts'
 import { scanContent } from './scanner.ts'
+import type { MemoryInjectionSettings } from './store/settings.ts'
 import type {
   AddMemoryInput,
   AddMemoryResult,
@@ -60,6 +61,8 @@ export type {
   UpdateMemoryInput,
 } from './types.ts'
 export type { MemoryMetaRecord } from './store/index.ts'
+export type { MemoryInjectionSettings } from './store/settings.ts'
+export { DEFAULT_INJECTION_SETTINGS, resolveInjectionSettings } from './store/settings.ts'
 export { MemoryId, AuditId, SuggestionId, scanContent }
 
 declare module '@deepseek-ai/cordis' {
@@ -255,6 +258,16 @@ export abstract class MemoryStore {
    * @returns all audit entries, oldest first.
    */
   abstract exportAuditLog(): readonly AuditEntry[]
+
+  /**
+   * The `memory` entry's resolved injection and recall settings — the slice
+   * every sibling plugin reads back (tool search cap, janitor decay window,
+   * system-prompt budgets). The host's per-entry configuration model gives each
+   * plugin only its own `Config`, so the store publishes the shared slice here
+   * instead of siblings reading a common settings namespace.
+   * @returns the resolved settings, with every default materialized.
+   */
+  abstract settings(): MemoryInjectionSettings
 
   /**
    * Read one entry's unredacted content — the deliberate break-glass path for

@@ -23,6 +23,8 @@ import { MemoryStore, MemoryId, AuditId, SuggestionId, scanContent, validateProj
 import type { RecallSource } from '../types.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import { nextIdentityRecord } from './identity-util.js'
+import { INJECTION_FIELDS, DEFAULT_INJECTION_SETTINGS, resolveInjectionSettings } from './settings.ts'
+import type { MemoryInjectionSettings } from './settings.ts'
 import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
 import {
   CrossProcessGuard,
@@ -305,10 +307,12 @@ const SCALE_SELFCHECK_FRACTION = 0.8
 export const inject = ['storageDomain']
 
 /**
- * Configuration for the memory store provider, settable from a `config:`
- * entry on the `memory-store` composition row.
+ * Configuration for the memory store provider — the `memory` profile entry's
+ * `Config`. It carries the store's own backend knobs plus the injection and
+ * recall slice every sibling memory plugin reads back through
+ * {@link MemoryStore.settings}.
  */
-export interface StoreConfig {
+export interface StoreConfig extends MemoryInjectionSettings {
   /**
    * Which storage backend mounts (write-path rework Step 3.2): `host-medium`
    * (default) keeps everything in the host's `memory.json`; `sqlite` moves
@@ -334,11 +338,12 @@ export interface StoreConfig {
   crossProcessProbeMs: number
 }
 
-/** Schemastery configuration for the `memory-store` composition row. */
+/** Schemastery configuration for the `memory` profile entry. */
 export const Config = z.object({
   storage: z.union(['host-medium', 'sqlite'] as const).default('host-medium'),
   entriesCap: z.number().step(1).min(1).default(DEFAULT_ENTRIES_CAP),
   crossProcessProbeMs: z.number().step(1).min(0).default(DEFAULT_CROSS_PROCESS_PROBE_MS),
+  ...INJECTION_FIELDS,
 })
 
 /**
@@ -348,9 +353,11 @@ export const Config = z.object({
  * global slot) and starts the configured read-back probe; the dispose path
  * stamps `closedAt` so the next boot does not warn about this one.
  * @param ctx - Cordis context with `storageDomain` injected.
- * @param config - row config; `entriesCap` and `crossProcessProbeMs` are read here.
+ * @param config - the `memory` entry config: backend knobs plus the injection
+ *   slice the store publishes through {@link MemoryStore.settings}.
  */
-export async function apply(ctx: Context, config: StoreConfig = { storage: 'host-medium', entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS }): Promise<void> {
+export async function apply(ctx: Context, config: StoreConfig = { storage: 'host-medium', entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS, ...DEFAULT_INJECTION_SETTINGS }): Promise<void> {
+  const settings = resolveInjectionSettings(config)
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
@@ -373,6 +380,7 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
       dbPath,
       failureLogger: ctx.logger,
       entriesCap: config.entriesCap,
+      settings,
     })
     // The marker lives in the MEDIUM's meta table (the migrating boot wrote
     // it there); the sqlite database's own meta table is the new store's
@@ -437,7 +445,7 @@ export async function apply(ctx: Context, config: StoreConfig = { storage: 'host
   const own = currentBootOwner()
   const mediumReader = resolveMediumReader(ctx)
   const mediumGoodbye = resolveMediumGoodbye(ctx, own.bootId)
-  const store = new DomainMemoryStore(entries, audit, suggestions, meta, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap, { identity, identityHistory })
+  const store = new DomainMemoryStore(entries, audit, suggestions, meta, DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP, ctx.logger, config.entriesCap, { identity, identityHistory }, settings)
   const guard = new CrossProcessGuard(
     own,
     mediumReader,
@@ -570,6 +578,8 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly entriesCap: number
   /** Warn channel for swallowed background-path failures; the host `ctx.logger`. */
   private readonly failureLogger: { warn(message: string): void } | undefined
+  /** The resolved `memory` entry settings published to sibling plugins. */
+  private readonly injectionSettings: MemoryInjectionSettings
   /** Per-site counts of swallowed failures, surfaced through `health()`. */
   private readonly failureCounts = new Map<string, number>()
   /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
@@ -585,6 +595,7 @@ export class DomainMemoryStore extends MemoryStore {
     failureLogger?: { warn(message: string): void },
     entriesCap: number = DEFAULT_ENTRIES_CAP,
     identity?: IdentityTables,
+    injectionSettings: MemoryInjectionSettings = DEFAULT_INJECTION_SETTINGS,
   ) {
     super()
     this.entries = entries
@@ -597,12 +608,18 @@ export class DomainMemoryStore extends MemoryStore {
     this.suggestionCap = suggestionCap
     this.entriesCap = entriesCap
     this.failureLogger = failureLogger
+    this.injectionSettings = injectionSettings
     // Startup selfcheck (scale-trigger-selfcheck): judge the entry count the
     // medium opened with, once per construction. Deployments that reopen an
     // already-large medium see the warning at boot — the point where a
     // migration decision (per-record/SQLite backing) is still cheap — instead
     // of first learning about the size from an eviction storm.
     this.selfcheckScale()
+  }
+
+  /** The resolved `memory` entry settings; see {@link MemoryStore.settings}. */
+  settings(): MemoryInjectionSettings {
+    return this.injectionSettings
   }
 
   /**

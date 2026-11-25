@@ -187,17 +187,19 @@ describe('eval SDK session-event reducer', () => {
     collectSessionEvent(collector, { type: 'assistant/message', seq: 2, data: { message: { role: 'assistant', content: [{ type: 'text', text: 'first' }] } } })
     collectSessionEvent(collector, { type: 'tool/call', seq: 3, data: { callId: 'c1', name: 'memory_search', arguments: '{"query":"pnpm"}' } })
     collectSessionEvent(collector, { type: 'tool/call', seq: 4, data: { callId: 'c2', name: 'memory_add', arguments: 'not-json' } })
-    // Real wire shape (packages/llm/llm/src/message.ts): a user-role message
-    // whose content[0] is the tool-result block carrying toolCallId; the
-    // message-level `source.callId` is its twin.
+    // Wire shape (dsh-llm message.ts, 0.2): the tool result is its own
+    // tool-role message carrying `toolCallId` and `isError` at the message
+    // level, with text blocks directly in `content`; `source.callId` is the
+    // message-level twin.
     collectSessionEvent(collector, {
       type: 'tool/result',
       seq: 4,
       data: {
         message: {
-          role: 'user',
+          role: 'tool',
           source: { kind: 'tool', callId: 'c1' },
-          content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'hit' }] }],
+          toolCallId: 'c1',
+          content: [{ type: 'text', text: 'hit' }],
         },
       },
     })
@@ -206,9 +208,11 @@ describe('eval SDK session-event reducer', () => {
       seq: 5,
       data: {
         message: {
-          role: 'user',
+          role: 'tool',
           source: { kind: 'tool', callId: 'c2' },
-          content: [{ type: 'tool-result', toolCallId: 'c2', content: [], isError: true }],
+          toolCallId: 'c2',
+          isError: true,
+          content: [],
         },
         error: { name: 'ToolError', code: 'rejected' },
       },

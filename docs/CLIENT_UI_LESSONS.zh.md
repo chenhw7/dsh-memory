@@ -12,6 +12,8 @@
 
 **影响：** 每个贡献设置卡片的外部插件都必须从头复制卡片外壳、字段控件和 CSS。必须与宿主源码保持同步——以宿主的 `PluginCard.module.css` 和 `fields.module.css` 为准。
 
+图标同理，且名字随宿主版本变：`@deepseek-ai/dsh-client-ui-primitives` 的图标按尺寸命名（`IconChevronDownOutlineMedium` 等），旧线里的 `IconChevronDownOutline14` 已不存在。只 import 已安装版本真的导出的符号——写错一个名字不会在运行时静默降级，而是被 client 类型门禁（`tsc -p tsconfig.client.json`）直接拦下，这是它的价值所在。
+
 ---
 
 ## 2. esbuild CJS 编译把 `const` 退化为 `var`——TDZ 保护消失
@@ -99,6 +101,19 @@ npm run build          # 重新构建 lib/client/index.js
 
 ## 6. 行为语义要与宿主一致，不只是 CSS
 
-宿主 `PluginCard` 在 `state.available === false` 时渲染 `null`，其中 `available = snapshot.status === 'ready'`。如果插件改用 `status === 'unavailable'` 判断，会在 `loading` 状态时渲染卡片——宿主不会。这会产生可见的闪烁和不一致行为。
+配置表单的快照有一个三态 `status`：`loading`（尚未收到第一份已接受的值）、`ready`、`unavailable`（该命名空间未暴露给本客户端）。只在 `ready` 时渲染内容；`loading` 期间渲染卡片会在加载完成的瞬间产生可见闪烁，宿主不会这么做。写权限是另一个字段：`writable === false` 时字段一律禁用并给出只读提示，而不是让用户点一个注定被拒的保存。
 
-**规则：** 阅读宿主组件源码，理解确切的状态转换，精确地镜像它们。CSS 一致但行为不一致，看起来仍然是错的。
+**规则：** 阅读宿主组件与快照类型的定义，理解确切的状态转换，精确地镜像它们。CSS 一致但行为不一致，看起来仍然是错的。
+
+---
+
+## 7. 配置传输：一个 bundle 一页、一个条目一个 `ConfigForm`
+
+宿主的插件配置面是「每个 profile 条目自带 `Config`」：没有 `ctx.settingsScope`，没有按命名空间分发的配置卡片，也没有跨命名空间读取。客户端因此按下面的形状接线：
+
+- **两个 keyed slot：** `plugins.bundle.config`（bundle 详情页的正文，key = 包名，如 `@chenhw7/dsh-memory`）与 `plugins.row.config`（单行配置页，key = `<包名>#<行 id>`）。bundle 自己的配置进前者；后者属于官方插件行。
+- **一条目一个表单：** `ctx.configForms.get<T>(entryId)` 给出该条目的 `ConfigForm`（`getSnapshot` / `subscribe` / `set` / `unset` / `mutate`）。读到的 `value` 是宿主镜像里的已解析段（schema 默认 + 组合 base + 用户层），不要自己再维护一份默认值表。
+- **按服务状态挂载：** 用 `ctx.configForms.whileServed([...entryIds], register)` 包住 `ctx.slots.register`，页面只在宿主至少服务其中一个条目时存在；否则一个没组合这些条目的部署里会留下一张空页。
+- **一次保存 = 一次 `mutate(ops, revision)`：** 把整段草稿与已提交值的差异做成有序 `set`/`unset` 列表一次提交，`revision` 取快照里的 `revision`——宿主据此做 CAS，过期即拒绝并触发回读。逐字段 `set` 只适合单个开关或 reset 这类单点写入。
+- **覆盖状态按存在性判断：** 快照的 `user` 是用户层原始文档，字段被覆盖与否看它**是否带有该键**，不看取值是否等于默认值——两者相等的显式覆盖依然是覆盖。`base` 是清空后回落的那一层。
+- **`view` 是 `'summary' | 'page'`：** `plugins.bundle.config` 的贡献物总被要求 `page`；只画卡片形态的组件遇到别的 view 必须自己返回 `null`，否则会在官方插件卡的摘要位上渲染出一整页。

@@ -99,7 +99,11 @@ describe('workspace fixture materialization', () => {
         cwd: dir,
         encoding: 'utf8',
       })
-      expect(out).toContain('# fail 0')
+      // The runner's summary line is `# fail 0` under the TAP reporter and
+      // `ℹ fail 0` under the spec reporter (Node's default since 23), so pin
+      // the counts rather than the prefix glyph.
+      expect(out).toMatch(/(?:^|\n)[#ℹ] pass 3\n/)
+      expect(out).toMatch(/(?:^|\n)[#ℹ] fail 0\n/)
     })
   })
 })

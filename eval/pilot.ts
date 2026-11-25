@@ -124,6 +124,8 @@ async function runPass(scenarios: readonly EvalScenario[], options: PassOptions)
     ...(options.mode === 'external' ? { model: options.modelId as string, baseUrl: options.baseUrl as string } : {}),
     memoryMode: 'index',
     noMemory: false,
+    // The pilot runs the memory axis only; the identity axis is off.
+    identity: false,
     judge: options.judge,
     concurrency: options.concurrency,
     turnBudget: options.turnBudget,

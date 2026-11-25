@@ -20,7 +20,11 @@ function toolCallEvent(seq: number, callId: string, name: string, args: unknown)
   } as unknown as SessionEvent<'tool/call'>
 }
 
-/** Build a minimal `tool/result` session event, optionally carrying an error. */
+/**
+ * Build a minimal `tool/result` session event, optionally carrying an error.
+ * The host's event carries a tool-role message: the call id sits on the
+ * message itself and the content holds text blocks directly.
+ */
 function toolResultEvent(seq: number, callId: string, error?: { name: string; code: string }, texts: string[] = []): SessionEvent<'tool/result'> {
   return {
     type: 'tool/result',
@@ -31,8 +35,10 @@ function toolResultEvent(seq: number, callId: string, error?: { name: string; co
       step: 1,
       message: {
         id: 'r' as never,
-        role: 'user',
-        content: [{ type: 'tool-result', toolCallId: callId, content: texts.map(text => ({ type: 'text', text })) }],
+        role: 'tool',
+        toolCallId: callId,
+        isError: error !== undefined,
+        content: texts.map(text => ({ type: 'text', text })),
         source: { kind: 'tool' },
       },
       ...error !== undefined ? { error } : {},

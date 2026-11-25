@@ -15,22 +15,19 @@
  *    recent derived messages are extracted. Both are fire-and-forget and never
  *    block their event.
  *
- * All knobs are live configuration: the composition entry is the settings
- * `base` layer under the `memory-review` namespace, and handlers re-read the
- * resolved value per event — a frontend settings change applies on the next
- * event, no restart.
+ * All knobs are live configuration: the `memory-review` entry's `Config` is
+ * the settings surface, and handlers read the resolved value per event. The
+ * host re-runs `apply` when the card commits a change, so a new value lands on
+ * the next event without a restart.
  *
  * @module @chenhw7/dsh-memory/review
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-// Type-only: merges the `settings` service (SettingsProvider) into the Context
-// so `sctx.settings` types in this module.
-import type {} from '@deepseek-ai/dsh-settings'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '../index.ts'
 // Loads the `compaction/*` SessionEventMap declaration merge so the flush
@@ -55,14 +52,32 @@ export const name = 'memory-review'
  *  `sessionProjections` and `memory` are optional (read via `ctx.get`). */
 export const inject = ['llm']
 
-/** The settings namespace owned by this plugin (live, UI-visible). */
-const NS = 'memory-review'
+/**
+ * The face the review plugin publishes on `ctx.memoryReview`: the resolved
+ * `memory-review` entry settings, for siblings that must honour them (the
+ * tool plugin's confirm-before-write gate).
+ */
+export interface MemoryReviewSettingsFace {
+  /** The resolved settings, re-read per call. */
+  settings(): ResolvedConfig
+}
 
-/** The `memory` settings namespace — read cross-namespace (owned by memory-context). */
-const MEMORY_NS = 'memory'
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    memoryReview: MemoryReviewSettingsFace
+  }
+}
 
-/** Default for decayDays when the namespace value is absent. */
+/** Fallback for `decayDays` when no store service is composed. */
 const DEFAULT_DECAY_DAYS = 30
+
+/**
+ * Cap on the per-session seq→text log the compaction flush reads. The flush
+ * needs the raw text of the events a compaction summary shadows, and the host
+ * deprecates synchronous session-log reads, so this plugin keeps its own
+ * bounded copy of what it already receives on `session/event`.
+ */
+const EVENT_TEXT_CAP = 500
 
 /** Plugin configuration. */
 export interface Config {
@@ -208,34 +223,31 @@ function messageFragment(message: FlushMessage): string | undefined {
   return `${message.role}: ${parts.join('\n')}`
 }
 
+/** What this plugin retains per session about events it already received. */
+interface SessionEventLog {
+  /** Message text by seq, for the seqs a later compaction summary can shadow. */
+  readonly texts: Map<number, string>
+  /** Shadowed seqs by compaction id, from each `compaction/summary`. */
+  readonly summaries: Map<string, readonly number[]>
+}
+
 /** Collect text fragments for the shadowed seqs of a compaction summary. */
-function collectShadowedFragments(session: Session, seqs: readonly number[]): string[] {
+function collectShadowedFragments(log: SessionEventLog | undefined, seqs: readonly number[]): string[] {
   const fragments: string[] = []
-  const events = session.events
+  if (log === undefined) return fragments
   for (const seq of seqs) {
-    const event = events[seq]
-    if (event === undefined) continue
-    const text = messageText(event)
+    const text = log.texts.get(seq)
     if (text !== undefined) fragments.push(text)
   }
   return fragments
 }
 
-/** Locate the `compaction/summary` matching one `compaction/end` id. */
-function findCompactionSummary(session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId']): SessionEvent<'compaction/summary'> | undefined {
-  for (const event of session.events) {
-    if (event.type === 'compaction/summary' && event.data.compactionId === compactionId) {
-      return event as SessionEvent<'compaction/summary'>
-    }
-  }
-  return undefined
-}
-
 /** Fire-and-forget flush on `compaction/end`: extract the shadowed fragments. */
-async function flushOnCompaction(ctx: Context, session: Session, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
-  const summary = findCompactionSummary(session, compactionId)
-  if (summary === undefined) return
-  const fragments = collectShadowedFragments(session, summary.data.shadowedSeqs)
+async function flushOnCompaction(ctx: Context, session: Session, eventLogs: WeakMap<Session, SessionEventLog>, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
+  const log = eventLogs.get(session)
+  const shadowedSeqs = log?.summaries.get(String(compactionId))
+  if (shadowedSeqs === undefined) return
+  const fragments = collectShadowedFragments(log, shadowedSeqs)
   await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode, consolidation)
 }
 
@@ -257,29 +269,21 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
  * @param config - plugin configuration (defaults applied by schemastery).
  */
 export function apply(ctx: Context, config: Config = {}): void {
-  // Live-resolved config: the settings scope while one is attached, the
-  // composition entry otherwise (swapped by installSection on attach/detach).
-  let resolved = (): ResolvedConfig => resolveConfig(config)
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
-      setSource: (source) => { resolved = () => resolveConfig(source()) },
-      onChange: () => {},
-    })
-  })
+  // The entry config IS the settings surface: the host resolves it (schema
+  // defaults → composition base → user layer) and re-runs this function when
+  // the review card commits a change, so `resolved()` always reads the live
+  // value for the life of this fiber.
+  const resolved = (): ResolvedConfig => resolveConfig(config)
 
-  // `decayDays` lives in the `memory` namespace (owned by memory-context).
-  // Read it cross-namespace via a settings-injected fiber; fall back to the
-  // default when no settings service is mounted.
-  let readDecayDays = (): number => DEFAULT_DECAY_DAYS
-  ctx.inject(['settings'], (sctx) => {
-    readDecayDays = (): number => {
-      try {
-        const ns = sctx.settings.get(MEMORY_NS) as { decayDays?: number } | undefined
-        if (typeof ns?.decayDays === 'number') return ns.decayDays
-      } catch { /* namespace not registered yet — fall through */ }
-      return DEFAULT_DECAY_DAYS
-    }
-  })
+  // Publish the resolved settings for the tool plugin, which needs
+  // `confirmBeforeWrite` to route model writes into the pending-review queue.
+  // Cross-plugin reads go through services under the per-entry configuration
+  // model; there is no shared namespace to read.
+  ctx.provide('memoryReview', { settings: resolved })
+
+  // `decayDays` belongs to the store entry (`ctx.memory`); read it from the
+  // service and fall back to the builtin default when no store is composed.
+  const readDecayDays = (): number => ctx.get('memory')?.settings().decayDays ?? DEFAULT_DECAY_DAYS
 
   /** Per-session high-water mark: the seq of the last candidate covered by an extraction. */
   const highWaterMarks = new WeakMap<Session, number>()
@@ -298,16 +302,50 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // Register the projection accumulator (optional: only when sessionProjections
   // is composed; headless assemblies stay unaffected). Host-only unit: the
-  // state is read back through `stateOf`, so no `wire` view is declared.
+  // state is read back through the registration handle, so no `wire` view is
+  // declared. Registration is awaitable and the handle is the supported read
+  // path (the registry-level read is deprecated), so the handle is retained
+  // here and every later read goes through it.
+  let accumulator: ProjectionHandle<AccumulatorState> | undefined
   ctx.inject(['sessionProjections'], (pctx) => {
-    pctx.sessionProjections.register<typeof MEMORY_REVIEW_PROJECTION_KEY, AccumulatorState>({
+    void pctx.sessionProjections.register<typeof MEMORY_REVIEW_PROJECTION_KEY, AccumulatorState>({
       key: MEMORY_REVIEW_PROJECTION_KEY,
       stateSchema: accumulatorSchema,
       init: () => emptyAccumulator,
       apply: (state, event) => applyAccumulator(state, event, resolved().pitfallStreakThreshold),
       stateVersion: 2,
-    })
+    }).then((handle) => { accumulator = handle })
   })
+
+  // Bounded per-session event log for the compaction flush. The flush needs
+  // the raw text of the events a `compaction/summary` shadows, and the host
+  // deprecates synchronous session-log reads, so this plugin keeps its own
+  // copy of what it already receives — texts by seq plus each summary's
+  // shadowed seqs. A WeakMap: the log dies with its session.
+  const eventLogs = new WeakMap<Session, SessionEventLog>()
+  const eventLogFor = (session: Session): SessionEventLog => {
+    let log = eventLogs.get(session)
+    if (log === undefined) {
+      log = { texts: new Map(), summaries: new Map() }
+      eventLogs.set(session, log)
+    }
+    return log
+  }
+  ctx.on('session/event', (session: Session, event) => {
+    const log = eventLogFor(session)
+    if (event.type === 'compaction/summary') {
+      log.summaries.set(String(event.data.compactionId), event.data.shadowedSeqs)
+      return
+    }
+    const text = messageText(event)
+    if (text === undefined) return
+    log.texts.set(event.seq, text)
+    while (log.texts.size > EVENT_TEXT_CAP) {
+      const oldest = log.texts.keys().next()
+      if (oldest.done === true) break
+      log.texts.delete(oldest.value)
+    }
+  }, { global: true })
 
   // Periodic review: drain the accumulator on agent/pre-step. Always
   // registered — the enabled flag and knobs are read per event, so a settings
@@ -316,7 +354,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!signal.aborted && cfg.reviewEnabled) {
       try {
-        await maybeRunReview(ctx, agent, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation)
+        await maybeRunReview(ctx, agent, () => accumulator, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation)
       } catch (reviewError) {
         // Best-effort: a review failure must never block the step.
         ctx.get('memory')?.reportFailure('review-drain', reviewError)
@@ -332,7 +370,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const cfg = resolved()
     if (!cfg.flushOnCompaction) return
     if (!checkBudget(session)) return
-    void flushOnCompaction(ctx, session, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
+    void flushOnCompaction(ctx, session, eventLogs, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
       // Best-effort: never blocks compaction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-compaction', error)
     })
@@ -350,9 +388,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   // Janitor: decay stale project-scoped entries on session/created (§3.5).
-  // `decayDays` lives in the `memory` namespace (owned by memory-context) and is
-  // read live per event; `0` disables. Falls back to the default when no
-  // settings service is mounted.
+  // `decayDays` belongs to the store entry and comes back through
+  // `ctx.memory.settings()`, read per event; `0` disables. Falls back to the
+  // builtin default when no store is composed.
   ctx.on('session/created', () => {
     const days = readDecayDays()
     if (days <= 0) return
@@ -436,6 +474,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 async function maybeRunReview(
   ctx: Context,
   agent: Agent,
+  readAccumulator: () => ProjectionHandle<AccumulatorState> | undefined,
   threshold: number,
   highWaterMarks: WeakMap<Session, number>,
   modelOverride: ExtractionModelOverride | undefined,
@@ -444,13 +483,13 @@ async function maybeRunReview(
   confirmMode: boolean,
   consolidation: 'two-tier' | 'legacy-judge',
 ): Promise<void> {
-  const projections = ctx.get('sessionProjections')
-  if (projections === undefined) return
+  const handle = readAccumulator()
+  if (handle === undefined) return
   const session = agent.session
   // Host-state read: the accumulator is a host-only unit (no wire view), so
-  // the state comes from `stateOf`, not the client-facing `snapshot`.
-  const state = projections.stateOf(session, MEMORY_REVIEW_PROJECTION_KEY)
-  if (state === undefined) return
+  // the state comes from the registration handle, not the client-facing view.
+  const state = handle.stateOf(session)
+  if (state === undefined || state === null) return
   const mark = highWaterMarks.get(session) ?? -1
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)
   if (unprocessed.length < threshold) return

@@ -52,7 +52,7 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - **Step-level auto recall (on by default)** — on each agent step, a BM25 search keyed on the step's user text appends a fenced `<recalled-memory>` message without touching the system prompt, keeping the KV-cache prefix stable. Fence hits refresh an entry's recency clock but never its access count, so query-word luck cannot inflate the eviction signal.
 - **Compaction-aware flush** — when compaction shadows old context, the raw events are scanned for anything worth remembering.
 - **Security scanning, write *and* load time** — API keys, tokens, prompt-injection patterns, and exfiltration attempts are blocked from being saved; anything that slips through is redacted (`[BLOCKED: …]`) wherever it would re-enter a prompt.
-- **Frontend-configurable** — all settings exposed through five cards in the dsh settings UI, apply live.
+- **Frontend-configurable** — all settings exposed on the bundle's page in the dsh settings UI, applied live.
 - **Optional human review before write** — flip one setting (`confirmBeforeWrite`) and every extraction *and* tool write becomes a *proposal* in a pending queue (repeated signals accumulate hits and float up); adopting applies it (with your edits), rejecting discards it. The model never self-promotes: a proposed change to an existing entry rewrites nothing until you accept it.
 - **Memory manager UI** — a dedicated "Memory" section in the dsh settings UI with three tabs: Overview (health dashboard), Review (the pending-proposal queue), and Manage — scope and workspace filters, BM25 search, category chips, a lazily loaded entry list, plus full write actions (edit / pin / archive / delete) — in English and Chinese.
 - **Time-window browsing + smart list view** — `memory_list` returns newest-first with `earliest`/`latest`/`hasStale` metadata, accepts `since`/`until` epoch-ms bounds so "what did we learn last week" pages within the window, and suggests widening the filter when a narrowed query comes back empty over a non-empty store.
@@ -91,11 +91,13 @@ Your dsh agent normally forgets everything when you close a session. This bundle
 - A profile you want to add memory to (this guide uses `web`).
 
 > [!IMPORTANT]
-> **Harness channel: `alpha` (0.1.2-alpha.x).** This bundle is built against the
-> `@deepseek-ai/dsh-settings` 0.1.2-alpha API (`ctx.settings.installSection`)
-> and declares `^0.1.2-alpha.2` peers. Install dsh from the `alpha` channel —
-> the rc (`next`) line ships the removed module-level helpers and cannot load
-> this bundle. See [Known Limitations](#known-limitations).
+> **Harness: 0.2.2 or newer within 0.2.x.** This bundle targets the 0.2 host
+> contract — per-entry plugin `Config` (no `ctx.settings.installSection`), the
+> `plugins.bundle.config` settings page, per-producer message sources, and tool
+> results as standalone tool-role messages. It declares `^0.2.2-rc.1` peers and
+> `engines.dsh: ">=0.2.2-rc.1 <0.3.0"`, so the plugin manager refuses an older
+> or incompatible host instead of loading a broken bundle. See
+> [Known Limitations](#known-limitations).
 
 ### From npm (recommended)
 
@@ -171,7 +173,7 @@ dsh plugin remove --profile web @chenhw7/dsh-memory
 
 (with a source checkout: `pnpm dsh plugin remove --profile web @chenhw7/dsh-memory` from the `deepseek-harness` directory). This runs `pnpm remove` in the profile directory and reconciles the layer list, so the seven `memory-*` rows disappear from the composed config — you can confirm with the `--dump-config` check below.
 
-Uninstall does **not** delete your saved memories. They live under dsh's storage area, named by the `memory-store` row's `storage` config: `host-medium` (default) keeps everything in `memory.json`; `sqlite` moves the store into the plugin-owned `memory.db` with a one-time migration (`memory.json` then holds only the migration marker):
+Uninstall does **not** delete your saved memories. They live under dsh's storage area, named by the `memory` row's `storage` config: `host-medium` (default) keeps everything in `memory.json`; `sqlite` moves the store into the plugin-owned `memory.db` with a one-time migration (`memory.json` then holds only the migration marker):
 
 ```sh
 # macOS/Linux
@@ -201,21 +203,23 @@ You should see seven rows pointing at `@chenhw7/dsh-memory/*`:
 ```
 - id: memory-root
   name: '@chenhw7/dsh-memory'
-- id: memory-store
+- id: memory
   name: '@chenhw7/dsh-memory/store'
-- id: tool-memory
+- id: memory-tools
   name: '@chenhw7/dsh-memory/tool'
 - id: memory-review
   name: '@chenhw7/dsh-memory/review'
 - id: memory-notes
   name: '@chenhw7/dsh-memory/notes'
-- id: memory-context
+- id: memory-identity
+  name: '@chenhw7/dsh-memory/identity'
+- id: memory-autorecall
   name: '@chenhw7/dsh-memory/context'
 - id: memory-remote
   name: '@chenhw7/dsh-memory/remote-service'
 ```
 
-Then start dsh and check the settings UI shows the `memory` namespace:
+Then start dsh and open **Settings → Plugins → @chenhw7/dsh-memory**; its page holds the five configuration sections:
 
 ```sh
 dsh web
@@ -223,15 +227,15 @@ dsh web
 
 ## Configuration
 
-The bundle owns **five settings namespaces** — one per plugin-configuration card (the host's plugins tab dispatches a card only when its slot key names a served settings namespace) — and they all **apply live**: a change takes effect on the next event or call, no restart:
+Every bundle row declares its own settings (`Config`), and the row id **is** the settings namespace the host addresses it by. The bundle's page in **Settings → Plugins** renders all five editable entries as sections; each section writes the entry that owns the field, and every change **applies live** — the host re-runs the plugin with the new config, so it takes effect on the next event or call without a restart:
 
-- **`memory`** (card: *Memory*) — injection modes and the memory budgets. Owned by `memory-context`.
-- **`memory-notes`** (card: *Project Notes*) — the project-notes prompt-section switch and budgets. Owned by `memory-context`.
-- **`memory-autorecall`** (card: *Auto Recall*) — the step-level recall fence and the usage-hit signal. Owned by `memory-context`.
-- **`memory-identity`** (card: *Identity*) — the identity layer's switch, budgets, and seed directory. Owned by `memory-context`.
-- **`memory-review`** (card: *Automatic Extraction*) — extraction pipeline, model routing, dedup judge, pitfall streaks, curator pass. Owned by the `memory-review` plugin.
+- **`memory`** — the store: injection modes, memory budgets, search cap, decay window, storage backend. Owned by the `/store` row.
+- **`memory-notes`** — the project-notes prompt-section switch and budgets. Owned by `/notes`.
+- **`memory-autorecall`** — the step-level recall fence and the usage-hit signal. Owned by `/context`.
+- **`memory-identity`** — the identity layer's switch, budgets, and seed directory. Owned by `/identity`.
+- **`memory-review`** — extraction pipeline, model routing, dedup judge, pitfall streaks, curator pass, human-review gate. Owned by `/review`.
 
-Every namespace resolves in layers: schema defaults → the composition `config:` entry (the `base`) → the user document in `$DSH_HOME/settings.yaml`. A field absent from the user layer inherits the composition value, so a deployment can pin a default and users override only what they need. With no settings service mounted (e.g. a headless profile), each plugin falls back to its composition entry exactly as composed.
+Each value resolves in layers: schema defaults → the row's `config:` entry in the profile patch → the value saved from the settings page. A field left alone inherits the composition value, so a deployment can pin a default and users override only what they need. Sibling plugins never read each other's config directly: the entry that owns a knob publishes it through its service (`ctx.memory.settings()`, `ctx.projectNotes.settings()`, `ctx.identity.settings()`, `ctx.memoryReview.settings()`), which is why `maxSearchResults` and `decayDays` live on `memory` while `confirmBeforeWrite` lives on `memory-review`.
 
 ### `memory` namespace
 
@@ -254,7 +258,7 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `notesPitfallsCharLimit` | `800` | Character budget for the pitfall-log half of the notes section, so conventions can no longer starve it. Same freeze-time semantics and count-line folding. |
 | `notesMaxEntriesPerFile` | `100` | Max entries selected into the notes section (pinned first, then importance, then recency); the rest fold into count lines. |
 
-> **Settings migration**: the 0.9.x combined key `notesCharLimit` still works — when it is the only budget key set, both halves derive from it (conventions 60% / pitfalls 40%); each new key you set wins its own half. Rename the key in `$DSH_HOME/settings.yaml` (or the composition `config:`) to migrate.
+> **Settings migration**: the 0.9.x combined key `notesCharLimit` still works — when it is the only budget key set, both halves derive from it (conventions 60% / pitfalls 40%); each new key you set wins its own half. Rename the key in the `memory-notes` row's `config:` (or clear it on the settings page) to migrate.
 
 ### `memory-autorecall` namespace
 
@@ -294,14 +298,15 @@ Every namespace resolves in layers: schema defaults → the composition `config:
 | `curatorMinChars` | `400` | Only entries at least this long are selected for re-summarization. |
 | `confirmBeforeWrite` | `false` | Human-review mode: every extraction (review/flush/curator) *and* every `memory_add`/`memory_replace` call lands as a proposal in the pending queue instead of the store, until a human adopts it in the Memory settings section (Review tab). Repeated observations of the same proposal accumulate `hits` and float it to the top; a proposed change to an existing entry carries its id and rewrites nothing until adopted. |
 
-> There is deliberately **no separate `tool-memory` settings namespace**: the tool plugin reads `maxSearchResults` live from the `memory` namespace above. Its composition `config.maxSearchResults` only serves as the fallback base when no settings service is mounted.
+> There is deliberately **no `memory-tools` settings entry**: the tool row owns no knobs of its own. It reads `maxSearchResults` from `ctx.memory.settings()`, `confirmBeforeWrite` from `ctx.memoryReview.settings()`, and the identity gate/budgets from `ctx.identity.settings()`. Its own `config.maxSearchResults` is the fallback when no store is composed.
 
 ### Setting via composition vs. UI
 
-Every namespace accepts the same keys from both layers. A composition `config:` entry sets the `base`; the UI writes the user layer on top. The four memory-family namespaces share one composition row (`memory-context`'s `config:` carries all their keys), while the user document keeps one section per namespace. For example, to pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
+Every entry accepts the same keys from both layers: a row's `config:` block in the profile patch is the composition default, and the settings page writes the user layer on top of it. To pin `maxSearchResults: 100` as the deployment default while still letting a user override it:
 
 ```yaml
-memory:
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
   config:
     maxSearchResults: 100
 ```
@@ -315,48 +320,58 @@ memory-review:
     extractionModelModel: deepseek-chat
 ```
 
-Example `$DSH_HOME/settings.yaml` (all namespaces):
+Example profile-patch rows pinning every entry (the settings page writes the same keys into the profile document):
 
 ```yaml
-memory:
-  memoryMode: digest
-  memoryPolicyCustomText: ""
-  memoryCharLimit: 5000
-  memoryDigestCharLimit: 800
-  memoryMaxEntries: 20
-  maxSearchResults: 50
-  decayDays: 30
-memory-notes:
-  notesEnabled: true
-  notesConventionsCharLimit: 1600
-  notesPitfallsCharLimit: 800
-  notesMaxEntriesPerFile: 100
-memory-autorecall:
-  autoRecallEnabled: true
-  autoRecallLimit: 5
-  autoRecallMinChars: 12
-  hitSignalEnabled: false
-  hitSignalThreshold: 0.25
-memory-identity:
-  identityEnabled: false
-  soulCharLimit: 2000
-  userCharLimit: 3000
-  identitySeedDir: ""
-memory-review:
-  reviewEnabled: true
-  reviewCandidateThreshold: 10
-  flushOnCompaction: true
-  flushOnDispose: true
-  extractionModelProvider: ""
-  extractionModelModel: ""
-  extractionBudget: 20
-  judgeEnabled: true
-  pitfallStreakThreshold: 2
-  curatorEnabled: true
-  curatorEveryNSessions: 20
-  curatorMaxEntries: 5
-  curatorMinChars: 400
-  confirmBeforeWrite: false
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
+  config:
+    memoryMode: digest
+    memoryPolicyCustomText: ''
+    memoryCharLimit: 5000
+    memoryDigestCharLimit: 800
+    memoryMaxEntries: 20
+    maxSearchResults: 50
+    decayDays: 30
+- id: memory-notes
+  name: '@chenhw7/dsh-memory/notes'
+  config:
+    notesEnabled: true
+    notesConventionsCharLimit: 1600
+    notesPitfallsCharLimit: 800
+    notesMaxEntriesPerFile: 100
+- id: memory-autorecall
+  name: '@chenhw7/dsh-memory/context'
+  config:
+    autoRecallEnabled: true
+    autoRecallLimit: 5
+    autoRecallMinChars: 12
+    hitSignalEnabled: false
+    hitSignalThreshold: 0.25
+- id: memory-identity
+  name: '@chenhw7/dsh-memory/identity'
+  config:
+    identityEnabled: false
+    soulCharLimit: 2000
+    userCharLimit: 3000
+    identitySeedDir: ''
+- id: memory-review
+  name: '@chenhw7/dsh-memory/review'
+  config:
+    reviewEnabled: true
+    reviewCandidateThreshold: 10
+    flushOnCompaction: true
+    flushOnDispose: true
+    extractionModelProvider: ''
+    extractionModelModel: ''
+    extractionBudget: 20
+    judgeEnabled: true
+    pitfallStreakThreshold: 2
+    curatorEnabled: true
+    curatorEveryNSessions: 20
+    curatorMaxEntries: 5
+    curatorMinChars: 400
+    confirmBeforeWrite: false
 ```
 
 `memoryPolicyCustomText` is optional and only used when `memoryMode` is `custom`.
@@ -364,9 +379,11 @@ memory-review:
 When `memoryMode` is `custom`, `memoryPolicyCustomText` is injected verbatim as the memory section. It supports multi-line YAML with `|`. For example:
 
 ```yaml
-memory:
-  memoryMode: custom
-  memoryPolicyCustomText: |
+- id: memory
+  name: '@chenhw7/dsh-memory/store'
+  config:
+    memoryMode: custom
+    memoryPolicyCustomText: |
     <memory-policy>
     Persistent memory is available through memory tools. Do not assume memory has already been loaded into the prompt.
 
@@ -390,11 +407,12 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 | Row | Export | Role |
 |---|---|---|
 | `memory-root` | `@chenhw7/dsh-memory` | No-op root entry for client-module scanner discovery |
-| `memory-store` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue + meta tables), registers `ctx.memory` (BM25 search + two-tier decay) |
-| `tool-memory` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (confirm-mode writes queue as proposals) |
-| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue) and the `memory-review` settings namespace |
+| `memory` | `@chenhw7/dsh-memory/store` | Opens the `memory` domain (entries + audit + suggestion-queue + meta tables), registers `ctx.memory` (BM25 search + two-tier decay) and publishes the shared injection/recall settings through `ctx.memory.settings()` |
+| `memory-tools` | `@chenhw7/dsh-memory/tool` | Nine model-facing tools (confirm-mode writes queue as proposals) |
+| `memory-review` | `@chenhw7/dsh-memory/review` | Automatic extraction (projection + failure-streak pitfalls + flush + dedup + janitor + curator + human-review queue); publishes `ctx.memoryReview` for the tool's confirm gate |
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | Project-notes prompt projection (render conventions/pitfalls into the `project-notes` section; no repo files), registers `ctx.projectNotes`; cleans up ≤0.5.x file-export artifacts on session start |
-| `memory-context` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @6000 + `project-notes` @6001, after tool guidance), step-tail messages (one-time digest + per-step recall fence), owns the `memory` settings namespace |
+| `memory-identity` | `@chenhw7/dsh-memory/identity` | Registers `ctx.identity`: seeds and reads the two self-documents (SOUL.md / USER.md) from the store's identity tables |
+| `memory-autorecall` | `@chenhw7/dsh-memory/context` | System-prompt injection (`memory` @6000 + `project-notes` @6001, after tool guidance) and step-tail messages (one-time digest + per-step recall fence); owns the auto-recall settings |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | `@Remote` service behind the settings UI's Memory section (consumed over the `/api` channel) |
 
 **Storage**: this bundle does **not** insert `storage-json` / `storage-domain` rows. The `dsh-web-app` bundle already provides them (with the correct root path under `$DSH_HOME/storages`). Inserting them here would clobber that config (patches replace whole rows, last-write-wins). The memory store provider consumes the `storageDomain` service as a peer dependency.
@@ -421,7 +439,7 @@ The bundle inserts seven rows over `dsh-base`, each pointing at this package's o
 - **Mid-session extractions stay out of the prompt until the next compaction or session** — the injected sections are frozen for KV-cache stability; step-level auto recall (on by default) covers per-step freshness instead, and the one-time digest re-appends once after compaction.
 - **Remote management access relies on transport trust plus deployment valves** — any host admitted by the dsh host's `trustedHosts` setting can call read RPCs, but ordinary remote memory writes are denied by default (`remoteWritesEnabled: false`) and are exposed only when explicitly enabled, and `identityRevert` requires its own `identityRevertEnabled` valve (default `true`) on top of the write gate because it restores scanner-approved history rather than accepting arbitrary new content. Keep `trustedHosts` narrow and leave remote writes disabled unless every admitted host is trusted ([threat model](docs/TECH_DESIGN.md)).
 - **dsh is in developer preview** — breaking changes are expected; this bundle's peer dependency ranges track the dsh release line.
-- **Alpha channel (0.1.2-alpha.x) required** — the bundle uses the 0.1.2-alpha settings API (`ctx.settings.installSection`, host-only projection registrations) and declares `^0.1.2-alpha.2` peers. The rc (`next`) line still ships the removed module-level `installSettingsSection` helper and cannot load this bundle; install dsh from the `alpha` dist-tag. The client bundle likewise targets the alpha client packages (`@deepseek-ai/dsh-client-store` / `dsh-client-ui-settings`), which replaced the removed `dsh-client-runtime`.
+- **Harness 0.2.x required** — the bundle uses the 0.2 host contract (per-entry plugin `Config`, `plugins.bundle.config` settings page, per-producer message sources, tool results as tool-role messages) and declares `^0.2.2-rc.1` peers plus `engines.dsh: ">=0.2.2-rc.1 <0.3.0"`. 0.1.x hosts cannot load it: their `ctx.settings.installSection` model is gone in 0.2, and 0.2 removed `dsh-invariants`. Releases of this bundle before 0.10.0 target the 0.1.x line — pin those if you are still on a 0.1 host.
 
 ## License
 

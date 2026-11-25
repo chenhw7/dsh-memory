@@ -1,20 +1,23 @@
 /**
- * Generic namespace settings card — the same PluginCard port as
- * MemoryPluginCard, but driven by a declarative field spec, so sibling
- * plugins (`memory-review`, `tool-memory`) get a card without re-curating
- * one. Locale keys follow the `<key>` / `<key>Hint` convention unless the
+ * Generic settings section — one entry's knobs driven by a declarative field
+ * spec, so the review, notes, identity, and auto-recall entries share one
+ * renderer. Locale keys follow the `<key>` / `<key>Hint` convention unless the
  * spec overrides them.
+ *
+ * The section is presentational: the settings page owns the list and hands
+ * each section its entry's config form.
  *
  * @module @chenhw7/dsh-memory/client/NamespaceCard
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { IconChevronDownOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { css } from './card-styles.ts'
 import { TextField, NumberField, CheckboxField, SelectField } from './fields.tsx'
 import type { FieldBaseProps } from './fields.tsx'
+import { isOverridden, submitSection, useFormSnapshot } from './form.ts'
+import type { EntryForm } from './form.ts'
 
 /** One model entry in a provider's catalog group (structural view of `llm.models`). */
 export interface CatalogModelEntry {
@@ -74,41 +77,19 @@ export interface NamespaceCardSpec {
   readonly fields: readonly FieldSpec[]
 }
 
-/** The registration-side face the card's slot entry injects. */
-export interface NamespaceCardInjected {
-  hooks: {
-    /** The bound settings scope — bound by the renderer as useNs. */
-    ns: { getSnapshot(): SettingsScopeSnapshot<Record<string, unknown>>; subscribe(fn: () => void): () => void }
-  }
-  /** Queue one field write (durable, revision-fenced). */
-  set: (field: string, value: unknown) => Promise<void>
-  /** Queue one field clear (re-inherits the composition layer). */
-  unset: (field: string) => Promise<void>
+/** The translator the settings page passes down (one locale namespace for the page). */
+export type SectionTranslator = PropsLocale<'settings.memory'>['t']
+
+/** Props of one settings section: its spec, its entry form, and the page's translator. */
+export interface NamespaceSectionProps {
+  readonly spec: NamespaceCardSpec
+  readonly form: EntryForm
+  readonly t: SectionTranslator
   /**
    * Load the host-scoped model catalog for select fields; undefined when the
    * connection cannot serve it (select fields then degrade to free text).
    */
-  loadCatalog?: () => Promise<ModelCatalogView | undefined>
-}
-
-/** Props the renderer binds for a namespace card. */
-export interface NamespaceCardProps
-  extends PropsLocale<'settings.memory'>, PropsRuntime<'settings.plugin.item'>, InjectFace<NamespaceCardInjected> {
-  spec: NamespaceCardSpec
-}
-
-/** Bind a spec into a slot-registrable component (keeps entry modules JSX-free). */
-export function namespaceCard(spec: NamespaceCardSpec) {
-  return function SpecBoundNamespaceCard(props: Omit<NamespaceCardProps, 'spec'>) {
-    return <NamespaceCard {...props} spec={spec} />
-  }
-}
-
-/** A field is overridden when the user layer carries it (presence, not value). */
-function isOverridden(snap: SettingsScopeSnapshot<Record<string, unknown>>, field: string): boolean {
-  const user = snap.user
-  if (user === undefined || user === null || typeof user !== 'object') return false
-  return Object.prototype.hasOwnProperty.call(user, field)
+  readonly loadCatalog?: () => Promise<ModelCatalogView | undefined>
 }
 
 /** Lifecycle of the model-catalog load a select-bearing card performs on expand. */
@@ -117,8 +98,8 @@ type CatalogStatus = 'idle' | 'loading' | 'ready' | 'failed'
 /** Upper bound for the model-catalog load before it degrades to free text. */
 const MODEL_CATALOG_TIMEOUT_MS = 15_000
 
-export function NamespaceCard(props: NamespaceCardProps) {
-  const snap = props.useNs(s => s)
+export function NamespaceSection(props: NamespaceSectionProps) {
+  const snap = useFormSnapshot(props.form)
   const t = props.t
   const spec = props.spec
   const [open, setOpen] = useState(false)
@@ -193,13 +174,8 @@ export function NamespaceCard(props: NamespaceCardProps) {
     setSaving(true)
     setFailed(false)
     try {
-      const ops: Promise<void>[] = []
-      for (const field of spec.fields) {
-        if (draft[field.key] === committed[field.key]) continue
-        const value = draft[field.key]
-        ops.push(value === undefined ? props.unset(field.key) : props.set(field.key, value))
-      }
-      await Promise.all(ops)
+      const accepted = await submitSection(props.form, draft, committed)
+      if (!accepted) setFailed(true)
     } catch {
       setFailed(true)
     } finally {
@@ -281,7 +257,7 @@ export function NamespaceCard(props: NamespaceCardProps) {
           <span className={css.description}>{t(spec.descriptionKey)}</span>
         </span>
         {dirty ? <span className={css.pending}>{t('unsaved')}</span> : null}
-        <IconChevronDownOutline14 className={`${css.chevron}${open ? ` ${css.chevronOpen}` : ''}`} />
+        <IconChevronDownOutlineMedium className={`${css.chevron}${open ? ` ${css.chevronOpen}` : ''}`} />
       </button>
       {open ? (
         <div className={css.body}>
@@ -300,7 +276,7 @@ export function NamespaceCard(props: NamespaceCardProps) {
               overriddenLabel: t('overridden'),
               resetLabel: t('reset'),
               disabled,
-              onReset: () => { void props.unset(field.key); edit(field.key, undefined) },
+              onReset: () => { void props.form.unset(field.key); edit(field.key, undefined) },
             }
             if (field.kind === 'checkbox') {
               return (

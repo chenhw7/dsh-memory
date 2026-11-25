@@ -26,6 +26,7 @@
  * @module @chenhw7/dsh-memory/review/consolidate
  */
 
+import { MEMORY_REVIEW_SOURCE } from '../sources.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -38,7 +39,7 @@ import { mergeContent } from './dedup.ts'
 import { collectStreamText } from './extract.ts'
 
 /** Producer attribution for the synthetic consolidation request message. */
-const CONSOLIDATE_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
+const CONSOLIDATE_SOURCE = MEMORY_REVIEW_SOURCE
 
 /**
  * Word-face weighted overlap above which a (new candidate, stored entry) pair

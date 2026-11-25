@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 2026-11-25 起被取代：[bundle 迁到 DSH 0.2 宿主契约](../architecture/2026-11-25-dsh-0.2-per-entry-settings-and-client-page.zh.md)——DSH 0.2 移除了按命名空间分发的 `settings.plugin.item` 槽位，本文件记录的配对规则已无对象。它的教训以新形态存活：bundle 页面只在宿主至少服务一个它所编辑的条目时才注册（`ctx.configForms.whileServed`）。
+
 ## Problem
 
 本 bundle 的客户端向 `settings.plugin.item` 注册了五张卡片，但实机控制台的插件配置页只有两张渲染过：*Memory* 与 *Automatic Extraction*。*Project Notes*、*Auto Recall*、*Identity* 三张卡（身份卡正是本分支的新表面）静默缺失——插件配置页毫无痕迹、没有报错、控制台日志干净。README 与客户端头注释声称的"五张卡"在已安装的 harness 线上从未成立：根因早于身份层。

@@ -4,6 +4,8 @@ Status: implemented
 
 [English](2026-08-31-align-settings-seam-with-dsh-settings-0.1.2-alpha.md) | 中文
 
+> 2026-11-25 起被取代：[bundle 迁到 DSH 0.2 宿主契约](2026-11-25-dsh-0.2-per-entry-settings-and-client-page.zh.md)——DSH 0.2 彻底移除了 `installSettingsSection` / `ctx.settings.get`，设置改为每个条目自带 `Config`。接缝原则（消费宿主的设置面，绝不另造一套）仍然成立；本文件记录的机制已不成立。
+
 ## 问题
 
 `@chenhw7/dsh-memory` 0.6.0 按 rc 时代的 `@deepseek-ai/dsh-settings` API 构建（lockfile 中为 0.1.0-rc.8；peer 范围 `^0.1.0-rc.5 || ^0.1.1-rc.1`）。在 harness 的 `0.1.2-alpha` 渠道上，插件无法加载。

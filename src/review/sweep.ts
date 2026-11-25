@@ -15,6 +15,7 @@
  * @module @chenhw7/dsh-memory/review/sweep
  */
 
+import { MEMORY_REVIEW_SOURCE } from '../sources.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -33,7 +34,7 @@ import {
 } from './consolidate.ts'
 
 /** Producer attribution for the synthetic sweep request message. */
-const SWEEP_SOURCE = { kind: 'plugin', plugin: 'dsh-memory-review' } as const
+const SWEEP_SOURCE = MEMORY_REVIEW_SOURCE
 
 /** The meta-table key the sweep's last-run timestamp persists under (Step 1.1's `MemoryMetaRecord`). */
 export const SWEEP_LAST_RUN_META_KEY = 'consolidation:lastRun'

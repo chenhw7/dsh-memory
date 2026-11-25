@@ -1,8 +1,9 @@
 /**
- * Defaults and the read-side view for the `memory-notes` settings namespace.
- * Both consumers pull from here so defaults cannot drift: `memory-context`'s
- * notes schema and section assembly, and the `memory-notes` plugin (defensive
- * reads of the raw namespace value via `ctx.settings.get`).
+ * The `memory-notes` entry settings: its `Config` schema, the defaults, and
+ * the resolved view the notes service publishes. Both consumers pull from
+ * here so defaults cannot drift: the entry schema (the Project Notes card's
+ * form) and the section assembly that `memory-context` drives from
+ * `ctx.projectNotes.settings()`.
  *
  * Since 0.6 the notes surface is prompt-only (no repo files), so there is no
  * directory or AGENTS.md knob anymore — `notesEnabled` gates the injected
@@ -19,6 +20,8 @@
  *
  * @module @chenhw7/dsh-memory/notes/settings
  */
+
+import z from '@deepseek-ai/schemastery'
 
 /** Whether the project-notes prompt section is injected. */
 export const DEFAULT_NOTES_ENABLED = true
@@ -59,15 +62,41 @@ function resolveBudget(
 }
 
 /**
- * Resolve the notes settings from an untyped namespace value (defaults for
- * anything absent or mistyped). Unknown keys are ignored — except the
- * deprecated pre-0.6 `notesDir` / `notesAgentsPointer` (still ignored) and
- * the deprecated `notesCharLimit`, which derives the two budgets until the
+ * Schema fields for the `memory-notes` entry (the Project Notes card's form).
+ * The two budget fields deliberately carry no default: absence is the signal
+ * {@link resolveNotesSettings}'s deprecated-key fallback reads.
+ */
+export const NOTES_FIELDS = {
+  notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
+  notesConventionsCharLimit: z.number().step(1).min(0),
+  notesPitfallsCharLimit: z.number().step(1).min(0),
+  notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
+}
+
+/** The builtin values, used when no notes entry is composed. */
+export const DEFAULT_NOTES_SETTINGS: NotesSettings = {
+  notesEnabled: DEFAULT_NOTES_ENABLED,
+  notesConventionsCharLimit: DEFAULT_NOTES_CONVENTIONS_CHAR_LIMIT,
+  notesPitfallsCharLimit: DEFAULT_NOTES_PITFALLS_CHAR_LIMIT,
+  notesMaxEntriesPerFile: DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
+}
+
+/** A notes entry value: the resolved shape plus the deprecated combined budget. */
+export type NotesConfigValue = Partial<NotesSettings> & {
+  /** Deprecated combined budget (v0.9.1); derives both halves at 60/40 when it is the only key set. */
+  notesCharLimit?: number
+}
+
+/**
+ * Resolve the notes settings from an entry value (defaults for anything
+ * absent or mistyped). Unknown keys are ignored — except the deprecated
+ * pre-0.6 `notesDir` / `notesAgentsPointer` (still ignored) and the
+ * deprecated `notesCharLimit`, which derives the two budgets until the
  * document is migrated to the new keys.
- * @param value - the raw `memory-notes` namespace value (`ctx.settings.get` returns `unknown`).
+ * @param value - the `memory-notes` entry value, possibly partial.
  * @returns the fully-resolved notes settings.
  */
-export function resolveNotesSettings(value: unknown): NotesSettings {
+export function resolveNotesSettings(value: NotesConfigValue | undefined): NotesSettings {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
   return {
     notesEnabled: typeof v.notesEnabled === 'boolean' ? v.notesEnabled : DEFAULT_NOTES_ENABLED,

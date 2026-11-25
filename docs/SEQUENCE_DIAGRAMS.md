@@ -33,20 +33,24 @@ sequenceDiagram
 
     Host->>Tool: apply(ctx, config) [inject: tools]
     Tool->>Store: ctx.get('memory') (lazy, per call)
-    Tool->>Host: Register 8 memory_* tools<br/>ctx.inject(['settings']) → live maxSearchResults (memory ns)<br/>+ live confirmBeforeWrite (memory-review ns)
+    Tool->>Host: Register 9 memory_* tools<br/>reads maxSearchResults from ctx.memory.settings()<br/>+ confirmBeforeWrite from ctx.memoryReview.settings()
 
     Host->>Review: apply(ctx, config) [inject: llm]
-    Review->>Review: installSettingsSection('memory-review', Config)<br/>(… + confirmBeforeWrite, default false)
+    Review->>Review: ctx.provide('memoryReview', { settings() })<br/>(… + confirmBeforeWrite, default false)<br/>decayDays read from ctx.memory.settings()
     Review->>Review: ctx.inject(['sessionProjections']) →<br/>register accumulator (stateVersion 2)
     Review->>Host: agent/pre-step drain · compaction/end flush ·<br/>session/disposed flush · session/created janitor + curator
 
-    Host->>Notes: apply(ctx) [no inject]
-    Notes->>Notes: resolveNotesSettings(ctx.settings.get('memory'))
+    Host->>Notes: apply(ctx, config) [no inject]
+    Notes->>Notes: Config = NOTES_FIELDS → resolveNotesSettings(config)
     Notes->>Host: ctx.provide('projectNotes', ProjectNotesServiceImpl)<br/>agent/pre-step dirty-check (debounce 2s)
 
+    Host->>Identity: apply(ctx, config) [no inject]
+    Identity->>Host: ctx.provide('identity', IdentityServiceImpl)<br/>settings() = resolved Config (seed dir, budgets)
+
     Host->>Context: apply(ctx, config) [inject: systemPrompt]
-    Context->>Context: installSettingsSection('memory', MemoryConfig)
-    Context->>Notes: ctx.get('projectNotes') (optional, at freeze time)
+    Context->>Context: Config = AutoRecallSettings (the memory-autorecall entry)
+    Context->>Store: ctx.get('memory')?.settings() (injection slice)
+    Context->>Notes: ctx.get('projectNotes')?.settings() (optional, at freeze time)
     Context->>Host: systemPrompt.section('memory', order 6000)<br/>systemPrompt.section('project-notes', order 6001)<br/>session/created freeze · compaction/end re-freeze + digest re-arm<br/>agent/pre-step step-tail injection middleware
 
     Host->>Remote: apply(ctx) [inject: memory]
@@ -334,7 +338,7 @@ sequenceDiagram
 
 ## 7. Janitor Decay (Two-Tier Lifecycle)
 
-Triggered on every session creation. `decayDays` is read live from the `memory` namespace; `0` disables. Project scope decays hard (removed); global/user decay soft (stamped, recoverable).
+Triggered on every session creation. `decayDays` is read from `ctx.memory.settings()`; `0` disables. Project scope decays hard (removed); global/user decay soft (stamped, recoverable).
 
 ```mermaid
 sequenceDiagram
@@ -630,36 +634,34 @@ sequenceDiagram
 
 ## 12. Client Settings UI (Five Cards + Memory Section)
 
-The browser registers five cards into Settings → Plugins → Plugin configuration, plus the standalone **Memory** section (`settings.section`, id `memory`, order 25) with its three tabs (Overview / Review / Manage); card users edit staged drafts that commit as durable revision-fenced field writes.
+The browser registers ONE configuration page into Settings → Plugins → the bundle's own page (`plugins.bundle.config`, key `@chenhw7/dsh-memory`), holding five sections — one per entry — plus the standalone **Memory** section (`settings.section`, id `memory`, order 25) with its three tabs (Overview / Review / Manage); each section edits staged drafts that commit as ONE revision-fenced `mutate`.
 
 ```mermaid
 sequenceDiagram
     participant Browser as Browser
     participant Client as client/index.ts
-    participant Card as MemoryPluginCard / NamespaceCard
+    participant Card as MemorySection / NamespaceSection
     participant Section as MemorySection + memory-section-store
     participant Catalog as connection.api.llm.models
-    participant Scope as SettingsScope (per namespace)
-    participant Host as dsh settings.yaml (user layer)
+    participant Form as ConfigForm (ctx.configForms, per entry)
+    participant Host as profile entry config (user layer)
     participant Remote as memoryRemote (over /api RPC)
     participant Runtime as context/review/tool handlers
 
     Note over Browser,Client: Phase 1: Plugin load & registration
 
-    Browser->>Client: apply(ctx) [inject: slots, locale, settingsScope, connection]
+    Browser->>Client: apply(ctx) [inject: slots, locale, connection, configForms]
     Client->>Client: ctx.locale.register('settings.memory', { zh, en })
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
-    loop 5 cards, one served namespace each: memory · memory-notes · memory-autorecall · memory-identity · memory-review (… confirmBeforeWrite)
-        Client->>Scope: ctx.settingsScope.bind({ namespace })
-        Client->>Browser: slots.inject('settings.plugin.item', key, component)
-    end
+    Client->>Form: whileServed([memory · memory-notes · memory-autorecall · memory-identity · memory-review])<br/>→ configForms.get(entryId) for each
+    Client->>Browser: slots.register('plugins.bundle.config', key '@chenhw7/dsh-memory', SettingsPage)
     Client->>Browser: slots.register('settings.section', id 'memory', order 25)
     Note over Browser,Section: Memory section mounts: Overview (health dashboard) ·<br/>Review (suggestList queue, adopt/reject with edits) ·<br/>Manage (browse + edit/pin/archive/delete)
 
     Note over Card,Catalog: Phase 2: User opens a card
 
-    Browser->>Card: render (status !== 'ready' → null)
-    Card->>Scope: getSnapshot() → { value (resolved), user, writable, status }
+    Browser->>Card: render section (status !== 'ready' → null)
+    Card->>Form: getSnapshot() → { value (resolved), user, writable, revision, status }
     Card->>Card: draft = { defaults, ...committed } [staged locally]
 
     opt card has select fields (extraction provider/model)
@@ -672,16 +674,14 @@ sequenceDiagram
 
     Browser->>Card: edit fields → draft updates (Save gated on dirty && valid)
     Browser->>Card: click Save
-    loop fields where draft ≠ committed
-        Card->>Scope: set(field, value) | unset(field)
-        Scope->>Host: durable revision-fenced document mutation (parallel ops)
-    end
+    Card->>Form: mutate([{op:'set',path,value} | {op:'unset',path} …], revision)
+    Form->>Host: ONE revision-fenced write for the whole draft
     Host-->>Card: push updated snapshot → draft re-seeds
 
     Note over Runtime: Phase 4: Live application (no restart)
 
-    Runtime->>Runtime: next assembly/event re-reads resolved settings
-    Note over Runtime: context: section texts rebuild per assembly (snapshot stays frozen until compaction)<br/>review: knobs re-resolved per event · tool-memory: search cap + confirmBeforeWrite read per call<br/>notes: settings resolver runs per snapshotFor
+    Runtime->>Runtime: the host re-runs apply(ctx, config) for the changed entry
+    Note over Runtime: context: sections rebuild per assembly, and lazily re-freeze a session<br/>whose snapshot the restart cleared · review: knobs re-resolved per event<br/>tool-memory: search cap from ctx.memory, confirmBeforeWrite from ctx.memoryReview<br/>notes/identity: their services expose settings() for the same reads
 
     Note over Browser,Remote: Phase 5: Memory section data plane (three tabs)
 
@@ -710,9 +710,9 @@ graph TB
     end
 
     subgraph "Tool Layer"
-        Tool["tool/index.ts<br/>8 memory_* tools (confirm-aware,<br/>smart memory_list + time window)"]
-        SettingsNS["settings 'memory' ns<br/>maxSearchResults live read"]
-        ReviewNS["settings 'memory-review' ns<br/>confirmBeforeWrite live read"]
+        Tool["tool/index.ts<br/>9 memory_* tools (confirm-aware,<br/>smart memory_list + time window)"]
+        SettingsNS["ctx.memory.settings()<br/>maxSearchResults read"]
+        ReviewNS["ctx.memoryReview.settings()<br/>confirmBeforeWrite read"]
     end
 
     subgraph "Evaluation Layer"

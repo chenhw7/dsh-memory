@@ -20,6 +20,8 @@ import { computeHits, type LedgerEntry } from '../src/context/index.ts'
 import { tokenizeForSearch } from '../src/store/bm25.ts'
 import { rankForSweep } from '../src/review/sweep.ts'
 import * as context from '../src/context/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
 
 /** In-memory stand-in for a storage-domain KV table. */
 function memTable<K extends string, V>(): KvTable<K, V> {
@@ -123,12 +125,16 @@ describe('rankForSweep reads hitCount first (Step 2.3 consumption)', () => {
 class HitStore extends MemoryStore {
   readonly hitIds: MemoryId[][] = []
   private readonly entries: MemoryEntry[] = []
-  constructor(count: number) {
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private readonly injection: MemoryInjectionSettings
+  constructor(count: number, injection: Partial<MemoryInjectionSettings> = {}) {
     super()
+    this.injection = resolveInjectionSettings(injection)
     for (let i = 0; i < count; i++) {
       this.entries.push({ id: `mem-${i}` as MemoryId, scope: 'global', content: `entry ${i}`, createdAt: i, updatedAt: i })
     }
   }
+  override settings(): MemoryInjectionSettings { return this.injection }
   override async add(): Promise<{ entry: MemoryEntry }> { throw new Error('unused') }
   override get(id: string): MemoryEntry | undefined { return this.entries.find(e => e.id === id as MemoryId) }
   override list(): readonly MemoryEntry[] { return this.entries }
@@ -151,12 +157,13 @@ describe('memory-context hit wiring (live listeners)', () => {
     const ctx = new Context()
     ctx.provide('llm', {})
     ctx.provide('systemPrompt', { section: () => () => {} })
-    const store = new HitStore(2)
-    ctx.provide('memory', store)
     // `full` mode: the standing prefix injects entry content, so the standing
     // ledger is seeded (the digest default injects no entry data — covered
-    // by its own test below).
-    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    // by its own test below). The mode is the store entry's knob; only the
+    // hit-signal knobs belong to this plugin.
+    const store = new HitStore(2, { memoryMode: 'full' })
+    ctx.provide('memory', store)
+    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 })
     // Freeze the standing ledger (session/created fires the freeze).
     ctx.emit('session/created', session)
     // A restating answer books the hit for the standing entry.
@@ -170,12 +177,12 @@ describe('memory-context hit wiring (live listeners)', () => {
     const ctx = new Context()
     ctx.provide('llm', {})
     ctx.provide('systemPrompt', { section: () => () => {} })
-    const store = new HitStore(2)
-    ctx.provide('memory', store)
     // The factory default (`digest`) injects only counts/topics into the
     // prefix, never entry content, so an answer must not "hit" an entry it was
     // never shown; the per-step recall fence is the only ledger source (B2).
-    await ctx.plugin(context, { memoryMode: 'digest', autoRecallEnabled: false, hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    const store = new HitStore(2, { memoryMode: 'digest' })
+    ctx.provide('memory', store)
+    await ctx.plugin(context, { autoRecallEnabled: false, hitSignalEnabled: true, hitSignalThreshold: 0.25 })
     ctx.emit('session/created', session)
     ctx.emit('session/event', session, { type: 'assistant/message', seq: 2, time: 0, data: { message: { content: [{ type: 'text', text: 'entry 0 的约定已确认，后续照办' }] } } })
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -186,9 +193,9 @@ describe('memory-context hit wiring (live listeners)', () => {
     const ctx = new Context()
     ctx.provide('llm', {})
     ctx.provide('systemPrompt', { section: () => () => {} })
-    const store = new HitStore(2)
+    const store = new HitStore(2, { memoryMode: 'full' })
     ctx.provide('memory', store)
-    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 })
     ctx.emit('session/created', session)
     ctx.emit('session/event', session, { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: '今天天气不错去爬山吧' }] } } })
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -201,7 +208,7 @@ describe('memory-context hit wiring (live listeners)', () => {
     ctx.provide('systemPrompt', { section: () => () => {} })
     const store = new HitStore(2)
     ctx.provide('memory', store)
-    await ctx.plugin(context, { hitSignalEnabled: false } as never)
+    await ctx.plugin(context, { hitSignalEnabled: false })
     ctx.emit('session/created', session)
     ctx.emit('session/event', session, { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'entry 0 的约定已确认，后续照办' }] } } })
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -212,9 +219,9 @@ describe('memory-context hit wiring (live listeners)', () => {
     const ctx = new Context()
     ctx.provide('llm', {})
     ctx.provide('systemPrompt', { section: () => () => {} })
-    const store = new HitStore(1)
+    const store = new HitStore(1, { memoryMode: 'full' })
     ctx.provide('memory', store)
-    await ctx.plugin(context, { memoryMode: 'full', hitSignalEnabled: true, hitSignalThreshold: 0.25 } as never)
+    await ctx.plugin(context, { hitSignalEnabled: true, hitSignalThreshold: 0.25 })
     ctx.emit('session/created', session)
     const answer = { type: 'assistant/message', seq: 1, time: 0, data: { message: { content: [{ type: 'text', text: 'entry 0 的约定已确认，后续照办' }] } } }
     ctx.emit('session/event', session, answer)

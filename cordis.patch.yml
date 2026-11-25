@@ -13,6 +13,12 @@
 # (last-write-wins would clobber the web-app's root config otherwise).
 #
 # Row order carries no load semantics; the grouping is for readers.
+#
+# Row ids are also the settings namespaces: each row's module declares the
+# Config its page edits (`memory`, `memory-review`, `memory-identity`,
+# `memory-notes`, `memory-autorecall`), and the host's plugin pages address a
+# row's configuration by exactly this id. Renaming a row renames its settings
+# entry, so stored user overrides under the old id stop applying.
 
 - insert:
     # Root entry: lets the host client-module scanner discover dsh.client.
@@ -21,14 +27,16 @@
     - id: memory-root
       name: '@chenhw7/dsh-memory'
 
-    # Memory store provider — opens the 'memory' domain, registers ctx.memory.
-    # Requires the storage-domain facility (provided by dsh-web-app; headless
-    # users must add storage-domain themselves — see README).
-    - id: memory-store
+    # Memory store provider — opens the 'memory' domain, registers ctx.memory,
+    # and publishes the shared injection/recall settings the sibling rows read
+    # back through that service. Requires the storage-domain facility
+    # (provided by dsh-web-app; headless users must add storage-domain
+    # themselves — see README).
+    - id: memory
       name: '@chenhw7/dsh-memory/store'
 
     # Model-facing memory tools (memory_search/add/replace/remove/list/get).
-    - id: tool-memory
+    - id: memory-tools
       name: '@chenhw7/dsh-memory/tool'
 
     # Automatic extraction: projection accumulator + compaction/dispose flush.
@@ -42,13 +50,14 @@
       name: '@chenhw7/dsh-memory/notes'
 
     # Identity layer: seeds and reads the agent's self-documents (SOUL.md /
-    # USER.md) from the store's identity tables; memory-context injects them
+    # USER.md) from the store's identity tables; memory-autorecall injects them
     # as the `soul` (80) and `user-profile` (81) prompt sections.
     - id: memory-identity
       name: '@chenhw7/dsh-memory/identity'
 
-    # System-prompt section injection + frontend settings namespace.
-    - id: memory-context
+    # System-prompt section injection + the step-tail digest/recall fence. Owns
+    # the `memory-autorecall` settings entry (the fence and the hit signal).
+    - id: memory-autorecall
       name: '@chenhw7/dsh-memory/context'
 
     # @Remote service for the memory management UI (§7.7). The write switch

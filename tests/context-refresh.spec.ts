@@ -6,17 +6,31 @@
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { MemoryStore, validateContent } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery } from '../src/types.ts'
 import * as context from '../src/context/index.ts'
 import * as notes from '../src/notes/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
+import { DEFAULT_IDENTITY_SETTINGS } from '../src/identity/settings.ts'
+import type { IdentitySettings } from '../src/identity/settings.ts'
 
 /** In-memory store whose entries the test mutates between assemblies. */
 class MutableStore extends MemoryStore {
   readonly entries: MemoryEntry[] = []
   private seq = 0
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private readonly injection: MemoryInjectionSettings
+
+  constructor(injection: Partial<MemoryInjectionSettings> = {}) {
+    super()
+    this.injection = resolveInjectionSettings(injection)
+  }
+
+  override settings(): MemoryInjectionSettings {
+    return this.injection
+  }
 
   /** Explicit timestamps override the wall clock, for tests whose result
    * depends on the `updatedAt` order the notes priority sort reads. */
@@ -59,7 +73,13 @@ class MutableStore extends MemoryStore {
   override async janitor(): Promise<number> { return 0 }
 }
 
-const CONFIG = {
+/**
+ * The `memory` entry slice these tests run under: `full` mode keeps the data
+ * in the prefix, which is what the freeze/refreeze assertions read. The
+ * budgets live on the store entry now, so they reach `memory-context` through
+ * `ctx.memory.settings()` — the composition configures the stand-in store.
+ */
+const INJECTION = {
   memoryMode: 'full',
   memoryPolicyCustomText: '',
   memoryCharLimit: 5000,
@@ -67,6 +87,10 @@ const CONFIG = {
   memoryMaxEntries: 20,
   maxSearchResults: 50,
   decayDays: 30,
+} as const
+
+/** The `memory-notes` entry config: notes stay off unless a test turns them on. */
+const NOTES = {
   notesEnabled: false,
   notesConventionsCharLimit: 1600,
   notesPitfallsCharLimit: 800,
@@ -85,9 +109,10 @@ describe('compaction-boundary snapshot refresh', () => {
       },
     }
     ctx.provide('systemPrompt', fakeSystemPrompt)
-    const store = new MutableStore()
+    const store = new MutableStore(INJECTION)
     ctx.provide('memory', store)
-    await ctx.plugin(context, CONFIG as never)
+    await ctx.plugin(notes, NOTES)
+    await ctx.plugin(context)
     const session = { header: { cwd: '' } } as unknown as Session
     const assembleCtx = { agent: { session } }
     const sectionText = (): string => sections.get('memory')!(assembleCtx)
@@ -157,15 +182,19 @@ describe('identity sections (soul / user-profile) — freeze, refreeze, gate', (
     ctx.provide('systemPrompt', fakeSystemPrompt)
     let soul = ''
     let user = ''
-    ctx.provide('identity', { snapshotFor: () => ({ soul, user }) })
-    ctx.provide('memory', new MutableStore())
-    await ctx.plugin(context, {
-      ...CONFIG,
+    // The identity entry owns the enablement gate and the two document
+    // budgets; `memory-context` reads them back through the service.
+    const identitySettings: IdentitySettings = {
+      ...DEFAULT_IDENTITY_SETTINGS,
       identityEnabled: true,
       soulCharLimit: 2000,
       userCharLimit: 3000,
       ...overrides,
-    } as never)
+    }
+    ctx.provide('identity', { snapshotFor: () => ({ soul, user }), settings: () => identitySettings } as never)
+    ctx.provide('memory', new MutableStore(INJECTION))
+    await ctx.plugin(notes, NOTES)
+    await ctx.plugin(context)
     const session = { header: { cwd: '' } } as unknown as Session
     const assembleCtx = { agent: { session } }
     return {
@@ -224,31 +253,29 @@ describe('identity sections (soul / user-profile) — freeze, refreeze, gate', (
   })
 })
 
-/** An in-memory settings provider so live settings writes reach the plugins. */
-class TestSettingsProvider extends SettingsProvider {
-  override get writable() { return true }
-  private doc: Record<string, unknown> = {}
-  protected override async load(): Promise<Record<string, unknown>> { return this.doc }
-  protected override async persist(ns: Parameters<SettingsProvider['update']>[0], section: Record<string, unknown>): Promise<void> {
-    this.doc = { ...this.doc, [ns]: section }
-  }
+/** Capture the registered system-prompt sections of a fake registry. */
+function sectionRegistry(ctx: Context): Map<string, { order: number; text: (asm: unknown) => string }> {
+  const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
+  ctx.provide('systemPrompt', {
+    section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
+      sections.set(def.name, def)
+      return () => {}
+    },
+  } as never)
+  return sections
 }
 
 describe('project-notes budget — frozen at snapshot time, not per assembly', () => {
   it('a live notes-budget change lands at the next freeze (compaction), not the next assembly', async () => {
     const ctx = new Context()
-    await ctx.plugin(TestSettingsProvider)
-    const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
-    ctx.provide('systemPrompt', {
-      section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
-        sections.set(def.name, def)
-        return () => {}
-      },
-    })
-    const store = new MutableStore()
+    const sections = sectionRegistry(ctx)
+    const store = new MutableStore(INJECTION)
     ctx.provide('memory', store)
-    await ctx.plugin(notes, {})
-    await ctx.plugin(context, { ...CONFIG, notesEnabled: true } as never)
+    // A settings change re-runs the changed ENTRY's apply; memory-context's
+    // fiber (and its frozen per-session snapshot) survives, which is exactly
+    // what this test pins down.
+    const notesFiber = await ctx.plugin(notes, { ...NOTES, notesEnabled: true })
+    await ctx.plugin(context)
 
     // Two convention entries: only the first survives the tiny budget once it lands.
     await store.add({ scope: 'global', content: 'first convention with a fairly long body text', category: 'convention' } as never)
@@ -265,7 +292,8 @@ describe('project-notes budget — frozen at snapshot time, not per assembly', (
 
     // Shrink the conventions budget live. Assemblies keep serving the FROZEN
     // snapshot — the change must not apply per assembly.
-    await ctx.settings.update('memory-notes', { notesConventionsCharLimit: 230 })
+    await notesFiber.dispose()
+    await ctx.plugin(notes, { ...NOTES, notesEnabled: true, notesConventionsCharLimit: 230 })
     const frozen = notesText()
     expect(frozen).toContain('second convention')
     expect(notesText()).toBe(frozen)
@@ -280,28 +308,24 @@ describe('project-notes budget — frozen at snapshot time, not per assembly', (
 
   it('the deprecated notesCharLimit derives both budgets end-to-end through the settings document', async () => {
     // README promises the 0.9.x combined key still works. The unit test pins
-    // the resolver; this pins the whole path — schemastery's non-strict merge
-    // passing the unknown key through the `memory-notes` namespace, the notes
-    // service's injected-fiber read, and the 60/40 derivation — so a stored
-    // `notesCharLimit` behaves exactly like the two explicit keys it derives.
+    // the resolver; this pins the whole path — schemastery's non-strict object
+    // merge passing the unknown key through the `memory-notes` entry's Config,
+    // the notes service reading the validated entry config, and the 60/40
+    // derivation — so a stored `notesCharLimit` behaves exactly like the two
+    // explicit keys it derives.
     async function boot(seed: Record<string, unknown>) {
       const ctx = new Context()
-      await ctx.plugin(TestSettingsProvider)
-      const sections = new Map<string, { order: number; text: (asm: unknown) => string }>()
-      ctx.provide('systemPrompt', {
-        section: (def: { name: string; order: number; text: (asm: unknown) => string }) => {
-          sections.set(def.name, def)
-          return () => {}
-        },
-      })
-      const store = new MutableStore()
+      const sections = sectionRegistry(ctx)
+      const store = new MutableStore(INJECTION)
       ctx.provide('memory', store)
-      await ctx.plugin(notes, {})
       // The composition base must NOT pin the new budget keys, or they would
       // shadow the deprecated-key derivation (absence is the resolver's
       // signal) — exactly the state a pre-migration deployment is in.
-      const { notesConventionsCharLimit: _c, notesPitfallsCharLimit: _p, ...base } = CONFIG
-      await ctx.plugin(context, { ...base, notesEnabled: true } as never)
+      const base = { notesEnabled: true }
+      // The host validates the stored document against the entry's Config
+      // before apply sees it.
+      await ctx.plugin(notes, notes.Config({ ...base, ...seed }))
+      await ctx.plugin(context)
       // Enough conventions that a 300- vs 500-char budget renders differently.
       // Fixed timestamps: the render sorts by `updatedAt`, so wall-clock
       // stamps would make this cross-boot byte-compare depend on whether a
@@ -310,7 +334,6 @@ describe('project-notes budget — frozen at snapshot time, not per assembly', (
       for (let i = 0; i < 14; i++) {
         await store.add({ scope: 'global', content: `convention ${i}: a body long enough to measure the budget cut precisely`, category: 'convention', createdAt: t0 + i, updatedAt: t0 + i })
       }
-      await ctx.settings.update('memory-notes', seed)
       const session = { header: { cwd: '' } } as unknown as Session
       ctx.emit('session/created', session)
       return sections.get('project-notes')!.text({ agent: { session } })

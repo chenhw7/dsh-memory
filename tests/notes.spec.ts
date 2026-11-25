@@ -18,17 +18,16 @@ function entry(overrides: Partial<MemoryEntry> & { scope: MemoryEntry['scope'] }
 }
 
 /**
- * A fake Cordis context for the notes-service tests: models `ctx.inject`
- * by invoking the callback immediately with a settings-bearing sub-context
- * (the real service reads settings through an injected fiber).
+ * A fake Cordis context for the notes-service tests: the entry config reaches
+ * the service through `apply(ctx, config)`, so the context only needs the
+ * `memory` service lookup, the `projectNotes` registration, and the event
+ * subscription.
  */
-function fakeNotesCtx(settingsGet: (ns: string) => unknown, store: unknown, onProvide: (s: unknown) => void): never {
-  const settings = { get: settingsGet }
+function fakeNotesCtx(store: unknown, onProvide: (s: unknown) => void): never {
   return {
     get: (name: string) => (name === 'memory' ? store : undefined),
     provide: (_name: string, s: unknown) => { onProvide(s) },
     on: () => {},
-    inject: (_names: string[], cb: (sctx: unknown) => void) => { cb({ settings }) },
   } as never
 }
 
@@ -313,7 +312,7 @@ describe('load-time scan — blocked entries never re-enter a prompt (§9.2a)', 
         health: () => ({ totalEntries: 2, byScope: { global: 0, project: 2, user: 0 }, pinned: 0, auditRecords: 0 }),
       } as unknown as MemoryStore
       let provided: unknown
-      const ctx = fakeNotesCtx(() => undefined, store, s => { provided = s })
+      const ctx = fakeNotesCtx(store, s => { provided = s })
       apply(ctx)
       const service = provided as import('../src/notes/index.ts').ProjectNotesService
       const snap = service.snapshotFor(cwd)
@@ -379,7 +378,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
         health: () => ({ totalEntries: entries.length, byScope: { global: 1, project: 3, user: 1 }, pinned: 0, auditRecords: 0, lastActivityTs: 1 }),
       } as unknown as MemoryStore
       let provided: unknown
-      const ctx = fakeNotesCtx(() => undefined, store, s => { provided = s })
+      const ctx = fakeNotesCtx(store, s => { provided = s })
       apply(ctx)
       const service = provided as import('../src/notes/index.ts').ProjectNotesService
       const snap = service.snapshotFor(cwd)
@@ -395,10 +394,10 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
       // Zero writes: the project root is untouched (prompt-only projection).
       expect(existsSync(path.join(cwd, LEGACY_NOTES_DIR))).toBe(false)
       expect(existsSync(path.join(cwd, 'AGENTS.md'))).toBe(false)
-      // Disabled via settings: empty snapshot.
+      // Disabled through the entry config: empty snapshot.
       let provided2: unknown
-      const ctx2 = fakeNotesCtx(ns => ns === 'memory-notes' ? { notesEnabled: false } : undefined, store, s => { provided2 = s })
-      apply(ctx2)
+      const ctx2 = fakeNotesCtx(store, s => { provided2 = s })
+      apply(ctx2, { notesEnabled: false })
       const service2 = provided2 as import('../src/notes/index.ts').ProjectNotesService
       expect(service2.snapshotFor(cwd)).toEqual({ conventions: '', pitfalls: '' })
     } finally {
@@ -409,7 +408,7 @@ describe('ProjectNotesService — snapshotFor via the registered service', () =>
   it('returns the empty snapshot when the store is absent', async () => {
     const { apply } = await import('../src/notes/index.ts')
     let provided: unknown
-    const ctx = fakeNotesCtx(() => undefined, undefined, s => { provided = s })
+    const ctx = fakeNotesCtx(undefined, s => { provided = s })
     apply(ctx)
     const service = provided as import('../src/notes/index.ts').ProjectNotesService
     expect(service.snapshotFor('/tmp/whatever')).toEqual({ conventions: '', pitfalls: '' })

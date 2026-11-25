@@ -11,6 +11,15 @@
  */
 
 const RULES = `
+/* ── Page list: the settings page's stack of sections ───────────────────── */
+.dsm-c-page-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 /* ── Card shell (port of PluginCard.module.css) ─────────────────────────── */
 .dsm-c-card {
   list-style: none;
@@ -357,6 +366,8 @@ function inject(): void {
 
 /** Stable class-name map (bare suffix, no dot). */
 const cls = {
+  // Page list.
+  pageList: 'dsm-c-page-list',
   // Card shell (PluginCard.module.css).
   card: 'dsm-c-card',
   cardOpen: 'dsm-c-card-open',

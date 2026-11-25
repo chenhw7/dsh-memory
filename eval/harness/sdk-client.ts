@@ -490,25 +490,27 @@ export function collectSessionEvent(collector: TurnCollector, event: SessionEven
       return
     }
     case 'tool/result': {
-      // Wire shape (packages/llm/llm/src/message.ts): the tool-result message
-      // is a user-role message whose content[0] is the single
-      // `{ type: 'tool-result', toolCallId, isError }` block, and whose
-      // `source.callId` is the message-level twin. The harness core invariant
-      // requires the two to be equal and validates only content[0], so the
-      // block is the primary read with `source.callId` as the fallback.
-      const message = event.data['message'] as { content?: unknown; source?: unknown } | null | undefined
+      // Wire shape (dsh-llm message.ts): the tool result is its own tool-role
+      // message carrying `toolCallId` and `isError` at the message level, with
+      // `source.callId` as the message-level twin. Older hosts nested a single
+      // `{ type: 'tool-result', toolCallId, isError }` block at content[0]; the
+      // read keeps that as a last fallback so a mixed deployment still matches.
+      const message = event.data['message'] as { content?: unknown; source?: unknown; toolCallId?: unknown; isError?: unknown } | null | undefined
       const block = Array.isArray(message?.content)
         ? message.content[0] as { type?: unknown; toolCallId?: unknown; isError?: unknown } | null | undefined
         : undefined
-      const callId = block !== null && block !== undefined && block['type'] === 'tool-result' && typeof block['toolCallId'] === 'string'
-        ? block['toolCallId']
-        : String((message?.source as { callId?: unknown } | null | undefined)?.callId ?? '')
+      const callId = typeof message?.toolCallId === 'string'
+        ? message.toolCallId
+        : block !== null && block !== undefined && block['type'] === 'tool-result' && typeof block['toolCallId'] === 'string'
+          ? block['toolCallId']
+          : String((message?.source as { callId?: unknown } | null | undefined)?.callId ?? '')
       const call = collector.toolCalls.find(entry => entry.callId === callId && entry.settled === undefined)
       if (call !== undefined) {
         // ok = the call completed without failing: no event-level internal
         // failure identity (`error`), and the model-facing result block not
         // flagged `isError` (a scanner rejection or tool failure lands there).
-        call.ok = event.data['error'] === undefined && block?.['isError'] !== true
+        const isError = message?.isError === true || block?.['isError'] === true
+        call.ok = event.data['error'] === undefined && !isError
         call.settled = true
       }
       return

@@ -1,10 +1,9 @@
 /**
- * Memory plugin configuration card — shown inside Settings → Plugins →
- * Plugin configuration. Binds to the `memory` settings namespace through the
- * standard `ctx.settingsScope` transport and edits the injection mode and the
- * memory budgets. The project-notes, auto-recall, identity, and review knobs
- * live on their own namespace cards (NamespaceCard) — the host's plugins tab
- * dispatches one card per served settings namespace.
+ * The `memory` entry's settings section — one section of the bundle's page in
+ * Settings → Plugins. Binds to that entry's `ConfigForm` (`ctx.configForms`)
+ * and edits the injection mode and the memory budgets. The project-notes,
+ * auto-recall, identity, and review knobs live on their own sections
+ * (NamespaceSection), each bound to the form of the entry that declares them.
  *
  * The card is a self-contained port of the deployment's own plugin-card
  * design (PluginCard from ui-settings-plugins): a collapsible header naming
@@ -23,11 +22,12 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import { IconChevronDownOutlineMedium } from '@deepseek-ai/dsh-client-ui-primitives'
 import { css } from './card-styles.ts'
 import { SelectField, TextField, NumberField, CheckboxField, TextareaField } from './fields.tsx'
+import { isOverridden, submitSection, useFormSnapshot } from './form.ts'
+import type { EntryForm } from './form.ts'
+import type { SectionTranslator } from './NamespaceCard.tsx'
 
 // ─── Wire types (client-side mirror of the host `memory` settings schema) ───
 
@@ -44,21 +44,13 @@ export interface MemoryConfig {
   decayDays?: number
 }
 
-/** The registration-side face the card's slot entry injects. */
-export interface MemoryPluginCardInjected {
-  hooks: {
-    /** The bound `memory` settings scope — bound by the renderer as useMemory. */
-    memory: { getSnapshot(): SettingsScopeSnapshot<MemoryConfig>; subscribe(fn: () => void): () => void }
-  }
-  /** Queue one field write (durable, revision-fenced). */
-  set: (field: string, value: unknown) => Promise<void>
-  /** Queue one field clear (re-inherits the composition layer). */
-  unset: (field: string) => Promise<void>
+/** Props of the memory entry's settings section. */
+export interface MemorySectionProps {
+  /** The `memory` entry's config form. */
+  readonly form: EntryForm
+  /** The page's translator (one locale namespace for the whole page). */
+  readonly t: SectionTranslator
 }
-
-/** Props the renderer binds for the memory card. */
-export interface MemoryPluginCardProps
-  extends PropsLocale<'settings.memory'>, PropsRuntime<'settings.plugin.item'>, InjectFace<MemoryPluginCardInjected> {}
 
 // ─── Defaults + helpers ─────────────────────────────────────────────────────
 
@@ -79,17 +71,10 @@ const DEFAULTS: MemoryConfig = {
 type NumericField = 'memoryCharLimit' | 'memoryDigestCharLimit' | 'memoryMaxEntries' | 'maxSearchResults' | 'decayDays'
 const NUMERIC_FIELDS: readonly NumericField[] = ['memoryCharLimit', 'memoryDigestCharLimit', 'memoryMaxEntries', 'maxSearchResults', 'decayDays']
 
-/** A field is overridden when the user layer carries it (presence, not value). */
-function isOverridden(snap: SettingsScopeSnapshot<MemoryConfig>, field: keyof MemoryConfig): boolean {
-  const user = snap.user
-  if (user === undefined || user === null || typeof user !== 'object') return false
-  return Object.prototype.hasOwnProperty.call(user, field)
-}
-
 // ─── Card component ─────────────────────────────────────────────────────────
 
-export function MemoryPluginCard(props: MemoryPluginCardProps) {
-  const snap = props.useMemory(s => s)
+export function MemorySection(props: MemorySectionProps) {
+  const snap = useFormSnapshot(props.form)
   const t = props.t
   const [open, setOpen] = useState(false)
 
@@ -133,13 +118,8 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
     setSaving(true)
     setFailed(false)
     try {
-      const ops: Promise<void>[] = []
-      for (const key of Object.keys(DEFAULTS) as (keyof MemoryConfig)[]) {
-        if (draft[key] === committed[key]) continue
-        const value = draft[key]
-        ops.push(value === undefined ? props.unset(key) : props.set(key, value))
-      }
-      await Promise.all(ops)
+      const accepted = await submitSection(props.form, draft as Record<string, unknown>, committed as Record<string, unknown>)
+      if (!accepted) setFailed(true)
     } catch {
       setFailed(true)
     } finally {
@@ -166,7 +146,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
           <span className={css.description}>{t('cardDescription')}</span>
         </span>
         {dirty ? <span className={css.pending}>{t('unsaved')}</span> : null}
-        <IconChevronDownOutline14 className={`${css.chevron}${open ? ` ${css.chevronOpen}` : ''}`} />
+        <IconChevronDownOutlineMedium className={`${css.chevron}${open ? ` ${css.chevronOpen}` : ''}`} />
       </button>
       {open ? (
         <div className={css.body}>
@@ -182,7 +162,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             value={draft.memoryMode ?? 'digest'}
             options={MODES.map(m => ({ value: m, label: m }))}
             onChange={(v) => edit('memoryMode', v as MemoryConfig['memoryMode'])}
-            onReset={() => { void props.unset('memoryMode'); edit('memoryMode', undefined) }}
+            onReset={() => { void props.form.unset('memoryMode'); edit('memoryMode', undefined) }}
           />
           {draft.memoryMode === 'custom' ? (
             <TextareaField
@@ -195,7 +175,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
               disabled={disabled}
               value={draft.memoryPolicyCustomText ?? ''}
               onChange={(v) => edit('memoryPolicyCustomText', v)}
-              onReset={() => { void props.unset('memoryPolicyCustomText'); edit('memoryPolicyCustomText', undefined) }}
+              onReset={() => { void props.form.unset('memoryPolicyCustomText'); edit('memoryPolicyCustomText', undefined) }}
             />
           ) : null}
           <NumberField
@@ -210,7 +190,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             disabled={disabled}
             value={draft.memoryCharLimit ?? ''}
             onChange={(v) => edit('memoryCharLimit', v === '' ? undefined : Number(v))}
-            onReset={() => { void props.unset('memoryCharLimit'); edit('memoryCharLimit', undefined) }}
+            onReset={() => { void props.form.unset('memoryCharLimit'); edit('memoryCharLimit', undefined) }}
           />
           <NumberField
             id="dsh-memory-digest-char-limit"
@@ -224,7 +204,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             disabled={disabled}
             value={draft.memoryDigestCharLimit ?? ''}
             onChange={(v) => edit('memoryDigestCharLimit', v === '' ? undefined : Number(v))}
-            onReset={() => { void props.unset('memoryDigestCharLimit'); edit('memoryDigestCharLimit', undefined) }}
+            onReset={() => { void props.form.unset('memoryDigestCharLimit'); edit('memoryDigestCharLimit', undefined) }}
           />
           <NumberField
             id="dsh-memory-max-entries"
@@ -238,7 +218,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             disabled={disabled}
             value={draft.memoryMaxEntries ?? ''}
             onChange={(v) => edit('memoryMaxEntries', v === '' ? undefined : Number(v))}
-            onReset={() => { void props.unset('memoryMaxEntries'); edit('memoryMaxEntries', undefined) }}
+            onReset={() => { void props.form.unset('memoryMaxEntries'); edit('memoryMaxEntries', undefined) }}
           />
           <NumberField
             id="dsh-memory-max-search"
@@ -252,7 +232,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             disabled={disabled}
             value={draft.maxSearchResults ?? ''}
             onChange={(v) => edit('maxSearchResults', v === '' ? undefined : Number(v))}
-            onReset={() => { void props.unset('maxSearchResults'); edit('maxSearchResults', undefined) }}
+            onReset={() => { void props.form.unset('maxSearchResults'); edit('maxSearchResults', undefined) }}
           />
           <NumberField
             id="dsh-memory-decay-days"
@@ -266,7 +246,7 @@ export function MemoryPluginCard(props: MemoryPluginCardProps) {
             disabled={disabled}
             value={draft.decayDays ?? ''}
             onChange={(v) => edit('decayDays', v === '' ? undefined : Number(v))}
-            onReset={() => { void props.unset('decayDays'); edit('decayDays', undefined) }}
+            onReset={() => { void props.form.unset('decayDays'); edit('decayDays', undefined) }}
           />
           <div className={css.footer}>
             {failed ? <p className={css.failed} role="status">{t('saveFailed')}</p> : null}

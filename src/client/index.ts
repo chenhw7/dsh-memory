@@ -3,13 +3,13 @@
  *
  * Two surfaces over one store:
  *
- * 1. **Configuration**: five cards inside Settings → Plugins → Plugin
- *    configuration (`settings.plugin.item`) — injection mode, project notes,
- *    auto recall, identity, automatic extraction. The host's plugins tab
- *    dispatches a card only when its slot key names a settings namespace the
- *    Host serves, so each card's key IS its namespace and `memory-context`
- *    registers all five host-side. All write through the standard
- *    `ctx.settingsScope` transport and apply live.
+ * 1. **Configuration**: one page on this bundle's card in Settings → Plugins
+ *    (`plugins.bundle.config`, keyed by the package name), holding five
+ *    sections — injection mode, project notes, auto recall, identity, and
+ *    automatic extraction. Each section is bound to the config form of the
+ *    profile entry that declares those settings (`memory`, `memory-notes`,
+ *    `memory-autorecall`, `memory-identity`, `memory-review`), so a write lands
+ *    in the row that owns the field and applies on the Host's re-apply.
  * 2. **Content management** (phase 1): a dedicated "Memory" settings section
  *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
  *    memory store — an Overview tab with the health dashboard and a Manage tab
@@ -46,11 +46,11 @@
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the settings shell's SlotMap merge (the 'settings.section'
-// entry that hosts this section) and the ctx.settingsScope Context merge.
+// entry that hosts this section) and the ctx.configForms Context merge.
 // Cross-plugin collaboration goes through the service, never a value import
 // (client bundle purity gate).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-// Type-only: the plugins settings tab's SlotMap merge (settings.plugin.item).
+// Type-only: the plugins settings tab's SlotMap merge (settings.plugins.tab).
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: merges `ctx.slots` (SlotRegistry) into the client Context — the
 // slot injection/registration surface this module's apply() drives — and the
@@ -58,21 +58,17 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { MemoryPluginCard } from './MemoryPluginCard.tsx'
-import type { MemoryConfig, MemoryPluginCardInjected } from './MemoryPluginCard.tsx'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { MemorySection } from './MemorySection.tsx'
 import type { MemorySectionInjected } from './MemorySection.tsx'
 import { IdentitySection } from './IdentitySection.tsx'
 import type { IdentitySectionInjected } from './IdentitySection.tsx'
-import { namespaceCard } from './NamespaceCard.tsx'
-import type {
-  ModelCatalogView, NamespaceCardInjected, NamespaceCardSpec,
-} from './NamespaceCard.tsx'
+import { MEMORY_ENTRY_IDS, SettingsPage } from './SettingsPage.tsx'
+import type { MemoryEntryId, SettingsPageInjected } from './SettingsPage.tsx'
+import type { ModelCatalogView } from './NamespaceCard.tsx'
 import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
 import { IdentitySectionController } from './identity-section-store.ts'
-import { modelOptions, providerOptions, consolidationOptions } from './model-catalog.ts'
 import { en, zh } from './locales.ts'
 
 /**
@@ -88,123 +84,26 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-export type { MemoryPluginCardInjected, MemoryPluginCardProps, MemoryConfig } from './MemoryPluginCard.tsx'
-export type { MemorySectionInjected, MemorySectionProps } from './MemorySection.tsx'
+export type { MemoryConfig, MemorySectionProps } from './MemoryPluginCard.tsx'
+export type { MemorySectionInjected, MemorySectionProps as MemoryContentSectionProps } from './MemorySection.tsx'
 export type { IdentitySectionInjected, IdentitySectionProps } from './IdentitySection.tsx'
-
-/** The project-notes card: `notesEnabled` + its knobs, from the `memory` namespace. */
-const NOTES_SPEC: NamespaceCardSpec = {
-  titleKey: 'notesCardTitle',
-  descriptionKey: 'notesCardDescription',
-  fields: [
-    { key: 'notesEnabled', kind: 'checkbox' },
-    { key: 'notesConventionsCharLimit', kind: 'number', minValue: 0 },
-    { key: 'notesPitfallsCharLimit', kind: 'number', minValue: 0 },
-    { key: 'notesMaxEntriesPerFile', kind: 'number', minValue: 0 },
-  ],
-}
-
-/** The auto-recall card: the step-level recall fence, from the `memory` namespace. */
-const AUTORECALL_SPEC: NamespaceCardSpec = {
-  titleKey: 'autoRecallCardTitle',
-  descriptionKey: 'autoRecallCardDescription',
-  fields: [
-    { key: 'autoRecallEnabled', kind: 'checkbox' },
-    { key: 'autoRecallLimit', kind: 'number', minValue: 1 },
-    { key: 'autoRecallMinChars', kind: 'number', minValue: 1 },
-    { key: 'hitSignalEnabled', kind: 'checkbox', labelKey: 'hitSignalEnabled', hintKey: 'hitSignalEnabledHint' },
-    { key: 'hitSignalThreshold', kind: 'number', minValue: 0, labelKey: 'hitSignalThreshold', hintKey: 'hitSignalThresholdHint' },
-  ],
-}
-
-/** The identity card: the identity layer's knobs, from the `memory` namespace. */
-const IDENTITY_SPEC: NamespaceCardSpec = {
-  titleKey: 'identityCardTitle',
-  descriptionKey: 'identityCardDescription',
-  fields: [
-    { key: 'identityEnabled', kind: 'checkbox' },
-    { key: 'soulCharLimit', kind: 'number', minValue: 0 },
-    { key: 'userCharLimit', kind: 'number', minValue: 0 },
-    { key: 'identitySeedDir', kind: 'text' },
-  ],
-}
-
-/** Settings key of the provider field — lives with its resolvers in model-catalog. */
-const PROVIDER_FIELD = 'extractionModelProvider'
-
-/** The automatic-extraction card: the full `memory-review` namespace, live. */
-const REVIEW_SPEC: NamespaceCardSpec = {
-  titleKey: 'reviewCardTitle',
-  descriptionKey: 'reviewCardDescription',
-  fields: [
-    { key: 'reviewEnabled', kind: 'checkbox' },
-    { key: 'reviewCandidateThreshold', kind: 'number', labelKey: 'reviewThreshold', hintKey: 'reviewThresholdHint', minValue: 1 },
-    { key: 'flushOnCompaction', kind: 'checkbox' },
-    { key: 'flushOnDispose', kind: 'checkbox' },
-    {
-      key: PROVIDER_FIELD,
-      kind: 'select',
-      options: providerOptions,
-      emptyOptionKey: 'followSessionRoute',
-    },
-    {
-      key: 'extractionModelModel',
-      kind: 'select',
-      options: modelOptions,
-      emptyOptionKey: 'followSessionRoute',
-    },
-    { key: 'extractionBudget', kind: 'number' },
-    { key: 'judgeEnabled', kind: 'checkbox' },
-    { key: 'consolidation', kind: 'select', options: consolidationOptions, labelKey: 'consolidation', hintKey: 'consolidationHint' },
-    { key: 'pitfallStreakThreshold', kind: 'number', minValue: 1 },
-    {
-      key: 'confirmBeforeWrite',
-      kind: 'checkbox',
-      labelKey: 'confirmBeforeWrite',
-      hintKey: 'confirmBeforeWriteHint',
-    },
-    { key: 'curatorEnabled', kind: 'checkbox' },
-    { key: 'curatorEveryNSessions', kind: 'number', minValue: 1 },
-    { key: 'curatorMaxEntries', kind: 'number', minValue: 1 },
-    { key: 'curatorMinChars', kind: 'number', minValue: 1 },
-    { key: 'sweepEnabled', kind: 'checkbox', labelKey: 'sweepEnabled', hintKey: 'sweepEnabledHint' },
-    { key: 'sweepEveryNSessions', kind: 'number', minValue: 1, labelKey: 'sweepEveryNSessions', hintKey: 'sweepEveryNSessionsHint' },
-    { key: 'sweepTopN', kind: 'number', minValue: 2, labelKey: 'sweepTopN', hintKey: 'sweepTopNHint' },
-  ],
-}
+export type { SettingsPageInjected, SettingsPageProps, MemoryEntryId } from './SettingsPage.tsx'
+export type { NamespaceSectionProps, NamespaceCardSpec } from './NamespaceCard.tsx'
 
 /** Required services (cordis fiber inject). */
-export const inject = ['slots', 'locale', 'connection', 'settingsScope']
+export const inject = ['slots', 'locale', 'connection', 'configForms']
 
-/** The locale namespace for i18n strings, shared by the cards and the section. */
+/** The locale namespace for i18n strings, shared by the page and the sections. */
 const NS = 'settings.memory'
+
+/** This bundle's package name — the key the Plugins page files its configuration under. */
+const BUNDLE_NAME = '@chenhw7/dsh-memory'
 
 /** Settings-section nav order — after Plugins (15) and Agent presets (20). */
 const SECTION_ORDER = 25
 
 /** The identity section's nav order — right after the Memory section. */
 const IDENTITY_SECTION_ORDER = 26
-
-/**
- * One `settings.plugin.item` registration. The slot is keyed by the settings
- * namespace the card edits — the host's plugins tab pairs card keys with the
- * Host's served namespaces, so the key and the bound namespace are the same
- * string for every card.
- */
-interface CardEntry {
-  /** Slot key — the card's settings namespace. */
-  readonly key: string
-  /** Spec for NamespaceCard; absent → curated MemoryPluginCard. */
-  readonly spec?: NamespaceCardSpec
-}
-
-const CARDS: readonly CardEntry[] = [
-  { key: 'memory' },
-  { key: 'memory-notes', spec: NOTES_SPEC },
-  { key: 'memory-autorecall', spec: AUTORECALL_SPEC },
-  { key: 'memory-identity', spec: IDENTITY_SPEC },
-  { key: 'memory-review', spec: REVIEW_SPEC },
-]
 
 /** Structural face of the pieces of the client connection the loader needs. */
 interface ConnectionFace {
@@ -332,41 +231,28 @@ export function apply(ctx: ClientContext): void {
     })
   }, 'dsh-memory: memory section reload on reconnect')
 
-  ctx.slots.inject('settings.plugin.item', function* () {
-    for (const card of CARDS) {
-      const scope = ctx.settingsScope.bind({ namespace: card.key })
-      if (card.spec === undefined) {
-        const typed = scope as SettingsScope<MemoryConfig>
-        const injected = (): MemoryPluginCardInjected => ({
-          hooks: { memory: typed },
-          set: (field, value) => typed.set(field, value),
-          unset: (field) => typed.unset(field),
-        })
-        yield ctx.slots.register({
-          name: 'settings.plugin.item',
-          key: card.key,
-          locale: NS,
-          inject: injected,
-        }, MemoryPluginCard)
-      } else {
-        const spec = card.spec
-        const typed = scope as SettingsScope<Record<string, unknown>>
-        const withCatalog = loadCatalog !== undefined && spec.fields.some(f => f.kind === 'select')
-        const injected = (): NamespaceCardInjected => ({
-          hooks: { ns: typed },
-          set: (field, value) => typed.set(field, value),
-          unset: (field) => typed.unset(field),
-          ...(withCatalog ? { loadCatalog } : {}),
-        })
-        yield ctx.slots.register({
-          name: 'settings.plugin.item',
-          key: card.key,
-          locale: NS,
-          inject: injected,
-        }, namespaceCard(spec))
-      }
-    }
-  })
+  // The bundle's settings page: one contribution to the Plugins page's
+  // `plugins.bundle.config` slot, keyed by this package's name, so the page
+  // renders it as the body of the bundle's own detail page. It appears only
+  // while the Host serves at least one of the entries it edits — a deployment
+  // that composed none of them shows no trace of it.
+  const formsFor = (): Record<MemoryEntryId, ConfigForm<Record<string, unknown>>> => {
+    const forms = {} as Record<MemoryEntryId, ConfigForm<Record<string, unknown>>>
+    for (const entryId of MEMORY_ENTRY_IDS) forms[entryId] = ctx.configForms.get<Record<string, unknown>>(entryId)
+    return forms
+  }
+  ctx.effect(() => ctx.configForms.whileServed([...MEMORY_ENTRY_IDS], () => {
+    const injected = (): SettingsPageInjected => ({
+      forms: formsFor(),
+      ...(loadCatalog === undefined ? {} : { loadCatalog }),
+    })
+    return ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+      name: 'plugins.bundle.config',
+      key: BUNDLE_NAME,
+      locale: NS,
+      inject: injected,
+    }, SettingsPage))
+  }), 'dsh-memory: settings page')
 
   const sectionInjected = (): MemorySectionInjected => ({
     hooks: { memorySection: controller.store },

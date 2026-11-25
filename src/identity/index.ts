@@ -17,27 +17,30 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: merges the `settings` service (SettingsProvider) into the Context
-// so `ctx.settings` types in this module.
-import type {} from '@deepseek-ai/dsh-settings'
+import z from '@deepseek-ai/schemastery'
 import { existsSync } from 'node:fs'
 import type { MemoryStore } from '../index.ts'
 import type { IdentityKind } from '../types.ts'
-import { resolveIdentitySettings, type IdentitySettings } from './settings.ts'
+import { IDENTITY_FIELDS, DEFAULT_IDENTITY_SETTINGS, resolveIdentitySettings, type IdentitySettings } from './settings.ts'
 import { builtinSeed, readSeedFile, seedFilePath, SEED_VERSION } from './seeds.ts'
 
-export { resolveIdentitySettings, DEFAULT_IDENTITY_ENABLED, DEFAULT_IDENTITY_SEED_DIR, DEFAULT_SOUL_CHAR_LIMIT, DEFAULT_USER_CHAR_LIMIT } from './settings.ts'
+export { resolveIdentitySettings, DEFAULT_IDENTITY_ENABLED, DEFAULT_IDENTITY_SEED_DIR, DEFAULT_SOUL_CHAR_LIMIT, DEFAULT_USER_CHAR_LIMIT, DEFAULT_IDENTITY_SETTINGS, IDENTITY_FIELDS } from './settings.ts'
 export { SOUL_SEED, USER_SEED, SEED_VERSION, validateSeedDir } from './seeds.ts'
 export type { IdentitySettings } from './settings.ts'
 
 /** Cordis plugin name. */
 export const name = 'memory-identity'
 
-/** Nothing is required: `memory` and `settings` are accessed optionally. */
+/** Nothing is required: `memory` is accessed optionally. */
 export const inject: string[] = []
 
-/** The identity settings namespace (owned by `memory-context`), read here defensively. */
-const IDENTITY_NS = 'memory-identity'
+/**
+ * The `memory-identity` entry config — the form behind the Identity section of
+ * the bundle's settings page. The entry id is also the settings namespace the
+ * host addresses the entry by, so the page's section and this schema are one
+ * binding.
+ */
+export const Config: z<IdentitySettings> = z.object(IDENTITY_FIELDS)
 
 /**
  * The raw (unbudgeted) contents of the two identity documents for one
@@ -75,6 +78,14 @@ export abstract class IdentityService {
    * @returns the raw document contents; empty strings when disabled or unavailable.
    */
   abstract snapshotFor(): IdentitySnapshot
+
+  /**
+   * The resolved `memory-identity` entry settings. `memory-context` reads the
+   * document budgets from here at section assembly (the notes-section
+   * precedent) instead of reading a shared settings namespace.
+   * @returns the resolved settings, with every default materialized.
+   */
+  abstract settings(): IdentitySettings
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -86,19 +97,23 @@ declare module '@deepseek-ai/cordis' {
 /** The default service implementation. All failures are swallowed by design. */
 class IdentityServiceImpl extends IdentityService {
   private readonly ctx: Context
-  private readonly settings: () => IdentitySettings
+  private readonly settingsSource: () => IdentitySettings
   /** Kinds whose seed write this process already kicked (one seed write per boot per kind). */
   private readonly seedInFlight = new Set<IdentityKind>()
 
-  constructor(ctx: Context, settings: () => IdentitySettings) {
+  constructor(ctx: Context, settingsSource: () => IdentitySettings) {
     super()
     this.ctx = ctx
-    this.settings = settings
+    this.settingsSource = settingsSource
+  }
+
+  override settings(): IdentitySettings {
+    return this.settingsSource()
   }
 
   override snapshotFor(): IdentitySnapshot {
     try {
-      const settings = this.settings()
+      const settings = this.settingsSource()
       if (!settings.identityEnabled) return EMPTY_IDENTITY
       const memory = this.ctx.get('memory')
       if (memory === undefined) return EMPTY_IDENTITY
@@ -156,35 +171,21 @@ class IdentityServiceImpl extends IdentityService {
 /**
  * Install the memory-identity plugin: register the `identity` service.
  *
+ * The entry `Config` is the settings surface: the host resolves it from the
+ * profile patch (schema defaults → composition base → user layer) and re-runs
+ * this function on a change, so the service always reads the live value.
+ *
  * Load-time validation of a configured seed directory is NOT here: cordis
  * swallows throws from `ctx.inject` callbacks (verified against the installed
- * runtime), so the loud gate lives in `memory-context`'s apply — the owner of
- * the `memory` namespace validates its composition-layer config before
- * mounting. Settings-overlay changes made live through the UI take the
- * observable path instead: the service reports the failure and falls back to
- * the builtin seed (`health().backgroundFailures` carries it).
+ * runtime), so the loud gate lives in `memory-context`'s apply — the plugin
+ * that assembles the identity sections validates the seed directory before
+ * mounting. Settings changes made live through the card take the observable
+ * path instead: the service reports the failure and falls back to the builtin
+ * seed (`health().backgroundFailures` carries it).
  * @param ctx - Cordis context.
+ * @param config - the `memory-identity` entry config.
  */
-export function apply(ctx: Context): void {
-  // Cross-namespace live reads MUST ride ctx.inject: cordis service
-  // properties throw `cannot get property "settings" without inject` on a
-  // fiber that has not injected the service (the tool plugin's precedent),
-  // and a plain try/catch would swallow that into the disabled default.
-  let readSettings = (): IdentitySettings => resolveIdentitySettings(undefined)
-  ctx.inject(['settings'], (sctx) => {
-    readSettings = (): IdentitySettings => {
-      try {
-        return resolveIdentitySettings(sctx.settings.get(IDENTITY_NS))
-      } catch {
-        // Namespace not registered yet (or the provider tore down) — the
-        // disabled default stands until it registers.
-        return resolveIdentitySettings(undefined)
-      }
-    }
-  })
-  // The stable indirection re-reads the variable per call — the inject
-  // callback reassigns it after the settings service attaches (the tool
-  // plugin's `defaultLimit` pattern); passing `readSettings` directly would
-  // freeze the pre-attach fallback into the service forever.
-  ctx.provide('identity', new IdentityServiceImpl(ctx, () => readSettings()))
+export function apply(ctx: Context, config: IdentitySettings = DEFAULT_IDENTITY_SETTINGS): void {
+  const settings = resolveIdentitySettings(config)
+  ctx.provide('identity', new IdentityServiceImpl(ctx, () => settings))
 }

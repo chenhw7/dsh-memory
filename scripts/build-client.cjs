@@ -17,19 +17,19 @@ const root = path.resolve(__dirname, '..')
 
 // All imports from host packages or react are externals — resolved at runtime
 // by the module loader's require(). We map them to valid require() identifiers.
+// Only modules the bundle actually requires at runtime belong here: the host's
+// module table resolves a require to a platform seed or an already-materialized
+// package, so a stale entry invites an import the loader cannot serve. Type-only
+// host imports are erased and need no entry (they also add no `dsh.client.inject`
+// graph edge).
 const externals = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
   '@deepseek-ai/dsh-client-store',
-  '@deepseek-ai/dsh-client-locale/client',
-  '@deepseek-ai/dsh-api-remotes/client',
-  '@deepseek-ai/dsh-client-ui-settings/client',
-  '@deepseek-ai/dsh-client-ui-settings-plugins/client',
 ]
 
 async function build() {

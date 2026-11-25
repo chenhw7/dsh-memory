@@ -58,7 +58,7 @@ export interface StoredEntry {
  * identity documents, when supplied, seed the `identity`/`identity_history`
  * tables alongside `entries`.
  */
-export function buildSeedMedium(entries: readonly SeedEntryInput[], identity?: { soul?: string; user?: string }): unknown {
+export function buildSeedMedium(entries: readonly SeedEntryInput[], identity?: { soul?: string | undefined; user?: string | undefined }): unknown {
   const table: Record<string, unknown> = {}
   for (const entry of entries) {
     table[entry.id] = {
@@ -88,7 +88,7 @@ export function buildSeedMedium(entries: readonly SeedEntryInput[], identity?: {
  * the history — exactly the shape a first `updateIdentity(source: 'seed')`
  * write produces.
  */
-export function buildIdentityTables(identity: { soul?: string; user?: string }): {
+export function buildIdentityTables(identity: { soul?: string | undefined; user?: string | undefined }): {
   identity: Record<string, unknown>
   identity_history: Record<string, unknown>
 } {
@@ -115,7 +115,7 @@ export function buildIdentityTables(identity: { soul?: string; user?: string }):
  *   axis-independent: an identity-off control run holds the same medium, so
  *   the injection is the only variable.
  */
-export function seedMemoryMedium(dshHome: string, entries: readonly SeedEntryInput[], identity?: { soul?: string; user?: string }): void {
+export function seedMemoryMedium(dshHome: string, entries: readonly SeedEntryInput[], identity?: { soul?: string | undefined; user?: string | undefined }): void {
   mkdirSync(join(dshHome, 'storages'), { recursive: true })
   writeFileSync(memoryMediumPath(dshHome), `${JSON.stringify(buildSeedMedium(entries, identity), undefined, 2)}\n`)
 }

@@ -1,16 +1,17 @@
 /**
- * Live settings tests: every bundle plugin re-reads its namespace per
- * event/call, so a frontend settings change applies without a restart, with
- * layering schema defaults < composition entry < user document. The
- * memory-family namespaces (one per plugin-configuration card) are covered in
- * their own describe: the plugins tab dispatches a card only when its slot
- * key names a served namespace.
+ * Live settings tests: every plugin reads its knobs per event/call, so a
+ * settings change applies without a restart. Under the host's per-entry
+ * configuration model the layering is schema defaults < composition entry <
+ * user document resolved by the HOST into that entry's `Config`, and a change
+ * re-runs the entry's `apply`. Cross-entry knobs ride the owning service
+ * (`ctx.memory.settings()`, `ctx.identity.settings()`, …), so a consumer never
+ * caches a sibling's value.
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { ToolCallId as CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { MemoryStore } from '../src/index.ts'
 import type { MemoryEntry, MemoryId, MemorySearchQuery } from '../src/types.ts'
@@ -18,27 +19,32 @@ import * as tool from '../src/tool/index.ts'
 import * as review from '../src/review/index.ts'
 import * as context from '../src/context/index.ts'
 import * as identity from '../src/identity/index.ts'
-
-/** In-memory settings provider: a raw-document store with no IO. */
-class TestSettingsProvider extends SettingsProvider {
-  override get writable() { return true }
-  private doc: Record<string, unknown> = {}
-  protected override async load(): Promise<Record<string, unknown>> { return this.doc }
-  protected override async persist(ns: Parameters<SettingsProvider['update']>[0], section: Record<string, unknown>): Promise<void> {
-    this.doc = { ...this.doc, [ns]: section }
-  }
-}
+import * as store from '../src/store/index.ts'
+import * as notes from '../src/notes/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
 
 /** Minimal in-memory store (same shape as the one in tests/tools.spec.ts). */
 class MiniStore extends MemoryStore {
   readonly janitorDays: number[] = []
   private readonly entries: MemoryEntry[] = []
-  constructor(count: number) {
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private injection: MemoryInjectionSettings
+
+  constructor(count: number, injection: Partial<MemoryInjectionSettings> = {}) {
     super()
+    this.injection = resolveInjectionSettings(injection)
     for (let i = 0; i < count; i++) {
       this.entries.push({ id: `mem-${i}` as MemoryId, scope: 'global', content: `entry ${i}`, createdAt: i, updatedAt: i })
     }
   }
+
+  /** Republish the slice — what re-running the `memory` entry's apply does. */
+  setInjection(value: Partial<MemoryInjectionSettings>): void {
+    this.injection = resolveInjectionSettings(value)
+  }
+
+  override settings(): MemoryInjectionSettings { return this.injection }
   override async add(): Promise<{ entry: MemoryEntry }> { throw new Error('unused') }
   override get(id: string): MemoryEntry | undefined { return this.entries.find(e => e.id === id as MemoryId) }
   override list(scope?: MemoryEntry['scope']): readonly MemoryEntry[] {
@@ -55,172 +61,163 @@ class MiniStore extends MemoryStore {
 
 const testSignal = new AbortController().signal
 let callCounter = 0
-const MEMORY_NS = 'memory' as const
 
-describe('maxSearchResults — live layering via the memory namespace', () => {
-  async function setup(compositionCap: number) {
+describe('maxSearchResults — the memory entry owns the cap', () => {
+  async function setup(compositionCap = 50, injection: Partial<MemoryInjectionSettings> = {}) {
     const ctx = new Context()
-    await ctx.plugin(TestSettingsProvider)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
-    ctx.provide('memory', new MiniStore(3))
-    // memory-context registers the `memory` namespace; tool-memory reads from it.
-    await ctx.plugin(context, {} as never)
+    await ctx.plugin(NativeExecutor)
+    const memory = new MiniStore(3, injection)
+    ctx.provide('memory', memory)
     await ctx.plugin(tool, { maxSearchResults: compositionCap })
-    return ctx
+    return { ctx, memory }
   }
-  function search(ctx: Context) {
-    return ctx.tools.execute({ signal: testSignal, callId: CallId(`call-${++callCounter}`), name: 'memory_search', arguments: {} })
-  }
+
   type SearchResult = { entries: unknown[]; total: number }
-  const count = async (ctx: Context) => ((await search(ctx)).value as SearchResult).entries.length
+  async function count(ctx: Context): Promise<number> {
+    const batch = await ctx.tools.execute({
+      signal: testSignal,
+      calls: [{ type: 'tool-call', id: CallId(`call-${++callCounter}`), name: 'memory_search', arguments: '{}' }],
+    })
+    const settled = batch.results[0]!.result
+    return (settled.value as SearchResult).entries.length
+  }
 
-  it('composition entry is the base; the user namespace overlays it live', async () => {
-    const ctx = await setup(2)
-    // memory-context registers the `memory` namespace with schema defaults
-    // (maxSearchResults=50), so all 3 entries are returned initially.
+  it('the store entry is the base; a live change applies to the very next call', async () => {
+    const { ctx, memory } = await setup()
+    // Schema default (50) caps nothing here, so all 3 entries come back.
     expect(await count(ctx)).toBe(3)
-    // user override in the `memory` namespace applies to the very next call.
-    await ctx.settings.update(MEMORY_NS, { maxSearchResults: 1 })
+    // The user document lands in the `memory` entry; the host re-runs its
+    // apply, which republishes the slice the tool reads per call.
+    memory.setInjection({ maxSearchResults: 1 })
     expect(await count(ctx)).toBe(1)
-    // Reset falls back to the schema default (50).
-    await ctx.settings.replace(MEMORY_NS, {})
+    // Resetting the document falls back to the schema default (50).
+    memory.setInjection({})
     expect(await count(ctx)).toBe(3)
   })
 
-  it('falls back to the composition entry when no settings service is mounted', async () => {
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    ctx.provide('memory', new MiniStore(3))
-    await ctx.plugin(tool, { maxSearchResults: 2 })
-    expect(await count(ctx)).toBe(2)
+  it('the tool row\'s own cap never overrides the store entry', async () => {
+    // A deployment whose tool row still carries the pre-migration key gets
+    // the store entry's value: the cap belongs to the entry that owns it.
+    const { ctx } = await setup(2)
+    expect(await count(ctx)).toBe(3)
   })
 
-  it('falls back to the composition entry when the settings provider unloads', async () => {
-    const ctx = new Context()
-    const settingsFiber = await ctx.plugin(TestSettingsProvider)
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    ctx.provide('memory', new MiniStore(3))
-    await ctx.plugin(context, {} as never)
-    await ctx.plugin(tool, { maxSearchResults: 2 })
-    // The user layer applies live while the provider stands.
-    await ctx.settings.update(MEMORY_NS, { maxSearchResults: 1 })
+  it('the cap is re-read per call, never cached in the tool', async () => {
+    const { ctx, memory } = await setup()
+    memory.setInjection({ maxSearchResults: 1 })
     expect(await count(ctx)).toBe(1)
-    // Unloading the provider (not the consumer) drops every consumer back to
-    // its composition entry: memory-context's installSection detach wiring and
-    // tool-memory's namespace read both return to the entry cap.
-    await settingsFiber.dispose()
-    expect(await count(ctx)).toBe(2)
+    memory.setInjection({ maxSearchResults: 3 })
+    expect(await count(ctx)).toBe(3)
   })
 })
 
-describe('decayDays — live via the memory namespace, consumed by memory-review', () => {
+describe('decayDays — owned by the memory entry, consumed by memory-review', () => {
   async function setup() {
     const ctx = new Context()
-    await ctx.plugin(TestSettingsProvider)
-    await ctx.plugin(SystemPrompt)
     ctx.provide('llm', {})
-    const store = new MiniStore(0)
-    ctx.provide('memory', store)
-    // memory-context owns the `memory` namespace (where decayDays now lives);
-    // memory-review reads it cross-namespace at each session/created event.
-    await ctx.plugin(context, {} as never)
+    const memory = new MiniStore(0)
+    ctx.provide('memory', memory)
     await ctx.plugin(review, {})
-    return { ctx, store }
+    return { ctx, memory }
   }
 
-  it('janitor reads decayDays per session: default → user override → disabled', async () => {
-    const { ctx, store } = await setup()
+  it('the janitor reads decayDays per session: default → user override → disabled', async () => {
+    const { ctx, memory } = await setup()
     // Schema default is 30.
     ctx.emit('session/created', {})
-    expect(store.janitorDays).toEqual([30])
-    // User override in the `memory` namespace applies to the next event.
-    await ctx.settings.update(MEMORY_NS, { decayDays: 45 })
+    expect(memory.janitorDays).toEqual([30])
+    // A change to the `memory` entry applies to the next event.
+    memory.setInjection({ decayDays: 45 })
     ctx.emit('session/created', {})
-    expect(store.janitorDays).toEqual([30, 45])
+    expect(memory.janitorDays).toEqual([30, 45])
     // 0 disables the janitor on the next event.
-    await ctx.settings.update(MEMORY_NS, { decayDays: 0 })
+    memory.setInjection({ decayDays: 0 })
     ctx.emit('session/created', {})
-    expect(store.janitorDays).toEqual([30, 45])
+    expect(memory.janitorDays).toEqual([30, 45])
   })
 
-  it('falls back to the schema default (30) when no settings service is mounted', async () => {
+  it('a composition without the memory service keeps session/created silent', async () => {
     const ctx = new Context()
     ctx.provide('llm', {})
-    const store = new MiniStore(0)
-    ctx.provide('memory', store)
     await ctx.plugin(review, {})
-    ctx.emit('session/created', {})
-    expect(store.janitorDays).toEqual([30])
+    // No store to decay: the handler falls back to the builtin window and
+    // returns without throwing.
+    expect(() => { ctx.emit('session/created', {}) }).not.toThrow()
   })
 })
 
-describe('plugin-card namespaces — one served namespace per card', () => {
-  async function setup() {
-    const ctx = new Context()
-    await ctx.plugin(TestSettingsProvider)
-    await ctx.plugin(SystemPrompt)
-    ctx.provide('memory', new MiniStore(3))
-    await ctx.plugin(context, {} as never)
-    return ctx
-  }
-
-  it('memory-context serves the four memory-family namespaces with their slices', async () => {
-    const ctx = await setup()
-    const descriptors = ctx.settings.describe()
-    const namespaces = new Set(descriptors.map(d => d.ns))
-    // The plugins tab pairs card keys with served namespaces — every card key
-    // must name one, or the card is never dispatched.
-    for (const card of ['memory', 'memory-notes', 'memory-autorecall', 'memory-identity']) {
-      expect(namespaces.has(card), card).toBe(true)
-    }
-    // The curated `memory` namespace keeps the injection keys only; the moved
-    // keys live in their own namespaces' schemas.
-    const memory = descriptors.find(d => d.ns === 'memory')!
-    const memorySchema = JSON.stringify(memory.schema)
+describe('per-entry Config — one schema per settings page section', () => {
+  it('each entry schema carries only its own slice', () => {
+    // The plugins page binds one section per entry to that entry's ConfigForm,
+    // so a key living in the wrong schema would surface on the wrong card.
+    const memorySchema = JSON.stringify(store.Config)
+    expect(memorySchema).toContain('memoryMode')
+    expect(memorySchema).toContain('decayDays')
+    expect(memorySchema).toContain('maxSearchResults')
     expect(memorySchema).not.toContain('notesEnabled')
     expect(memorySchema).not.toContain('identityEnabled')
     expect(memorySchema).not.toContain('autoRecallEnabled')
-    const identity = descriptors.find(d => d.ns === 'memory-identity')!
-    expect(JSON.stringify(identity.schema)).toContain('identityEnabled')
+
+    const notesSchema = JSON.stringify(notes.Config)
+    expect(notesSchema).toContain('notesEnabled')
+    expect(notesSchema).not.toContain('identityEnabled')
+    expect(notesSchema).not.toContain('memoryMode')
+
+    const autoRecallSchema = JSON.stringify(context.Config)
+    expect(autoRecallSchema).toContain('autoRecallEnabled')
+    expect(autoRecallSchema).toContain('hitSignalEnabled')
+    expect(autoRecallSchema).not.toContain('memoryMode')
+    expect(autoRecallSchema).not.toContain('identityEnabled')
+
+    const identitySchema = JSON.stringify(identity.Config)
+    expect(identitySchema).toContain('identityEnabled')
+    expect(identitySchema).toContain('soulCharLimit')
+    expect(identitySchema).not.toContain('autoRecallEnabled')
   })
 
-  it('a user write to memory-autorecall arms the pre-step fence live', async () => {
-    const ctx = await setup()
+  it('a live change to the auto-recall entry arms and disarms the pre-step fence', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    ctx.provide('memory', new MiniStore(3))
+    const fiber = await ctx.plugin(context, context.Config({}))
     const messages = [createUserMessage({ content: [{ type: 'text', text: 'how do I run the deploy script for staging?' }], source: { kind: 'user' } })]
     const payload = { agent: { session: undefined }, messages, turn: 0, step: 0, signal: new AbortController().signal }
     const innerNext = async (): Promise<{ kind: string; messages: unknown[] }> => ({ kind: 'enter', messages })
     // Factory default ON: the fence appends on the first step.
     const before = await ctx.waterfall('agent/pre-step', payload, innerNext)
     expect((before as { messages: unknown[] }).messages).toHaveLength(2)
-    // A card write turning it off applies to the next step.
-    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: false })
+
+    // A card write re-runs this entry's apply; the fence obeys the next step.
+    await fiber.dispose()
+    const offFiber = await ctx.plugin(context, context.Config({ autoRecallEnabled: false }))
     const off = await ctx.waterfall('agent/pre-step', payload, innerNext)
     expect((off as { messages: unknown[] }).messages).toHaveLength(1)
+
     // And back on again — live, no restart.
-    await ctx.settings.update('memory-autorecall', { autoRecallEnabled: true })
+    await offFiber.dispose()
+    await ctx.plugin(context, context.Config({ autoRecallEnabled: true }))
     const after = await ctx.waterfall('agent/pre-step', payload, innerNext)
     const appended = (after as { messages: unknown[] }).messages
     expect(appended).toHaveLength(2)
     expect(JSON.stringify(appended[1])).toContain('<recalled-memory>')
   })
 
-  it('identity enablement rides the memory-identity namespace live', async () => {
+  it('identity enablement rides the identity entry live', async () => {
     const ctx = new Context()
-    await ctx.plugin(TestSettingsProvider)
-    await ctx.plugin(SystemPrompt)
     ctx.provide('memory', new MiniStore(0))
-    await ctx.plugin(context, {} as never)
-    await ctx.plugin(identity, {})
-    const service = ctx.get('identity')!
+    const fiber = await ctx.plugin(identity, identity.Config({}))
     // Disabled by default: the empty snapshot.
-    expect(service.snapshotFor()).toEqual({ soul: '', user: '' })
-    // The card write in `memory-identity` arms the layer for the next read.
-    await ctx.settings.update('memory-identity', { identityEnabled: true })
-    expect(service.snapshotFor().soul.length).toBeGreaterThan(0)
-    await ctx.settings.update('memory-identity', { identityEnabled: false })
-    expect(service.snapshotFor()).toEqual({ soul: '', user: '' })
+    expect(ctx.get('identity')!.snapshotFor()).toEqual({ soul: '', user: '' })
+
+    // The card write re-runs the entry's apply: the next read sees it.
+    await fiber.dispose()
+    const enabled = await ctx.plugin(identity, identity.Config({ identityEnabled: true }))
+    expect(ctx.get('identity')!.snapshotFor().soul.length).toBeGreaterThan(0)
+
+    await enabled.dispose()
+    await ctx.plugin(identity, identity.Config({ identityEnabled: false }))
+    expect(ctx.get('identity')!.snapshotFor()).toEqual({ soul: '', user: '' })
   })
 })

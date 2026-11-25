@@ -8,13 +8,15 @@
  */
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { MemoryStore } from '../src/index.ts'
 import type { AddMemoryInput, MemoryEntry, MemoryId, MemorySearchQuery, RecallSource } from '../src/types.ts'
 import * as context from '../src/context/index.ts'
+import * as notes from '../src/notes/index.ts'
+import { resolveInjectionSettings } from '../src/store/settings.ts'
+import type { MemoryInjectionSettings } from '../src/store/settings.ts'
 
 class StaticStore extends MemoryStore {
   readonly entries: MemoryEntry[] = []
@@ -23,6 +25,17 @@ class StaticStore extends MemoryStore {
   /** The last search query the store received (recordRecall observability). */
   lastSearch: MemorySearchQuery | undefined
   private seq = 0
+  /** The `memory` entry slice this stand-in publishes; see {@link MemoryStore.settings}. */
+  private injection: MemoryInjectionSettings = resolveInjectionSettings(undefined)
+
+  /** Republish the `memory` entry slice — what a settings change does to the real store. */
+  setInjection(value: Partial<MemoryInjectionSettings>): void {
+    this.injection = resolveInjectionSettings(value)
+  }
+
+  override settings(): MemoryInjectionSettings {
+    return this.injection
+  }
 
   addFixture(scope: MemoryEntry['scope'], content: string, extra: Partial<MemoryEntry> = {}): MemoryEntry {
     const now = Date.now()
@@ -85,28 +98,27 @@ const DIGEST_CONFIG = {
   memoryDigestCharLimit: 800,
 } as const
 
-/** An in-memory settings provider for live-budget tests (settings-live pattern). */
-class TestSettingsProvider extends SettingsProvider {
-  override get writable() { return true }
-  private doc: Record<string, unknown> = {}
-  protected override async load(): Promise<Record<string, unknown>> { return this.doc }
-  protected override async persist(ns: Parameters<SettingsProvider['update']>[0], section: Record<string, unknown>): Promise<void> {
-    this.doc = { ...this.doc, [ns]: section }
-  }
-}
-
 function userMsg(text: string): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }) as UserMessage
 }
 
-async function setup(store: StaticStore, config: Record<string, unknown>, withSettings = false) {
+/**
+ * Mount the plugin set one case needs. The knobs split by owner, as they do
+ * in a deployment: the `memory` entry's injection slice reaches
+ * `memory-context` through `ctx.memory.settings()`, the notes gate through
+ * `ctx.projectNotes`, and only the auto-recall slice rides this plugin's own
+ * `Config`.
+ */
+async function setup(store: StaticStore, config: Record<string, unknown>) {
+  const { autoRecallEnabled, autoRecallLimit, autoRecallMinChars, hitSignalEnabled, hitSignalThreshold, ...injection } = config
   const ctx = new Context()
-  if (withSettings) await ctx.plugin(TestSettingsProvider)
   ctx.provide('systemPrompt', {
     section: () => () => {},
   })
+  store.setInjection(injection)
   ctx.provide('memory', store)
-  await ctx.plugin(context, config as never)
+  await ctx.plugin(notes, { notesEnabled: false })
+  await ctx.plugin(context, { autoRecallEnabled, autoRecallLimit, autoRecallMinChars, hitSignalEnabled, hitSignalThreshold } as never)
   const session = { header: { cwd: '' } } as unknown as Session
   return { ctx, session }
 }
@@ -304,15 +316,16 @@ describe('digest emission (digest mode)', () => {
   it('a zero budget emits nothing and does not set the per-session flag (live raise applies next step)', async () => {
     const store = new StaticStore()
     store.addFixture('global', 'a stored fact', { anchors: ['fact'] })
-    const { ctx, session } = await setup(store, { ...DIGEST_CONFIG, memoryDigestCharLimit: 0 }, true)
+    const { ctx, session } = await setup(store, { ...DIGEST_CONFIG, memoryDigestCharLimit: 0 })
 
     const messages = [userMsg('first step of the session')]
     const first = await ctx.waterfall('agent/pre-step', stepPayload(session, messages), innerNext(messages))
     expect((first as { messages: UserMessage[] }).messages).toHaveLength(1)
 
     // Raising the budget live takes effect on the very next step — proof the
-    // disabled step never set the sent flag.
-    await ctx.settings.update('memory', { memoryDigestCharLimit: 800 })
+    // disabled step never set the sent flag. A live change re-runs the store
+    // entry's apply, which republishes the slice.
+    store.setInjection({ ...DIGEST_CONFIG, memoryDigestCharLimit: 800 })
     const second = await ctx.waterfall('agent/pre-step', stepPayload(session, messages), innerNext(messages))
     const appended = (second as { messages: UserMessage[] }).messages
     expect(appended).toHaveLength(2)
@@ -329,7 +342,7 @@ describe('digest emission (digest mode)', () => {
 
     // digest mode but no session on the payload: the per-session digest cannot
     // ride (nothing to deduplicate against).
-    const { ctx: ctx2 } = await setup(new StaticStore(), { ...DIGEST_CONFIG, autoRecallEnabled: false }, false)
+    const { ctx: ctx2 } = await setup(new StaticStore(), { ...DIGEST_CONFIG, autoRecallEnabled: false })
     const noSession = [userMsg('first step of the session')]
     const decision2 = await ctx2.waterfall('agent/pre-step', { messages: noSession, turn: 0, step: 0, signal: testSignal }, innerNext(noSession))
     expect(JSON.stringify(decision2)).not.toContain('<memory-digest>')
