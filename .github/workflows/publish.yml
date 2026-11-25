@@ -18,6 +18,10 @@ permissions:
 
 jobs:
   publish:
+    # A fork inherits this file and can push its own v* tags; the repository
+    # guard stops those runs from failing on a Trusted Publisher that names
+    # this repository (and from ever publishing this package's name).
+    if: github.repository == 'chenhw7/dsh-memory'
     runs-on: ubuntu-latest
     steps:
       # Pinned to commit SHA so a retargeted tag cannot run code in the publish job.

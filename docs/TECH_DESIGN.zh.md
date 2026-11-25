@@ -896,7 +896,7 @@ patch 特意**不**插入 `storage-json` / `storage-domain` 行：`dsh-web-app` 
 
 ### 10.5 发布管线
 
-GitHub Actions 运行两个 workflow。`ci.yml` 在每次 push 到 `main` 与每个 pull request 上构建并测试（`npm ci` → `npm run build` → `npm test`）。`publish.yml` 在 `v*` tag 推送时触发：校验 tag 与 `package.json` 匹配，安装后执行 `npm publish --provenance`，发布前先跑 `prepublishOnly`（构建 + 测试）。发布通过 npm OIDC 可信发布鉴权，因此不存在 token secret；两个 workflow 都把 actions 固定到 commit SHA。
+GitHub Actions 运行两个 workflow，二者都带 `if: github.repository == 'chenhw7/dsh-memory'` 守卫，因此别人 fork 后在自己的仓库 push 或打 tag 都不会消耗其 runner、也不会报出本仓库修不了的失败。`ci.yml` 在每次 push 到 `main` 时构建并测试（`npm ci` → `npm run build` → `npm test`）；特意不设 `pull_request` 触发——本仓库走直推，PR 触发只会重复一遍 push 的运行。`publish.yml` 在 `v*` tag 推送时触发：校验 tag 与 `package.json` 匹配，安装后执行 `npm publish --provenance`，发布前先跑 `prepublishOnly`（构建 + 测试）。发布通过 npm OIDC 可信发布鉴权，因此不存在 token secret；两个 workflow 都把 actions 固定到 commit SHA。
 
 ---
 

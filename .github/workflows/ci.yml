@@ -1,12 +1,18 @@
-# Build and test on every push and pull request.
+# Build and test on every push to main, in this repository only.
 # The publish workflow (publish.yml) fires separately on version tags.
+#
+# No `pull_request` trigger: this is a single-maintainer repository with direct
+# pushes to main, so a PR run would only duplicate the push run. The job-level
+# repository guard keeps forks out entirely — a fork inherits this file, and
+# without the guard every push to the fork's own main would spend its runners
+# and report failures this repository cannot fix.
 on:
   push:
     branches: [main]
-  pull_request:
 
 jobs:
   build-and-test:
+    if: github.repository == 'chenhw7/dsh-memory'
     runs-on: ubuntu-latest
     steps:
       # Pinned to commit SHA so a retargeted tag cannot run code in CI.

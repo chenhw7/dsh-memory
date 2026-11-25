@@ -899,7 +899,7 @@ The patch deliberately inserts **no** `storage-json` / `storage-domain` rows: th
 
 ### 10.5 Release pipeline
 
-Two GitHub Actions workflows run. `ci.yml` builds and tests every push to `main` and every pull request (`npm ci` → `npm run build` → `npm test`). `publish.yml` fires on `v*` tags: it verifies the tag matches `package.json`, installs, and runs `npm publish --provenance`, which executes `prepublishOnly` (build + tests) before publishing. Publishing authenticates through npm OIDC trusted publishing, so no token secret exists; both workflows pin their actions to commit SHAs.
+Two GitHub Actions workflows run, both guarded by `if: github.repository == 'chenhw7/dsh-memory'` so a fork's own pushes and tags never spend its runners or report failures this repository cannot fix. `ci.yml` builds and tests every push to `main` (`npm ci` → `npm run build` → `npm test`); there is deliberately no `pull_request` trigger, because this repository takes direct pushes and a PR run would only duplicate the push run. `publish.yml` fires on `v*` tags: it verifies the tag matches `package.json`, installs, and runs `npm publish --provenance`, which executes `prepublishOnly` (build + tests) before publishing. Publishing authenticates through npm OIDC trusted publishing, so no token secret exists; both workflows pin their actions to commit SHAs.
 
 ---
 

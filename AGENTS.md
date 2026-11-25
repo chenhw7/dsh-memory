@@ -34,7 +34,7 @@ npm run eval     # harness-run eval over a dataset; eval:ab diffs two builds; ev
 npm ci           # install (npm, not pnpm/yarn)
 ```
 
-There is no typecheck/lint/doc-gate runner: `tsc` gates the build, vitest gates behavior, review gates the rest. GitHub Actions runs `build` + `test` on every push to `main` and every PR (`ci.yml`); `publish.yml` publishes on `v*` tags ([release pipeline](docs/TECH_DESIGN.md)).
+There is no typecheck/lint/doc-gate runner: `tsc` gates the build, vitest gates behavior, review gates the rest. GitHub Actions runs `build` + `test` on every push to `main` (`ci.yml` — no `pull_request` trigger, and a `github.repository` guard keeps forks from running it); `publish.yml` publishes on `v*` tags behind the same guard ([release pipeline](docs/TECH_DESIGN.md)).
 
 ## Conventions
 
