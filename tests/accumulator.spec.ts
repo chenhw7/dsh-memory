@@ -4,6 +4,7 @@ import {
   applyAccumulator,
   accumulatorSchema,
   detectSignal,
+  detectSignalDetail,
   emptyAccumulator,
   messageText,
   toolSignature,
@@ -96,10 +97,12 @@ describe('applyAccumulator', () => {
       expect(next).toBe(state)
     })
 
-    it('ignores assistant messages (context only, no signal collected)', () => {
+    it('collects no candidate from an assistant message, only the context a later correction cites', () => {
       const state = emptyAccumulator
       const next = applyAccumulator(state, assistantEvent(1, 'sure'))
-      expect(next).toBe(state)
+      expect(next.candidates).toEqual([])
+      expect(next.count).toBe(0)
+      expect(next.lastAssistantText).toBe('sure')
     })
 
     it('ignores user messages with no signal', () => {
@@ -353,5 +356,41 @@ describe('accumulatorSchema', () => {
   })
   it('rejects a state missing count', () => {
     expect(() => accumulatorSchema.parse({ candidates: [], openCalls: {}, openStreaks: {} })).toThrow()
+  })
+})
+
+describe('signal classes and strength', () => {
+  it('marks an explicit remember request strong and a stated preference weak', () => {
+    expect(detectSignalDetail('记住我的名字叫陈宏伟')).toEqual({ name: 'keyword', strong: true })
+    expect(detectSignalDetail('请记得用 pnpm')).toEqual({ name: 'keyword', strong: true })
+    expect(detectSignalDetail('我习惯用 pnpm')).toEqual({ name: 'preference', strong: false })
+    expect(detectSignalDetail('一律走 pnpm')).toEqual({ name: 'preference', strong: false })
+    expect(detectSignalDetail('不对，用 pnpm')).toEqual({ name: 'correction', strong: false })
+    expect(detectSignalDetail('just chatting')).toBeUndefined()
+  })
+
+  it('collects a preference statement as a weak candidate', () => {
+    const state = applyAccumulator(emptyAccumulator, userEvent(1, '我喜欢用 tab 缩进'))
+    expect(state.candidates).toHaveLength(1)
+    expect(state.candidates[0]!.signal).toBe('preference')
+    expect(state.candidates[0]!.strong).toBeUndefined()
+  })
+
+  it('records the strong marker and carries the corrected turn as context', () => {
+    const afterRemember = applyAccumulator(emptyAccumulator, userEvent(1, '记住：部署用 helm'))
+    const strong = afterRemember.candidates[0]!
+    expect(strong.strong).toBe(true)
+
+    const withAssistant = applyAccumulator(afterRemember, assistantEvent(2, 'Deploys run through kubectl apply.'))
+    const corrected = applyAccumulator(withAssistant, userEvent(3, '不对，改成用 helm'))
+    const correction = corrected.candidates[1]!
+    expect(correction.signal).toBe('correction')
+    expect(correction.context).toBe('Deploys run through kubectl apply.')
+  })
+
+  it('leaves a correction without context when no assistant turn preceded it', () => {
+    const state = applyAccumulator(emptyAccumulator, userEvent(1, '其实是用 helm'))
+    expect(state.candidates[0]!.signal).toBe('correction')
+    expect(state.candidates[0]!.context).toBeUndefined()
   })
 })

@@ -27,6 +27,15 @@ function snapshotStore(entries: MemoryEntry[]): MemoryStore {
   return { list: () => entries } as unknown as MemoryStore
 }
 
+describe('the injected policy is a working instruction, not just a taxonomy', () => {
+  it('tells the model to write in the same turn when asked to remember', () => {
+    expect(MEMORY_POLICY_TEXT).toContain('call memory_add')
+    expect(MEMORY_POLICY_TEXT).toContain('same turn')
+    // The search-vs-write split stays stated: searching is not remembering.
+    expect(MEMORY_POLICY_TEXT).toContain('memory_search')
+  })
+})
+
 describe('buildMemorySectionText', () => {
   const memoryContent = '## global\n- prefers tabs over spaces\n## user\n- likes concise answers'
   const indexContent = 'global · abc-123 · prefers tabs over spaces'

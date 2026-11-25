@@ -56,6 +56,7 @@ export const REVIEW_SYSTEM_PROMPT =
   + '\n- "[procedure] " for verified procedures (see the rule above).'
   + '\n- "[convention] " for project/team coding conventions.'
   + '\n- "[preference] " for the user\'s personal coding habits and style preferences.'
+  + '\n\nCorrections — a fragment marked (correction) revises the assistant turn quoted under it as "revises assistant:". Read both halves: extract the corrected fact, never the superseded one, and prefer replacing the stale memory over adding a second contradicting line.'
   + '\n\nAnchors and project tags — hard tokens that tie the memory to its source:'
   + '\n- End the line with "[anchors: token1, token2]" when the memory contains hard tokens: numbers, version numbers, identifiers, tool names, repository names, or file paths. Omit the tag when there is none.'
   + '\n- When the conversation names a repository or project path, that name MUST appear in the anchors list AND, on "project"-scoped lines, as a trailing "[project: name]" tag using the exact name.'
@@ -381,7 +382,13 @@ function isIdentityEcho(content: string, docs: readonly IdentityEchoDoc[]): bool
  * @returns the model-facing user message list.
  */
 export function buildReviewMessages(memorySnapshot: string, candidates: readonly MemoryCandidate[], identitySnapshot = ''): Message[] {
-  const fragments = candidates.map((c, i) => `[${i + 1}] (${c.signal}) ${flattenFragment(c.text)}`).join('\n')
+  const fragments = candidates.map((c, i) => {
+    const head = `[${i + 1}] (${c.signal}) ${flattenFragment(c.text)}`
+    // A correction is only interpretable against what it revises ("no, use
+    // pnpm" says nothing without the turn it answers), so the assistant turn
+    // is quoted under it as data.
+    return c.context === undefined ? head : `${head}\n    revises assistant: ${flattenFragment(c.context)}`
+  }).join('\n')
   const parts = [
     memorySnapshot.length === 0 ? '' : `${memorySnapshot}\n\n`,
     identitySnapshot.length === 0 ? '' : `${identitySnapshot}\n\n`,
@@ -418,6 +425,24 @@ export function buildFlushMessages(fragments: readonly string[]): Message[] {
   const body = fragments.length === 0 ? '(no fragments available)' : fragments.map((f, i) => `[${i + 1}] ${flattenFragment(f)}`).join('\n')
   const text = `Conversation being compressed:\n${body}`
   return [createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE })]
+}
+
+/**
+ * What one extraction run actually did. The review plugin charges its
+ * per-session budget from `llmCalls`, so a failed or no-op run costs nothing
+ * and a run that needed the judge or a consolidation pass is charged for it.
+ */
+export interface ExtractionRunStats {
+  /** Entries the run wrote (or queued, in confirm mode). */
+  readonly stored: number
+  /** LLM calls the run actually started. */
+  readonly llmCalls: number
+}
+
+/** Mutable call counter threaded down to the write path's LLM seams. */
+export interface ExtractionStats {
+  /** Incremented right before each LLM call the write path starts. */
+  llmCalls: number
 }
 
 /** An optional provider/model override for extraction calls (§3.6). */
@@ -681,6 +706,7 @@ export async function storeMemories(
   judgeEnabled?: boolean,
   confirmMode?: boolean,
   consolidation: ConsolidationMode = 'two-tier',
+  stats?: ExtractionStats,
 ): Promise<void> {
   if (confirmMode === true) {
     await suggestMemories(ctx, parsed, attachCategory, source, sessionId, inferredProjectName)
@@ -730,10 +756,11 @@ export async function storeMemories(
       inferredProjectName,
       modelOverride,
       signal: undefined,
+      ...stats === undefined ? {} : { stats },
     })
     return
   }
-  await legacyStoreMemories(ctx, memory, normalized, source, sessionId, session, modelOverride, judgeEnabled, inferredProjectName)
+  await legacyStoreMemories(ctx, memory, normalized, source, sessionId, session, modelOverride, judgeEnabled, inferredProjectName, stats)
 }
 
 /**
@@ -760,6 +787,7 @@ async function legacyStoreMemories(
   modelOverride?: ExtractionModelOverride,
   judgeEnabled?: boolean,
   inferredProjectName?: string,
+  stats?: ExtractionStats,
 ): Promise<void> {
   // Snapshot the current entries once for the dedup prefilter. This is cheap:
   // a synchronous in-memory list at the entry counts we target (tens–hundreds).
@@ -779,7 +807,9 @@ async function legacyStoreMemories(
         const existingEntry = memory.get(dupId as MemoryId)
         if (existingEntry !== undefined) {
           // Determine the verdict: judge when enabled, else default to duplicate.
-          const verdict: JudgeVerdict = judgeEnabled !== false && session !== undefined
+          const judged = judgeEnabled !== false && session !== undefined
+          if (judged && stats !== undefined) stats.llmCalls += 1
+          const verdict: JudgeVerdict = judged
             ? await judgeDuplicate(ctx, session, existingEntry.content, content, modelOverride)
             : 'duplicate'
 
@@ -841,7 +871,8 @@ async function legacyStoreMemories(
 /**
  * Run the periodic-review extraction: build the review prompt from the
  * current memory snapshot and the accumulated candidates, extract, and store.
- * Returns the number of entries actually stored.
+ * Returns the entries stored and the LLM calls it actually started, which is
+ * what the caller charges the session budget for.
  * @param ctx - context carrying the LLM and optional memory seams.
  * @param agent - the live agent whose session routes the call.
  * @param candidates - the accumulated candidate fragments.
@@ -858,36 +889,39 @@ export async function runReviewExtraction(
   judgeEnabled?: boolean,
   confirmMode?: boolean,
   consolidation: ConsolidationMode = 'two-tier',
-): Promise<number> {
+): Promise<ExtractionRunStats> {
   const memory = ctx.get('memory')
   const snapshot = renderMemorySnapshot(memory)
   const identitySnapshot = renderIdentityDocuments(ctx.get('identity'))
   const projectName = inferProjectName(agent.session)
+  const stats: ExtractionStats = { llmCalls: 0 }
   let stored = 0
 
   // Partition by signal: pitfall-resolved candidates go through the dedicated
   // structured prompt; everything else goes through the generic review prompt.
-  // Each call is best-effort and independent. (The extraction budget is charged
-  // once per drain by the caller, regardless of how many calls run inside.)
+  // Each call is best-effort and independent; the caller charges the budget
+  // from the call count this run reports, never from a prediction.
   const pitfallCandidates = candidates.filter(c => c.signal === PITFALL_RESOLVED_SIGNAL)
   if (pitfallCandidates.length > 0) {
     const messages = buildPitfallMessages(snapshot, pitfallCandidates)
+    stats.llmCalls += 1
     const parsed = await extractMemories(ctx, agent.session, PITFALL_SYSTEM_PROMPT, messages, undefined, modelOverride)
-    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation)
+    await storeMemories(ctx, parsed, 'failure', 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation, stats)
     stored += parsed.length
   }
 
   const rest = candidates.filter(c => c.signal !== PITFALL_RESOLVED_SIGNAL)
   if (rest.length > 0) {
     const messages = buildReviewMessages(snapshot, rest, identitySnapshot)
+    stats.llmCalls += 1
     const parsed = await extractMemories(ctx, agent.session, REVIEW_SYSTEM_PROMPT, messages, undefined, modelOverride)
     // A correction-only batch maps naturally to the `correction` category;
     // explicitly tagged entries override this default inside storeMemories.
     const correctionOnly = rest.every(c => c.signal === 'correction')
-    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation)
+    await storeMemories(ctx, parsed, correctionOnly ? 'correction' : undefined, 'review', agent.session.id, projectName, agent.session, modelOverride, judgeEnabled, confirmMode, consolidation, stats)
     stored += parsed.length
   }
-  return stored
+  return { stored, llmCalls: stats.llmCalls }
 }
 
 /** System prompt for the low-frequency curator pass (re-summarize oversized entries). */
@@ -969,8 +1003,8 @@ export async function runCuration(
   selected: readonly MemoryEntry[],
   modelOverride?: ExtractionModelOverride,
   confirmMode?: boolean,
-): Promise<number> {
-  if (selected.length === 0) return 0
+): Promise<ExtractionRunStats> {
+  if (selected.length === 0) return { stored: 0, llmCalls: 0 }
   const target = resolveTarget(session, modelOverride)
   if (target === undefined) {
     throw new Error('memory curation failed: no provider/model route is available')
@@ -987,7 +1021,7 @@ export async function runCuration(
   const text = await collectStreamText(ctx, options)
   const lines = parseCuratedLines(text, selected.map(entry => entry.id as string))
   const memory = ctx.get('memory')
-  if (memory === undefined) return 0
+  if (memory === undefined) return { stored: 0, llmCalls: 1 }
   let rewritten = 0
   for (const line of lines) {
     const scan = scanContent(line.content)
@@ -1017,7 +1051,7 @@ export async function runCuration(
       memory.reportFailure('row-rewrite', error)
     }
   }
-  return rewritten
+  return { stored: rewritten, llmCalls: 1 }
 }
 
 /** Infer a project name from the session's working directory basename (§3.6). */
@@ -1037,7 +1071,7 @@ function inferProjectName(session: Session): string | undefined {
  * @param fragments - the raw conversation fragments being shadowed.
  * @param signal - optional abort signal.
  * @param modelOverride - optional provider/model override (§3.6).
- * @returns the number of parsed entries (before scanner/store filtering).
+ * @returns the parsed-entry count and the LLM calls the run started.
  */
 export async function runFlushExtraction(
   ctx: Context,
@@ -1048,10 +1082,11 @@ export async function runFlushExtraction(
   judgeEnabled?: boolean,
   confirmMode?: boolean,
   consolidation: ConsolidationMode = 'two-tier',
-): Promise<number> {
+): Promise<ExtractionRunStats> {
   const messages = buildFlushMessages(fragments)
+  const stats: ExtractionStats = { llmCalls: 1 }
   const parsed = await extractMemories(ctx, session, FLUSH_SYSTEM_PROMPT, messages, signal, modelOverride)
   const projectName = inferProjectName(session)
-  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled, confirmMode, consolidation)
-  return parsed.length
+  await storeMemories(ctx, parsed, undefined, 'flush', session.id, projectName, session, modelOverride, judgeEnabled, confirmMode, consolidation, stats)
+  return { stored: parsed.length, llmCalls: stats.llmCalls }
 }

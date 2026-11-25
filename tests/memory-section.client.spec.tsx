@@ -18,7 +18,7 @@ import type { MemorySectionInjected, MemorySectionProps } from '../src/client/Me
 import { MEMORY_BATCH_SIZE, MemorySectionController } from '../src/client/memory-section-store.ts'
 import type { MemoryRemoteApi, MemorySectionState } from '../src/client/memory-section-store.ts'
 import { en } from '../src/client/locales.ts'
-import type { MemoryEntryJson, MemoryHealthResult, MemorySuggestionJson } from '../src/typert.remote-client.js'
+import type { AuditEntryJson, MemoryEntryJson, MemoryHealthResult, MemorySuggestionJson } from '../src/typert.remote-client.js'
 
 afterEach(cleanup)
 
@@ -71,6 +71,23 @@ interface ApiScript {
   search?: { entries: readonly MemoryEntryJson[]; total?: number }
   /** Pending proposals served by suggestList(); defaults to none. */
   pending?: readonly MemorySuggestionJson[]
+  /** Audit rows served by auditLog(); defaults to none. */
+  audit?: readonly AuditEntryJson[]
+  /** Whether add() accepts the create form's write; defaults to accepted. */
+  addError?: string
+}
+
+/** One audit record the trail tab renders. */
+const AUDIT_ROWS: readonly AuditEntryJson[] = [
+  { id: 'a1', op: 'add', entryId: 'mem-1', scope: 'global', source: 'tool', ts: 1_700_000_900_000, contentPreview: 'Always pin the CI runner version' },
+  { id: 'a2', op: 'remove', entryId: 'mem-3', scope: 'user', source: 'janitor', ts: 1_700_001_000_000, contentPreview: 'prefers concise answers' },
+]
+
+/** Health with counters + a swallowed failure, for the overview diagnostics. */
+const HEALTH_WITH_METRICS: MemoryHealthResult = {
+  ...HEALTH,
+  metrics: { 'tool.search': 12, 'usage.hits': 3 },
+  backgroundFailures: { 'flush-dispose': 2 },
 }
 
 /**
@@ -101,6 +118,10 @@ function fakeApi(script: ApiScript = {}): MemoryRemoteApi {
     suggestList: vi.fn(async () => ok({ suggestions: script.pending ?? [] })),
     suggestAdopt: vi.fn(async () => ok({ entry: ROWS[0]!, found: true })),
     suggestReject: vi.fn(async () => ok({ rejected: true })),
+    add: vi.fn(async (request: { content: string }) => script.addError === undefined
+      ? ok({ entry: { ...ROWS[0]!, id: 'mem-new', content: request.content } })
+      : ok({ error: script.addError })),
+    auditLog: vi.fn(async () => ok({ entries: script.audit ?? [] })),
     getRaw: vi.fn(async ({ id }: { id: string }) => {
       const entry = pool.find(e => e.id === id)
       return entry === undefined ? { found: false } : ok({ entry, found: true })
@@ -146,6 +167,9 @@ function wire(api: MemoryRemoteApi): {
     toggleArchive: (entry: MemoryEntryJson) => controller.toggleArchive(entry),
     adoptSuggestion: (id: string, edits?: { content?: string; category?: string }) => controller.adoptSuggestion(id, edits),
     rejectSuggestion: (id: string) => controller.rejectSuggestion(id),
+    loadAudit: () => controller.loadAudit(),
+    toggleAuditFilter: (dimension: 'ops' | 'sources', value: string) => controller.toggleAuditFilter(dimension, value),
+    createEntry: (input: { scope: 'global' | 'project' | 'user'; content: string; category?: string; summary?: string; projectName?: string }) => controller.createEntry(input),
     t: (key: keyof typeof en) => en[key],
     close: () => {},
   } as unknown as MemorySectionProps
@@ -555,5 +579,69 @@ describe('entry write actions (P1-7)', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('write rejected by scanner')
     expect(screen.getByText(/pin the CI runner/)).toBeTruthy()
+  })
+})
+
+describe('overview diagnostics', () => {
+  it('renders the operation counters and names any swallowed failure', async () => {
+    const api = fakeApi({
+      health: undefined,
+    })
+    // Replace the health answer with the instrumented snapshot for this case.
+    api.health = vi.fn(async () => ok(HEALTH_WITH_METRICS))
+    const { props } = wire(api)
+    render(<MemorySection {...props} />)
+    expect(await screen.findByText(en.metricsTitle)).toBeTruthy()
+    expect(await screen.findByText(en.metricLabelToolSearch)).toBeTruthy()
+    expect(await screen.findByText(en.failuresTitle)).toBeTruthy()
+    expect(await screen.findByText('flush-dispose')).toBeTruthy()
+  })
+})
+
+describe('audit trail tab', () => {
+  it('loads the trail on first open and filters by operation', async () => {
+    const handles = renderSection({ audit: AUDIT_ROWS })
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabAudit }))
+    expect(await screen.findByText('Always pin the CI runner version')).toBeTruthy()
+    // Newest first: the janitor removal sits above the tool add.
+    expect(await screen.findByText('prefers concise answers')).toBeTruthy()
+    const api = handles.api
+    expect(api.auditLog).toHaveBeenCalled()
+    // The chip list includes op values; clicking one reloads the trail with
+    // that filter, which is what the wire request must carry.
+    const opChip = [...document.querySelectorAll('button')].find(button => button.textContent === 'remove')
+    expect(opChip).toBeDefined()
+    fireEvent.click(opChip!)
+    await waitFor(() => {
+      const calls = (api.auditLog as unknown as { mock: { calls: [{ ops?: readonly string[] }?][] } }).mock.calls
+      expect(calls.some(call => call[0]?.ops?.includes('remove') === true)).toBe(true)
+    })
+  })
+})
+
+describe('create form', () => {
+  it('writes one entry through the host add path and collapses', async () => {
+    const handles = renderSection()
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabManage }))
+    fireEvent.click(await screen.findByRole('button', { name: en.createTitle }))
+    const content = await screen.findByRole('textbox', { name: en.createContent })
+    fireEvent.change(content, { target: { value: 'The deploy runs through helm.' } })
+    fireEvent.click(screen.getByRole('button', { name: en.createSubmit }))
+    await waitFor(() => {
+      expect(handles.api.add).toHaveBeenCalled()
+    })
+    const firstCall = (handles.api.add as unknown as { mock: { calls: { content: string; scope: string }[][] } }).mock.calls[0]
+    expect(firstCall?.[0]).toMatchObject({ content: 'The deploy runs through helm.', scope: 'user' })
+  })
+
+  it('reports a rejection instead of drops it', async () => {
+    const handles = renderSection({ addError: 'rejected by scanner' })
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabManage }))
+    fireEvent.click(await screen.findByRole('button', { name: en.createTitle }))
+    fireEvent.change(await screen.findByRole('textbox', { name: en.createContent }), {
+      target: { value: 'npm_TOKEN=abcdef123456' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: en.createSubmit }))
+    expect(await screen.findByText(en.createFailed)).toBeTruthy()
   })
 })

@@ -39,10 +39,26 @@ export const PITFALL_RESOLVED_SIGNAL = 'pitfall-resolved'
 export interface MemoryCandidate {
   /** The text fragment that matched a signal. */
   readonly text: string
-  /** Which signal class matched (`keyword`, `correction`, or `pitfall-resolved`). */
+  /**
+   * Which signal class matched: `keyword` (an explicit remember request),
+   * `preference` (a stated standing preference), `correction` (a revision of
+   * a prior statement), or `pitfall-resolved` (a verified failure streak).
+   */
   readonly signal: string
   /** Seq of the session event the fragment came from. */
   readonly seq: number
+  /**
+   * The assistant turn this candidate corrects, when the signal is a
+   * correction: the extraction model reads it to resolve what "not that,
+   * this" actually refers to. Truncated to {@link CONTEXT_CAP}.
+   */
+  readonly context?: string | undefined
+  /**
+   * An explicit remember request. Such a candidate does not wait for the
+   * threshold: the user asked in words, so one fragment is reason enough to
+   * run extraction (the review drain fires on a single strong candidate).
+   */
+  readonly strong?: boolean | undefined
 }
 
 /** A registered tool call awaiting its result, keyed by callId. */
@@ -77,6 +93,11 @@ export interface AccumulatorState {
   readonly openCalls: Record<string, OpenCall>
   /** Open failure streaks, keyed by signature (capped, LRU-evicted). */
   readonly openStreaks: Record<string, OpenStreak>
+  /**
+   * The most recent assistant message text (truncated to {@link CONTEXT_CAP}),
+   * kept so a later correction can carry what it revises.
+   */
+  readonly lastAssistantText?: string | undefined
 }
 
 /** The wire payload (read-side projection) is the accumulator state itself. */
@@ -96,6 +117,8 @@ const KEYWORD_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[
   { name: 'keyword', re: /记下来/ },
   { name: 'keyword', re: /记一下/ },
   { name: 'keyword', re: /帮我记/ },
+  { name: 'keyword', re: /(请|务必|一定要)记/ },
+  { name: 'keyword', re: /记着/ },
   // English explicit-remember intents.
   { name: 'keyword', re: /remember\s+that/i },
   { name: 'keyword', re: /don'?t\s+forget/i },
@@ -103,6 +126,29 @@ const KEYWORD_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[
   { name: 'keyword', re: /keep\s+in\s+mind/i },
   { name: 'keyword', re: /make\s+a\s+note/i },
   { name: 'keyword', re: /for\s+the\s+record/i },
+  { name: 'keyword', re: /\bremember\s+(this|it)\b/i },
+  { name: 'keyword', re: /\bnote\s+that\b/i },
+]
+
+/**
+ * Stated standing preferences: no request verb, but a durable rule the user
+ * expects to hold. Weaker than a remember request — these wait for the
+ * threshold — yet they are the most common way a preference actually reaches
+ * the conversation, so missing them was the funnel's largest hole.
+ */
+const PREFERENCE_PATTERNS: readonly { readonly name: string; readonly re: RegExp }[] = [
+  // Chinese statements of habit or standing instruction.
+  { name: 'preference', re: /我喜欢/ },
+  { name: 'preference', re: /我(习惯|偏好|倾向于)/ },
+  { name: 'preference', re: /(请|以后)?一律(用|使用|走)/ },
+  { name: 'preference', re: /(默认|统一|以后都)(用|使用|走)/ },
+  { name: 'preference', re: /我们(这里|团队|项目)(都)?(习惯|用|要求)/ },
+  // English statements of habit or standing instruction.
+  { name: 'preference', re: /\bi\s+prefer\b/i },
+  { name: 'preference', re: /\bi\s+(usually|typically|always|never)\b/i },
+  { name: 'preference', re: /\b(always|never)\s+(use|run|write|prefer)\b/i },
+  { name: 'preference', re: /\bplease\s+always\b/i },
+  { name: 'preference', re: /\bour\s+(convention|standard|policy)\b/i },
 ]
 
 /**
@@ -117,14 +163,23 @@ const CORRECTION_PATTERNS: readonly { readonly name: string; readonly re: RegExp
   { name: 'correction', re: /应该是/ },
   { name: 'correction', re: /搞错了/ },
   { name: 'correction', re: /说错了/ },
+  { name: 'correction', re: /不是.{1,20}而是/ },
+  { name: 'correction', re: /别再用/ },
+  { name: 'correction', re: /换回/ },
+  { name: 'correction', re: /改(成|回|用)/ },
   // English revisions of a prior statement.
   { name: 'correction', re: /no,?\s+i\s+said/i },
   { name: 'correction', re: /that'?s\s+wrong/i },
   { name: 'correction', re: /actually/i },
   { name: 'correction', re: /i\s+meant/i },
   { name: 'correction', re: /no,?\s+it'?s/i },
+  { name: 'correction', re: /instead\s+of/i },
+  { name: 'correction', re: /use\s+\S+\s+instead/i },
+  { name: 'correction', re: /stop\s+using/i },
 ]
 
+/** Cap on the assistant context carried by one correction candidate. */
+export const CONTEXT_CAP = 300
 /** Cap on concurrently open tool calls retained in the projection state. */
 const OPEN_CALLS_CAP = 64
 /** Cap on concurrently tracked failure streaks (LRU-evicted). */
@@ -158,20 +213,40 @@ export function messageText(event: SessionEvent): string | undefined {
   return parts.length === 0 ? undefined : parts.join('\n')
 }
 
+/** One detected signal with the strength the accumulator acts on. */
+export interface DetectedSignal {
+  /** The signal class name recorded on the candidate. */
+  readonly name: string
+  /** Explicit remember requests act on a single candidate. */
+  readonly strong: boolean
+}
+
 /**
- * Detect the first matching signal in a user message. Keyword hits take
- * priority over correction signals when both match.
+ * Detect the first matching signal in a user message. An explicit remember
+ * request outranks a stated preference, which outranks a correction.
+ * @param text - the message text to scan.
+ * @returns the signal and its strength, or `undefined` when no rule fires.
+ */
+export function detectSignalDetail(text: string): DetectedSignal | undefined {
+  for (const { name, re } of KEYWORD_PATTERNS) {
+    if (re.test(text)) return { name, strong: true }
+  }
+  for (const { name, re } of PREFERENCE_PATTERNS) {
+    if (re.test(text)) return { name, strong: false }
+  }
+  for (const { name, re } of CORRECTION_PATTERNS) {
+    if (re.test(text)) return { name, strong: false }
+  }
+  return undefined
+}
+
+/**
+ * The signal name alone, for callers that only need the class.
  * @param text - the message text to scan.
  * @returns the matching signal name, or `undefined` when no rule fires.
  */
 export function detectSignal(text: string): string | undefined {
-  for (const { name, re } of KEYWORD_PATTERNS) {
-    if (re.test(text)) return name
-  }
-  for (const { name, re } of CORRECTION_PATTERNS) {
-    if (re.test(text)) return name
-  }
-  return undefined
+  return detectSignalDetail(text)?.name
 }
 
 /**
@@ -261,12 +336,26 @@ function evictToCap<T>(record: Record<string, T>, cap: number, seqOf: (value: T)
  * @returns the next state (same reference when the event changes nothing).
  */
 export function applyAccumulator(state: AccumulatorState, event: SessionEvent, pitfallThreshold = 2): AccumulatorState {
+  if (event.type === 'assistant/message') {
+    const text = messageText(event)
+    if (text === undefined) return state
+    const lastAssistantText = text.length > CONTEXT_CAP ? `${text.slice(0, CONTEXT_CAP)}…` : text
+    return { ...state, lastAssistantText }
+  }
   if (event.type === 'user/message') {
     const text = messageText(event)
     if (text === undefined) return state
-    const signal = detectSignal(text)
-    if (signal === undefined) return state
-    const candidate: MemoryCandidate = { text, signal, seq: event.seq }
+    const detected = detectSignalDetail(text)
+    if (detected === undefined) return state
+    const candidate: MemoryCandidate = {
+      text,
+      signal: detected.name,
+      seq: event.seq,
+      ...detected.strong ? { strong: true } : {},
+      // Only a correction needs the referent: "no, use pnpm" is meaningless
+      // without the turn it revises.
+      ...detected.name === 'correction' && state.lastAssistantText !== undefined ? { context: state.lastAssistantText } : {},
+    }
     return { ...state, candidates: [...state.candidates, candidate], count: state.count + 1 }
   }
   if (event.type === 'tool/call') {
@@ -319,6 +408,8 @@ export const accumulatorSchema: ZodType<AccumulatorView> = zod.object({
     text: zod.string(),
     signal: zod.string(),
     seq: zod.number(),
+    context: zod.string().optional(),
+    strong: zod.boolean().optional(),
   })),
   count: zod.number(),
   openCalls: zod.record(zod.string(), zod.object({
@@ -332,4 +423,5 @@ export const accumulatorSchema: ZodType<AccumulatorView> = zod.object({
     firstSeq: zod.number(),
     lastSeq: zod.number(),
   })),
+  lastAssistantText: zod.string().optional(),
 })

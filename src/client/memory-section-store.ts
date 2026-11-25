@@ -18,6 +18,7 @@
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
+  AuditEntryJson,
   IdentityHistoryJson,
   IdentityRecordJson,
   MemoryEntryJson,
@@ -31,6 +32,9 @@ export type MemoryScopeFilter = 'all' | 'global' | 'project' | 'user'
 
 /** Rows fetched / revealed per lazy-loading step. */
 export const MEMORY_BATCH_SIZE = 50
+
+/** Audit rows fetched per trail load (newest last). */
+export const AUDIT_PAGE_SIZE = 200
 
 /** Categories offered as filter chips; mirrors the store's MemoryCategory set. */
 export const MEMORY_CATEGORIES = [
@@ -74,6 +78,20 @@ export interface MemoryRemoteApi {
   }): Rpc<{ entries: readonly MemoryEntryJson[]; total: number }>
   projects(): Rpc<MemoryProjectsResult>
   health(): Rpc<MemoryHealthResult>
+  /** Create one entry from the management page (source `'ui'`). */
+  add(request: {
+    scope: 'global' | 'project' | 'user'
+    content: string
+    category?: string
+    summary?: string
+    projectName?: string
+  }): Rpc<{ entry?: MemoryEntryJson; error?: string }>
+  /** The audit trail tail, newest last, optionally filtered. */
+  auditLog(request: {
+    limit?: number
+    ops?: readonly string[]
+    sources?: readonly string[]
+  }): Rpc<{ entries: readonly AuditEntryJson[] }>
   update(request: { id: string; content?: string; category?: string; summary?: string }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
   removeEntry(request: { id: string }): Rpc<{ removed: boolean; error?: string }>
   pin(request: { id: string; pinned: boolean }): Rpc<{ entry?: MemoryEntryJson; found: boolean; error?: string }>
@@ -119,6 +137,16 @@ export interface MemorySectionState {
    * Surfaces inline above the list; the next successful action clears it.
    */
   actionError: string | null
+  /** Audit-trail rows for the active filters, newest last. */
+  audit: readonly AuditEntryJson[]
+  /** Audit tab status; idle until the tab is first opened. */
+  auditStatus: 'idle' | 'loading' | 'ready' | 'error'
+  /** Audit failure text (replaces the table until retried). */
+  auditError: string | null
+  /** Selected audit `op` filters (empty = every op). */
+  auditOps: readonly string[]
+  /** Selected audit `source` filters (empty = every source). */
+  auditSources: readonly string[]
 }
 
 const INITIAL: MemorySectionState = {
@@ -135,6 +163,11 @@ const INITIAL: MemorySectionState = {
   categories: [],
   pending: [],
   actionError: null,
+  audit: [],
+  auditStatus: 'idle',
+  auditError: null,
+  auditOps: [],
+  auditSources: [],
 }
 
 /**
@@ -155,6 +188,9 @@ export class MemorySectionController {
 
   /** Guards against overlapping loads painting partial results. */
   private seq = 0
+
+  /** Rows requested per audit load. */
+  private readonly auditLimit = AUDIT_PAGE_SIZE
 
   /**
    * Full match set behind the active query/chips, cached between local
@@ -398,6 +434,70 @@ export class MemorySectionController {
       this.set({ actionError: messageOf(error) })
       return false
     }
+  }
+
+  /**
+   * Create one entry from the management page.
+   *
+   * The host write path stays the single fact source: the content goes through
+   * the same `add` the tools use (scanner gates included), and a successful
+   * create reloads the page so the new row appears under the active filters.
+   * @param input - scope, content, and the optional category/summary/workspace.
+   * @returns whether the host accepted the entry.
+   */
+  async createEntry(input: {
+    scope: 'global' | 'project' | 'user'
+    content: string
+    category?: string
+    summary?: string
+    projectName?: string
+  }): Promise<boolean> {
+    const created = await this.act(async api => {
+      const response = await api.add(input)
+      if (!response.result.ok) return { ok: false, message: response.result.error.message }
+      const { entry, error } = response.result.value
+      if (entry === undefined) return { ok: false, message: error ?? 'add failed' }
+      return { ok: true }
+    })
+    if (created) await this.load()
+    return created
+  }
+
+  /**
+   * Load the audit trail for the active filters.
+   *
+   * Idle until the tab is first opened (the trail is a diagnostic surface, not
+   * part of the landing page), then refreshed on demand and after every row
+   * action so a mutation shows up in the same visit.
+   * @returns once the snapshot reflects the host.
+   */
+  async loadAudit(): Promise<void> {
+    const snapshot = this.store.getSnapshot()
+    this.set({ auditStatus: snapshot.audit.length === 0 ? 'loading' : snapshot.auditStatus })
+    try {
+      const api = this.requireApi()
+      const response = await api.auditLog({
+        limit: this.auditLimit,
+        ...snapshot.auditOps.length > 0 ? { ops: snapshot.auditOps } : {},
+        ...snapshot.auditSources.length > 0 ? { sources: snapshot.auditSources } : {},
+      })
+      if (!response.result.ok) throw new Error(response.result.error.message)
+      this.set({ auditStatus: 'ready', auditError: null, audit: response.result.value.entries })
+    } catch (error) {
+      this.set({ auditStatus: 'error', auditError: messageOf(error) })
+    }
+  }
+
+  /**
+   * Toggle one audit filter value and reload the trail.
+   * @param dimension - which filter list to change.
+   * @param value - the filter value to add or remove.
+   */
+  async toggleAuditFilter(dimension: 'ops' | 'sources', value: string): Promise<void> {
+    const current = dimension === 'ops' ? this.store.getSnapshot().auditOps : this.store.getSnapshot().auditSources
+    const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value]
+    this.set(dimension === 'ops' ? { auditOps: next } : { auditSources: next })
+    await this.loadAudit()
   }
 
   /** Save human edits to one entry ("edit lands in KV", store single truth). */

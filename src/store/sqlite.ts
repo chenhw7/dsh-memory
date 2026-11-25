@@ -35,6 +35,8 @@ import { scanContent } from '../scanner.ts'
 import { buildCorpusStatsFromTokens, Bm25Index, tokenizeForSearch } from './bm25.ts'
 import { nextIdentityRecord } from './identity-util.js'
 import { DEFAULT_INJECTION_SETTINGS } from './settings.ts'
+import { lastActiveTimestamp } from './decay.ts'
+import { DEFAULT_AUDIT_CAP } from './limits.ts'
 import type { MemoryInjectionSettings } from './settings.ts'
 import type {
   AddMemoryInput,
@@ -177,6 +179,8 @@ export class SqliteMemoryStore extends MemoryStore {
   private readonly entriesCap: number
   private readonly injectionSettings: () => MemoryInjectionSettings
   private readonly failureCounts = new Map<string, number>()
+  /** Per-site operation counters for read paths that write no audit record. */
+  private readonly metricCounts = new Map<string, number>()
   private auditSeq = 0
 
   constructor(options: SqliteStoreOptions) {
@@ -184,7 +188,7 @@ export class SqliteMemoryStore extends MemoryStore {
     this.failureLogger = options.failureLogger
     const source = options.settings ?? DEFAULT_INJECTION_SETTINGS
     this.injectionSettings = typeof source === 'function' ? source : () => source
-    this.auditCap = options.auditCap ?? 200
+    this.auditCap = options.auditCap ?? DEFAULT_AUDIT_CAP
     this.suggestionCap = options.suggestionCap ?? 200
     this.entriesCap = options.entriesCap ?? 500
     mkdirSync(dirname(options.dbPath), { recursive: true })
@@ -215,6 +219,11 @@ export class SqliteMemoryStore extends MemoryStore {
   override reportFailure(site: string, error?: unknown): void {
     this.failureCounts.set(site, (this.failureCounts.get(site) ?? 0) + 1)
     this.failureLogger?.warn(`dsh-memory: ${site} failed${error === undefined ? '' : `: ${String(error)}`}`)
+  }
+
+  override reportMetric(site: string, amount = 1): void {
+    if (amount <= 0) return
+    this.metricCounts.set(site, (this.metricCounts.get(site) ?? 0) + amount)
   }
 
   /** Close the database connection (the WAL sidecars recover on the next open). */
@@ -437,13 +446,13 @@ export class SqliteMemoryStore extends MemoryStore {
           const current = this.get(id)
           if (current === undefined) return
           this.insertEntry({ ...current, hitCount: (current.hitCount ?? 0) + 1, lastHitAt: now })
-          this.appendAudit('update', id as string, this.get(id) as unknown as Row, 'review', undefined, current.content)
         })
       } catch (error) {
         if (error instanceof Error && !error.message.includes('no record')) {
           this.reportFailure('mark-hits', error)
         }
       }
+      this.reportMetric('usage.hits', 1)
     }
   }
 
@@ -468,7 +477,7 @@ export class SqliteMemoryStore extends MemoryStore {
     let removed = 0
     for (const entry of this.list()) {
       if (entry.pinned === true) continue
-      const lastActive = entry.lastRecalledAt ?? entry.createdAt
+      const lastActive = lastActiveTimestamp(entry)
       if (now - lastActive < decayMs) continue
       if (entry.scope === 'project') {
         // Hard decay: the pin re-check reads the row current at write time.
@@ -485,7 +494,7 @@ export class SqliteMemoryStore extends MemoryStore {
       // exemption, and decay idempotence all re-checked on the current row).
       const current = this.get(entry.id)
       if (current === undefined) continue
-      const lastActiveNow = current.lastRecalledAt ?? current.createdAt
+      const lastActiveNow = lastActiveTimestamp(current)
       const graceFactor = current.importance !== undefined && current.importance >= 4 ? 1.5 : 1
       if (now - lastActiveNow < decayMs * graceFactor) continue
       if (current.staleSince !== undefined) continue
@@ -703,6 +712,7 @@ export class SqliteMemoryStore extends MemoryStore {
       ...(stale > 0 ? { stale } : {}),
       ...(lastActivity !== undefined && auditRecords > 0 ? { lastActivityTs: lastActivity } : {}),
       ...(this.failureCounts.size > 0 ? { backgroundFailures: Object.fromEntries(this.failureCounts) } : {}),
+      ...(this.metricCounts.size > 0 ? { metrics: Object.fromEntries(this.metricCounts) } : {}),
     }
   }
 
@@ -863,7 +873,7 @@ export class SqliteMemoryStore extends MemoryStore {
       .filter(entry => entry.pinned !== true)
       .sort((a, b) =>
         (a.accessCount ?? 0) - (b.accessCount ?? 0)
-        || (a.lastRecalledAt ?? a.createdAt) - (b.lastRecalledAt ?? b.createdAt))
+        || lastActiveTimestamp(a) - lastActiveTimestamp(b))
       .slice(0, count - this.entriesCap)
     for (const victim of victims) {
       this.db.prepare('DELETE FROM entries WHERE id = ?').run(victim.id as string)

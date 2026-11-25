@@ -32,6 +32,8 @@ export interface MemorySuggestionJson {
   firstSeenAt: number
   lastSeenAt: number
   targetEntryId?: string
+  /** What adoption does: add, update, remove, pin, or unpin. */
+  action?: string
   /** When set, the proposal targets an identity document (confirm-mode identity_update). */
   identityKind?: 'soul' | 'user'
   source: AuditSourceJson
@@ -58,6 +60,7 @@ export interface MemoryHealthResult {
   lastActivityTs?: number
   lastExtractionTs?: number
   backgroundFailures?: Record<string, number>
+  metrics?: Record<string, number>
 }
 export interface MemoryProjectsResult { projects: readonly string[] }
 export interface AuditEntryJson {
@@ -99,7 +102,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     search: (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     get: (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     getRaw: (request: { id: string }) => Promise<RemoteResult<MemoryGetRawResult>>
-    add: (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
+    add: (request: { scope: string; content: string; category?: string; summary?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     update: (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     removeEntry: (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     pin: (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
@@ -109,7 +112,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     suggestReject: (request: { id: string }) => Promise<RemoteResult<MemorySuggestRejectResult>>
     health: () => Promise<RemoteResult<MemoryHealthResult>>
     projects: () => Promise<RemoteResult<MemoryProjectsResult>>
-    auditLog: (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
+    auditLog: (request: { limit?: number; ops?: readonly string[]; sources?: readonly string[] }) => Promise<RemoteResult<MemoryAuditResult>>
     identityList: () => Promise<RemoteResult<MemoryIdentityListResult>>
     identityHistory: (request: { kind: 'soul' | 'user' }) => Promise<RemoteResult<MemoryIdentityHistoryResult>>
     identityRevert: (request: { kind: 'soul' | 'user'; version: number }) => Promise<RemoteResult<MemoryIdentityRevertResult>>
@@ -119,7 +122,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/search': (request: { scope?: string; category?: string; projectName?: string; query?: string; limit?: number }) => Promise<RemoteResult<MemorySearchResult>>
     'memoryRemote/get': (request: { id: string }) => Promise<RemoteResult<MemoryGetResult>>
     'memoryRemote/getRaw': (request: { id: string }) => Promise<RemoteResult<MemoryGetRawResult>>
-    'memoryRemote/add': (request: { scope: string; content: string; category?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
+    'memoryRemote/add': (request: { scope: string; content: string; category?: string; summary?: string; projectName?: string }) => Promise<RemoteResult<MemoryAddResult>>
     'memoryRemote/update': (request: { id: string; content?: string; category?: string; summary?: string }) => Promise<RemoteResult<MemoryUpdateResult>>
     'memoryRemote/removeEntry': (request: { id: string }) => Promise<RemoteResult<MemoryRemoveResult>>
     'memoryRemote/pin': (request: { id: string; pinned: boolean }) => Promise<RemoteResult<MemoryPinResult>>
@@ -129,7 +132,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'memoryRemote/suggestReject': (request: { id: string }) => Promise<RemoteResult<MemorySuggestRejectResult>>
     'memoryRemote/health': () => Promise<RemoteResult<MemoryHealthResult>>
     'memoryRemote/projects': () => Promise<RemoteResult<MemoryProjectsResult>>
-    'memoryRemote/auditLog': (request: { limit?: number }) => Promise<RemoteResult<MemoryAuditResult>>
+    'memoryRemote/auditLog': (request: { limit?: number; ops?: readonly string[]; sources?: readonly string[] }) => Promise<RemoteResult<MemoryAuditResult>>
     'memoryRemote/identityList': () => Promise<RemoteResult<MemoryIdentityListResult>>
     'memoryRemote/identityHistory': (request: { kind: 'soul' | 'user' }) => Promise<RemoteResult<MemoryIdentityHistoryResult>>
     'memoryRemote/identityRevert': (request: { kind: 'soul' | 'user'; version: number }) => Promise<RemoteResult<MemoryIdentityRevertResult>>

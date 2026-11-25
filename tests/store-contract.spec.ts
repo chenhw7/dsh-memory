@@ -735,14 +735,17 @@ describe('markHits (DomainMemoryStore)', () => {
     const store = new DomainMemoryStore(memTable(), memTable(), memTable(), memTable())
     const { entry } = await store.add({ scope: 'global', content: 'fact used by the answer' })
     const before = store.get(entry.id)!
+    const auditBefore = store.listAudit().length
     await store.markHits([entry.id])
     const after = store.get(entry.id)!
     expect(after.hitCount).toBe(1)
     expect(after.lastHitAt).toBeDefined()
     expect(after.updatedAt).toBe(before.updatedAt)
     expect(after.accessCount).toBe(before.accessCount)
-    // The hit is audited as an update (system-initiated lifecycle write).
-    expect(store.listAudit().some(record => record.entryId === entry.id && record.op === 'update')).toBe(true)
+    // A hit is a reading signal, not a mutation: it writes no audit row (the
+    // table's cap belongs to real mutations) and counts as a metric instead.
+    expect(store.listAudit()).toHaveLength(auditBefore)
+    expect(store.health().metrics?.['usage.hits']).toBe(1)
   })
 
   it('one batch adds exactly one hit per entry (duplicate ids idempotent); unknown ids skipped', async () => {

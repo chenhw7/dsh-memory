@@ -22,7 +22,7 @@ import type {
   MemoryScope,
   MemorySearchQuery,
 } from '../types.ts'
-import { scanContent, validateProjectScope, validateContent } from '../index.ts'
+import { MemoryStore, scanContent, validateProjectScope, validateContent } from '../index.ts'
 import { redactBlocked, setAllowlist } from '../scanner.ts'
 import type { ScanAllowlist } from '../scanner.ts'
 import { DEFAULT_SOUL_CHAR_LIMIT, DEFAULT_USER_CHAR_LIMIT } from '../identity/settings.ts'
@@ -298,6 +298,29 @@ export function apply(ctx: Context, config: Config): void {
   // call so flipping the setting applies to the very next tool call; a
   // deployment without memory-review composed keeps automatic writes.
   const confirmMode = (): boolean => ctx.get('memoryReview')?.settings().confirmBeforeWrite === true
+
+  /**
+   * Queue a lifecycle proposal instead of mutating (confirm-mode governance).
+   *
+   * The write tools already route through the pending-review queue in this
+   * mode; the destructive verbs follow the same rule so that "no mutation
+   * reaches the store without a human yes" holds for the whole surface
+   * instead of only for additions. The proposal carries the entry's own
+   * content, which is what the queue row shows while the human decides.
+   * @param store - the mounted memory store.
+   * @param action - which lifecycle operation adoption performs.
+   * @param entry - the target entry (already resolved by the caller).
+   */
+  async function queueLifecycleProposal(store: MemoryStore, action: 'remove' | 'pin' | 'unpin', entry: MemoryEntry): Promise<void> {
+    await store.observeSuggestion({
+      scope: entry.scope,
+      content: entry.content,
+      targetEntryId: entry.id,
+      action,
+      source: 'tool',
+      ...entry.projectName !== undefined ? { projectName: entry.projectName } : {},
+    })
+  }
   // The identity entry, read per call — the enabled gate plus the two
   // document budgets. Defaults match the entry schema so a composition
   // without the identity service behaves like the disabled default.
@@ -387,6 +410,7 @@ export function apply(ctx: Context, config: Config): void {
         ...args.limit !== undefined ? { limit: args.limit } : { limit: defaultLimit() },
       }
       const result = store.search(query)
+      store.reportMetric('tool.search', 1)
       // Zero-hit fallback (zero-hit-fallback-scope): a non-empty query with
       // zero lexical matches returns the most recent entries under the SAME
       // structured filters, so "nothing matched" never strands the model.
@@ -400,6 +424,7 @@ export function apply(ctx: Context, config: Config): void {
         // surfacing them must not refresh recall metadata (lastRecalledAt /
         // accessCount) or revive stale entries — the store's list() path
         // already writes nothing.
+        store.reportMetric('tool.searchFallback', 1)
         const fallbackEntries = [...store.list(query.scope, query.projectName)]
           .filter(e => query.category === undefined || e.category === query.category)
           .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -684,18 +709,27 @@ export function apply(ctx: Context, config: Config): void {
         additionalProperties: false,
         properties: {
           removed: { type: 'boolean', required: true },
+          pending: { type: 'boolean', description: 'True when confirmBeforeWrite queued the removal for human approval instead of applying it.' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.removed ? 'Memory entry removed.' : 'Memory entry not found.',
+        text: value.pending === true
+          ? 'Removal queued for human confirmation; the entry is unchanged until it is adopted.'
+          : value.removed ? 'Memory entry removed.' : 'Memory entry not found.',
       }],
-      presentationMeta: (_args, value) => ({ removed: value.removed }),
+      presentationMeta: (_args, value) => ({ removed: value.removed, pending: value.pending === true }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
-      const removed = await store.remove(args.id as MemoryId)
-      return { removed }
+      const id = args.id as MemoryId
+      const entry = store.get(id)
+      if (entry === undefined) return { removed: false }
+      if (confirmMode()) {
+        await queueLifecycleProposal(store, 'remove', entry)
+        return { removed: false, pending: true }
+      }
+      return { removed: await store.remove(id) }
     },
     presentCall: args => ({
       card: 'generic',
@@ -731,13 +765,16 @@ export function apply(ctx: Context, config: Config): void {
           removedCount: { type: 'integer', required: true },
           removedIds: { type: 'array', items: { type: 'string' }, required: true },
           pinnedSkipped: { type: 'integer' },
+          pendingCount: { type: 'integer', description: 'How many removals confirmBeforeWrite queued for human approval instead of applying.' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.removedCount === 0
-          ? 'No entries matched the topic — nothing was removed.'
-          : `Forgot ${value.removedCount} entr${value.removedCount === 1 ? 'y' : 'ies'} related to the topic: ${(value.removedIds ?? []).join(', ')}`,
+        text: value.pendingCount !== undefined && value.pendingCount > 0
+          ? `Queued ${value.pendingCount} removal${value.pendingCount === 1 ? '' : 's'} for human confirmation; nothing was deleted.`
+          : value.removedCount === 0
+            ? 'No entries matched the topic — nothing was removed.'
+            : `Forgot ${value.removedCount} entr${value.removedCount === 1 ? 'y' : 'ies'} related to the topic: ${(value.removedIds ?? []).join(', ')}`,
       }],
       presentationMeta: (_args, value) => ({ removedCount: value.removedCount, removedIds: value.removedIds ?? [] }),
     },
@@ -784,6 +821,16 @@ export function apply(ctx: Context, config: Config): void {
       const maxBatch = Math.max(1, Math.floor(defaultLimit() / 2))
       if (deletable.length > maxBatch) {
         throw new Error(`memory_forget matched ${deletable.length} entries, above the batch ceiling of ${maxBatch} — narrow with scope/category/projectName, or use a more specific topic`)
+      }
+      if (confirmMode()) {
+        // Confirm mode turns the sweep into a batch of removal proposals: the
+        // human sees exactly which entries a topic word matched before any of
+        // them disappear. The batch ceiling above still applies, so one broad
+        // topic cannot flood the queue either.
+        for (const entry of deletable) await queueLifecycleProposal(store, 'remove', entry)
+        return pinnedSkipped > 0
+          ? { removedCount: 0, removedIds: [], pinnedSkipped, pendingCount: deletable.length }
+          : { removedCount: 0, removedIds: [], pendingCount: deletable.length }
       }
       const removedIds: string[] = []
       for (const entry of deletable) {
@@ -1044,17 +1091,27 @@ export function apply(ctx: Context, config: Config): void {
         additionalProperties: false,
         properties: {
           pinned: { type: 'boolean', required: true },
+          pending: { type: 'boolean', description: 'True when confirmBeforeWrite queued the pin for human approval instead of applying it.' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.pinned ? 'Memory entry pinned.' : 'Memory entry not found.',
+        text: value.pending === true
+          ? 'Pin queued for human confirmation; the entry is unchanged until it is adopted.'
+          : value.pinned ? 'Memory entry pinned.' : 'Memory entry not found.',
       }],
-      presentationMeta: (_args, value) => ({ pinned: value.pinned }),
+      presentationMeta: (_args, value) => ({ pinned: value.pinned, pending: value.pending === true }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
-      const entry = await store.pin(args.id as MemoryId)
+      const id = args.id as MemoryId
+      const existing = store.get(id)
+      if (existing === undefined) return { pinned: false }
+      if (confirmMode()) {
+        await queueLifecycleProposal(store, 'pin', existing)
+        return { pinned: false, pending: true }
+      }
+      const entry = await store.pin(id)
       return { pinned: entry !== undefined }
     },
     presentCall: args => ({
@@ -1086,17 +1143,27 @@ export function apply(ctx: Context, config: Config): void {
         additionalProperties: false,
         properties: {
           unpinned: { type: 'boolean', required: true },
+          pending: { type: 'boolean', description: 'True when confirmBeforeWrite queued the unpin for human approval instead of applying it.' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.unpinned ? 'Memory entry unpinned.' : 'Memory entry not found.',
+        text: value.pending === true
+          ? 'Unpin queued for human confirmation; the entry is unchanged until it is adopted.'
+          : value.unpinned ? 'Memory entry unpinned.' : 'Memory entry not found.',
       }],
-      presentationMeta: (_args, value) => ({ unpinned: value.unpinned }),
+      presentationMeta: (_args, value) => ({ unpinned: value.unpinned, pending: value.pending === true }),
     },
     async execute(args) {
       const store = requireMemory(ctx)
-      const entry = await store.unpin(args.id as MemoryId)
+      const id = args.id as MemoryId
+      const existing = store.get(id)
+      if (existing === undefined) return { unpinned: false }
+      if (confirmMode()) {
+        await queueLifecycleProposal(store, 'unpin', existing)
+        return { unpinned: false, pending: true }
+      }
+      const entry = await store.unpin(id)
       return { unpinned: entry !== undefined }
     },
     presentCall: args => ({

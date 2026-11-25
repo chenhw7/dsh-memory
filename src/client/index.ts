@@ -186,6 +186,8 @@ function createMemoryRemoteApi(connection: ConnectionFace | undefined): MemoryRe
     suggestList: () => invoke('suggestList'),
     suggestAdopt: request => invoke('suggestAdopt', request),
     suggestReject: request => invoke('suggestReject', request),
+    add: request => invoke('add', request),
+    auditLog: request => invoke('auditLog', request),
     identityList: () => invoke('identityList'),
     identityHistory: request => invoke('identityHistory', request),
     identityRevert: request => invoke('identityRevert', request),
@@ -280,6 +282,9 @@ export function apply(ctx: ClientContext): void {
     toggleArchive: (entry) => controller.toggleArchive(entry),
     adoptSuggestion: (id, edits) => controller.adoptSuggestion(id, edits),
     rejectSuggestion: (id) => controller.rejectSuggestion(id),
+    loadAudit: () => controller.loadAudit(),
+    toggleAuditFilter: (dimension, value) => controller.toggleAuditFilter(dimension, value),
+    createEntry: (input) => controller.createEntry(input),
   })
 
   // The memory management page: a `main` occupant keyed by the same id the

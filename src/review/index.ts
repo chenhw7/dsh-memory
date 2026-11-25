@@ -246,16 +246,17 @@ function collectShadowedFragments(log: SessionEventLog | undefined, seqs: readon
 }
 
 /** Fire-and-forget flush on `compaction/end`: extract the shadowed fragments. */
-async function flushOnCompaction(ctx: Context, session: Session, eventLogs: WeakMap<Session, SessionEventLog>, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
+async function flushOnCompaction(ctx: Context, session: Session, eventLogs: WeakMap<Session, SessionEventLog>, compactionId: SessionEvent<'compaction/end'>['data']['compactionId'], modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<number> {
   const log = eventLogs.get(session)
   const shadowedSeqs = log?.summaries.get(String(compactionId))
-  if (shadowedSeqs === undefined) return
+  if (shadowedSeqs === undefined) return 0
   const fragments = collectShadowedFragments(log, shadowedSeqs)
-  await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode, consolidation)
+  const stats = await runFlushExtraction(ctx, session, fragments, undefined, modelOverride, judgeEnabled, confirmMode, consolidation)
+  return stats.llmCalls
 }
 
 /** Fire-and-forget flush on `session/disposed`: extract recent derived messages. */
-async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<void> {
+async function flushOnDispose(ctx: Context, session: Session, modelOverride: ExtractionModelOverride | undefined, judgeEnabled: boolean, confirmMode: boolean, consolidation: 'two-tier' | 'legacy-judge'): Promise<number> {
   const messages = session.deriveMessages()
   const fragments: string[] = []
   for (const message of messages) {
@@ -263,7 +264,8 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
     if (fragment !== undefined) fragments.push(fragment)
   }
   const signal = AbortSignal.timeout(DISPOSE_FLUSH_TIMEOUT_MS)
-  await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled, confirmMode, consolidation)
+  const stats = await runFlushExtraction(ctx, session, fragments, signal, modelOverride, judgeEnabled, confirmMode, consolidation)
+  return stats.llmCalls
 }
 
 /**
@@ -301,14 +303,30 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
   // service and fall back to the builtin default when no store is composed.
   const readDecayDays = (): number => ctx.get('memory')?.settings().decayDays ?? DEFAULT_DECAY_DAYS
 
-  /** Check and increment the per-session extraction budget. Returns false when exhausted. */
-  function checkBudget(session: Session): boolean {
+  /**
+   * Whether the session still has extraction budget. A pre-check only: the
+   * charge happens after a run reports how many calls it actually started, so
+   * a failed or no-op run costs nothing and a run that needed the judge or a
+   * consolidation pass is charged for exactly that.
+   * @param session - the session whose budget to inspect.
+   * @returns false only when a positive budget is already spent.
+   */
+  function hasBudget(session: Session): boolean {
     const budget = resolved().extractionBudget
+    // `0` means unlimited, so it is never exhausted by counting.
     if (budget <= 0) return true
-    const used = extractionCalls.get(session) ?? 0
-    if (used >= budget) return false
-    extractionCalls.set(session, used + 1)
-    return true
+    return (extractionCalls.get(session) ?? 0) < budget
+  }
+
+  /**
+   * Charge a completed run's actual LLM calls against the session budget.
+   * @param session - the session to charge.
+   * @param calls - LLM calls the run reported; non-positive values charge nothing.
+   */
+  function chargeBudget(session: Session, calls: number): void {
+    if (calls <= 0) return
+    extractionCalls.set(session, (extractionCalls.get(session) ?? 0) + calls)
+    ctx.get('memory')?.reportMetric('extract.calls', calls)
   }
 
   // Register the projection accumulator (optional: only when sessionProjections
@@ -365,7 +383,7 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
     const cfg = resolved()
     if (!signal.aborted && cfg.reviewEnabled) {
       try {
-        await maybeRunReview(ctx, agent, () => accumulator, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, checkBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation)
+        await maybeRunReview(ctx, agent, () => accumulator, cfg.reviewCandidateThreshold, highWaterMarks, cfg.extractionModel, hasBudget, chargeBudget, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation)
       } catch (reviewError) {
         // Best-effort: a review failure must never block the step.
         ctx.get('memory')?.reportFailure('review-drain', reviewError)
@@ -383,8 +401,11 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
     if (event.data.error !== undefined) return
     const cfg = resolved()
     if (!cfg.flushOnCompaction) return
-    if (!checkBudget(session)) return
-    void flushOnCompaction(ctx, session, eventLogs, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
+    if (!hasBudget(session)) return
+    void flushOnCompaction(ctx, session, eventLogs, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).then((calls) => {
+      chargeBudget(session, calls)
+      ctx.get('memory')?.reportMetric('flush.compaction', 1)
+    }).catch((error: unknown) => {
       // Best-effort: never blocks compaction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-compaction', error)
     })
@@ -394,8 +415,11 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
   ctx.on('session/disposed', (session) => {
     const cfg = resolved()
     if (!cfg.flushOnDispose) return
-    if (!checkBudget(session)) return
-    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).catch((error: unknown) => {
+    if (!hasBudget(session)) return
+    void flushOnDispose(ctx, session, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).then((calls) => {
+      chargeBudget(session, calls)
+      ctx.get('memory')?.reportMetric('flush.dispose', 1)
+    }).catch((error: unknown) => {
       // Best-effort: dispose must not block on memory extraction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-dispose', error)
     })
@@ -434,8 +458,11 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
     // One oversized entry is still worth a pass: the curator rewrites each
     // selected entry on its own, so a single long entry is a full batch.
     if (selected.length === 0) return
-    if (!checkBudget(session)) return
-    void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).catch((error: unknown) => {
+    if (!hasBudget(session)) return
+    void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).then((stats) => {
+      chargeBudget(session, stats.llmCalls)
+      ctx.get('memory')?.reportMetric('curator.passes', 1)
+    }).catch((error: unknown) => {
       // Best-effort: curation failures never surface into session creation, but stay observable.
       ctx.get('memory')?.reportFailure('curator', error)
     })
@@ -493,7 +520,8 @@ async function maybeRunReview(
   threshold: number,
   highWaterMarks: WeakMap<Session, number>,
   modelOverride: ExtractionModelOverride | undefined,
-  checkBudget: (session: Session) => boolean,
+  hasBudget: (session: Session) => boolean,
+  chargeBudget: (session: Session, calls: number) => void,
   judgeEnabled: boolean,
   confirmMode: boolean,
   consolidation: 'two-tier' | 'legacy-judge',
@@ -507,9 +535,13 @@ async function maybeRunReview(
   if (state === undefined || state === null) return
   const mark = highWaterMarks.get(session) ?? -1
   const unprocessed = state.candidates.filter(candidate => candidate.seq > mark)
-  if (unprocessed.length < threshold) return
-  if (!checkBudget(session)) return
-  await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled, confirmMode, consolidation)
+  // An explicit remember request is reason enough on its own: the user said
+  // "remember this" in words, so waiting for the threshold would drop it.
+  const strong = unprocessed.some(candidate => candidate.strong === true)
+  if (unprocessed.length < threshold && !strong) return
+  if (!hasBudget(session)) return
+  const stats = await runReviewExtraction(ctx, agent, unprocessed, modelOverride, judgeEnabled, confirmMode, consolidation)
+  chargeBudget(session, stats.llmCalls)
   const nextMark = unprocessed.reduce((max, candidate) => Math.max(max, candidate.seq), mark)
   highWaterMarks.set(session, nextMark)
 }

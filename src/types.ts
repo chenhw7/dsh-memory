@@ -304,6 +304,13 @@ export interface MemorySuggestion {
    * the entry is touched only when a human adopts the proposal).
    */
   readonly targetEntryId?: MemoryId | undefined
+  /**
+   * What adoption does. Absent means legacy shape: `add` when there is no
+   * target, `update` when there is one. The governance actions route the
+   * destructive operations (remove, forget, pin, unpin) through the same
+   * queue as writes, so no mutation reaches the store without a human yes.
+   */
+  readonly action?: SuggestionAction | undefined
   /** Provenance of the proposal (`review`, `flush`, or `tool`). */
   readonly source: AuditSource
   /** Session id when the proposal came from an extraction path. */
@@ -321,9 +328,18 @@ export interface AddSuggestionInput {
   readonly identityKind?: IdentityKind | undefined
   /** Set when the proposal is a change to an already-confirmed entry (P1-2). */
   readonly targetEntryId?: MemoryId | undefined
+  /** What adoption does; absent keeps the legacy add-or-update inference. */
+  readonly action?: SuggestionAction | undefined
   readonly source: AuditSource
   readonly sessionId?: string | undefined
 }
+
+/**
+ * The operation a queued proposal performs when adopted. `add` creates an
+ * entry, `update` rewrites the target, and the three lifecycle verbs apply the
+ * store operation of the same name to the target entry.
+ */
+export type SuggestionAction = 'add' | 'update' | 'remove' | 'pin' | 'unpin'
 
 /** Human edits applied at adoption time ("edit before adopt", evolve-style). */
 export interface AdoptSuggestionOverride {
@@ -415,6 +431,12 @@ export interface MemoryHealth {
    * occurred. In-process only — counts reset when the host restarts.
    */
   readonly backgroundFailures?: Readonly<Record<string, number>> | undefined
+  /**
+   * Operation counters for the surfaces that read memory without writing an
+   * audit record (searches, injections, extractions, hits). In-process only,
+   * monotonic per site, and absent when nothing has been counted yet.
+   */
+  readonly metrics?: Readonly<Record<string, number>> | undefined
 }
 
 declare module '@deepseek-ai/dsh-session/types' {

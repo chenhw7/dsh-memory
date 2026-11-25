@@ -193,6 +193,17 @@ export abstract class MemoryStore {
    */
   reportFailure(_site: string, _error?: unknown): void { /* default no-op */ }
 
+  /**
+   * Count one operation on a surface that writes no audit record — a search,
+   * an injection, an extraction call, a usage hit. Separate from
+   * {@link reportFailure} on purpose: these are not failures, and surfacing
+   * them as such would make the health panel's failure list unreadable.
+   * Fire-and-forget: the default implementation is a no-op.
+   * @param site - stable counter key (e.g. `'tool.search'`, `'usage.hits'`).
+   * @param amount - how many operations to add; non-positive values are ignored.
+   */
+  reportMetric(_site: string, _amount = 1): void { /* default no-op */ }
+
   // ─── Suggestion queue (P1-1 optional human-confirm mode) ──────────────────
   //
   // Default implementations follow the `markRecalled` precedent: providers

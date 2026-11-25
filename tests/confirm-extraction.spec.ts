@@ -138,7 +138,7 @@ describe('runCuration confirm mode (P1-2)', () => {
     const out = `${a.id as string}: concise rewrite of entry one\n${b.id as string}: concise rewrite of entry two`
     const ctx = curatorCtx(store, textChunks(out))
 
-    const rewritten = await runCuration(ctx, SESSION, [store.get(a.id)!, store.get(b.id)!], undefined, true)
+    const rewritten = (await runCuration(ctx, SESSION, [store.get(a.id)!, store.get(b.id)!], undefined, true)).stored
 
     expect(rewritten).toBe(2)
     expect(store.listSuggestions()).toHaveLength(2)
@@ -156,7 +156,7 @@ describe('runCuration confirm mode (P1-2)', () => {
     const long = `${'word '.repeat(80)}original verbose entry one`
     const a = (await store.add({ scope: 'global', content: long, source: 'ui' })).entry
     const ctx = curatorCtx(store, textChunks(`${a.id as string}: concise rewrite`))
-    const rewritten = await runCuration(ctx, SESSION, [store.get(a.id)!], undefined, false)
+    const rewritten = (await runCuration(ctx, SESSION, [store.get(a.id)!], undefined, false)).stored
     expect(rewritten).toBe(1)
     expect(store.get(a.id)!.content).toBe('concise rewrite')
     expect(store.listSuggestions()).toHaveLength(0)

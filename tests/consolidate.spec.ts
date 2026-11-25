@@ -509,7 +509,7 @@ describe('consolidation kill-switch', () => {
   it('runFlushExtraction forwards the consolidation mode', async () => {
     const store = makeRealStore()
     const ctx = fakeCtx(store, () => makeTextStream('global: a brand new flushed fact'))
-    const n = await runFlushExtraction(ctx, fakeSession(), ['user: remember this'], undefined, undefined, true, false, 'two-tier')
+    const n = (await runFlushExtraction(ctx, fakeSession(), ['user: remember this'], undefined, undefined, true, false, 'two-tier')).stored
     expect(n).toBe(1)
     expect(store.list()).toHaveLength(1)
   })

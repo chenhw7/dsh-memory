@@ -24,6 +24,8 @@ import {
   type MemorySectionState,
 } from './memory-section-store.ts'
 import { css } from './section-styles.ts'
+import { MemoryAuditTab } from './MemoryAuditTab.tsx'
+import { MemoryCreateForm } from './MemoryCreateForm.tsx'
 
 /** Registration-side business face for the memory section. */
 export interface MemorySectionInjected {
@@ -57,6 +59,105 @@ export interface MemorySectionInjected {
   adoptSuggestion: (id: string, edits?: { content?: string; category?: string }) => Promise<boolean>
   /** Reject one pending proposal without writing anything. */
   rejectSuggestion: (id: string) => Promise<boolean>
+  /** Load the audit trail for the active filters (idempotent; the tab calls it). */
+  loadAudit: () => Promise<void>
+  /** Toggle one audit filter value and reload the trail. */
+  toggleAuditFilter: (dimension: 'ops' | 'sources', value: string) => Promise<void>
+  /** Create one entry from the manage tab's form. */
+  createEntry: (input: {
+    scope: 'global' | 'project' | 'user'
+    content: string
+    category?: string
+    summary?: string
+    projectName?: string
+  }) => Promise<boolean>
+}
+
+/** The counter keys the overview renders, in display order, with their labels. */
+const METRIC_ROWS: readonly { readonly key: string; readonly labelKey: LocaleKey }[] = [
+  { key: 'tool.search', labelKey: 'metricLabelToolSearch' },
+  { key: 'tool.searchFallback', labelKey: 'metricLabelSearchFallback' },
+  { key: 'autoRecall.steps', labelKey: 'metricLabelAutoRecallSteps' },
+  { key: 'autoRecall.hits', labelKey: 'metricLabelAutoRecallHits' },
+  { key: 'digest.emitted', labelKey: 'metricLabelDigest' },
+  { key: 'extract.calls', labelKey: 'metricLabelExtractCalls' },
+  { key: 'curator.passes', labelKey: 'metricLabelCurator' },
+  { key: 'flush.compaction', labelKey: 'metricLabelFlush' },
+  { key: 'usage.hits', labelKey: 'metricLabelHits' },
+]
+
+/**
+ * The operation-counter block on the Overview tab. Reads-only surfaces write no
+ * audit row, so without this block a store that is being searched and injected
+ * constantly still looks idle; the counters are in-process, which the hint says
+ * out loud.
+ * @param props - the health snapshot's `metrics` and the translator.
+ * @returns the block, or nothing when the host reported no counters.
+ */
+function MetricsPanel(props: {
+  metrics: Readonly<Record<string, number>> | undefined
+  translate: (key: LocaleKey) => string
+}): ReactNode {
+  const { metrics, translate } = props
+  const rows = METRIC_ROWS.filter(row => metrics?.[row.key] !== undefined)
+  const extra = Object.entries(metrics ?? {}).filter(([key]) => !METRIC_ROWS.some(row => row.key === key))
+  return (
+    <div className={css.metricGroup}>
+      <h3 className={css.metricGroupTitle}>{translate('metricsTitle')}</h3>
+      <p className={css.metricHint}>{translate('metricsHint')}</p>
+      {rows.length === 0 && extra.length === 0
+        ? <p className={css.empty}>{translate('metricsNone')}</p>
+        : (
+          <div className={css.metricGrid}>
+            {rows.map(row => (
+              <span key={row.key} className={css.metric}>
+                <span className={css.metricValue}>{metrics?.[row.key] ?? 0}</span>
+                <span className={css.metricLabel} title={row.key}>{translate(row.labelKey)}</span>
+              </span>
+            ))}
+            {extra.map(([key, value]) => (
+              <span key={key} className={css.metric}>
+                <span className={css.metricValue}>{value}</span>
+                <span className={css.metricLabel} title={key}>{key}</span>
+              </span>
+            ))}
+          </div>
+        )}
+    </div>
+  )
+}
+
+/**
+ * The swallowed-failure block on the Overview tab: the best-effort paths that
+ * degrade silently by design report here instead of throwing, so an empty list
+ * is the healthy state and any row names the path that broke.
+ * @param props - the health snapshot's `backgroundFailures` and the translator.
+ * @returns the block.
+ */
+function FailuresPanel(props: {
+  failures: Readonly<Record<string, number>> | undefined
+  translate: (key: LocaleKey) => string
+}): ReactNode {
+  const { failures, translate } = props
+  const rows = Object.entries(failures ?? {})
+  return (
+    <div className={css.metricGroup}>
+      <h3 className={css.metricGroupTitle}>{translate('failuresTitle')}</h3>
+      <p className={css.metricHint}>{translate('failuresHint')}</p>
+      {rows.length === 0
+        ? <p className={css.empty}>{translate('failuresNone')}</p>
+        : (
+          <ul className={css.failureList}>
+            {rows.map(([site, count]) => (
+              <li key={site} className={css.failureRow}>
+                <span className={css.failureSite}>{site}</span>
+                <span className={css.failureCount}>{count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  )
 }
 
 /** Full component props. */
@@ -72,8 +173,8 @@ const SCOPES: readonly { value: MemoryScopeFilter; labelKey: 'scopeAll' | 'scope
   { value: 'user', labelKey: 'scopeUser' },
 ]
 
-/** The section's three tabs: health glance vs. review queue vs. management. */
-type SectionTab = 'overview' | 'review' | 'manage'
+/** The section's four tabs: health glance, review queue, management, audit trail. */
+type SectionTab = 'overview' | 'review' | 'manage' | 'audit'
 
 type LocaleKey = keyof typeof import('./locales.ts').en
 
@@ -100,6 +201,22 @@ function emptyKeyOf(state: MemorySectionState): 'emptyFiltered' | 'emptyAll' | '
   if (state.scope === 'user') return 'emptyUser'
   if (state.scope === 'project') return 'emptyProject'
   return 'emptyAll'
+}
+
+/**
+ * The badge telling a reviewer what adoption will do. Absent for a plain
+ * `add` proposal: the queue's default action needs no label, while an
+ * update or a lifecycle verb must be unmistakable before it is approved.
+ * @param suggestion - the queued proposal.
+ * @returns the locale key of its action badge, or undefined for `add`.
+ */
+function proposalActionKey(suggestion: MemorySuggestionJson): LocaleKey | undefined {
+  const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+  if (action === 'remove') return 'actionRemoveBadge'
+  if (action === 'pin') return 'actionPinBadge'
+  if (action === 'unpin') return 'actionUnpinBadge'
+  if (action === 'update') return 'updateProposalBadge'
+  return undefined
 }
 
 /**
@@ -335,9 +452,9 @@ function SuggestionRow(props: {
         {suggestion.hits > 1
           ? <span className={`${css.badge} ${css.badgeHits}`}>{translate('hitsBadge').replace('{hits}', String(suggestion.hits))}</span>
           : null}
-        {suggestion.targetEntryId !== undefined
-          ? <span className={css.badge}>{translate('updateProposalBadge')}</span>
-          : null}
+        {proposalActionKey(suggestion) === undefined
+          ? null
+          : <span className={css.badge}>{translate(proposalActionKey(suggestion)!)}</span>}
       </div>
       {editing
         ? (
@@ -420,6 +537,15 @@ function MemorySectionContent(props: MemorySectionProps): ReactNode {
   }, [load])
 
   const [tab, setTab] = useState<SectionTab>('overview')
+  const [creating, setCreating] = useState(false)
+
+  // The audit trail loads on first open only: it is a diagnostic surface, not
+  // part of the landing page, and it re-loads after every row action.
+  const { loadAudit } = props
+  useEffect(() => {
+    if (tab !== 'audit' || state.auditStatus !== 'idle') return
+    void loadAudit()
+  }, [tab, state.auditStatus, loadAudit])
 
   // Local search text commits through the controller after a 300ms pause.
   // Only the text rides the dependency array: the action closure changes
@@ -535,6 +661,15 @@ function MemorySectionContent(props: MemorySectionProps): ReactNode {
         >
           {t('tabManage')}
         </button>
+        <button
+          type="button"
+          role="tab"
+          className={css.tabBtn}
+          aria-selected={tab === 'audit'}
+          onClick={() => { setTab('audit') }}
+        >
+          {t('tabAudit')}
+        </button>
       </div>
 
       {tab === 'overview'
@@ -585,6 +720,8 @@ function MemorySectionContent(props: MemorySectionProps): ReactNode {
                     </span>
                     <span className={css.statLabel}>{t('dashLastExtraction')}</span>
                   </span>
+                  <MetricsPanel metrics={health.metrics} translate={t} />
+                  <FailuresPanel failures={health.backgroundFailures} translate={t} />
                 </div>
               )
           )
@@ -615,9 +752,28 @@ function MemorySectionContent(props: MemorySectionProps): ReactNode {
         )
         : null}
 
+      {tab === 'audit'
+        ? (
+          <MemoryAuditTab
+            state={state}
+            translate={t}
+            onLoad={() => { void props.loadAudit() }}
+            onToggleFilter={(dimension, value) => { void props.toggleAuditFilter(dimension, value) }}
+          />
+        )
+        : null}
+
       {tab === 'manage'
         ? (
           <>
+            <MemoryCreateForm
+              open={creating}
+              projects={state.projects}
+              translate={t}
+              onToggle={() => { setCreating(open => !open) }}
+              onSubmit={(input) => props.createEntry(input)}
+            />
+
             {/* Toolbar */}
             <div className={css.toolbar}>
               <div className={css.toolbarRow}>

@@ -237,7 +237,7 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       expect(preview.length).toBe(100)
     })
 
-    it('caps audit records at 200, keeping the newest', async () => {
+    it('caps audit records at 500, keeping the newest', async () => {
       // The cap is asserted against the real composition, but the overflow is
       // seeded on the medium instead of produced by 205 live adds: each add
       // publishes the whole JSON file with an fsync, and ~415 of those blew
@@ -245,7 +245,7 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       // audit table exercises the same trim path.
       await root.dispose()
       const audit: Record<string, unknown> = {}
-      for (let i = 0; i < 204; i++) {
+      for (let i = 0; i < 504; i++) {
         audit[`seed-${i}`] = {
           id: `seed-${i}`,
           op: 'add',
@@ -270,14 +270,14 @@ describe('integration: real composition (§3.1 + §3.2)', () => {
       await ctx2.plugin(memoryStore)
       const store2 = ctx2.get('memory') as DomainMemoryStore
 
-      await store2.add({ scope: 'global', content: 'fact 204' })
+      await store2.add({ scope: 'global', content: 'fact 504' })
 
       const auditOut = store2.listAudit()
-      expect(auditOut).toHaveLength(200)
-      // Newest first: the just-added "fact 204" is at the head.
-      expect(auditOut[0]!.contentPreview).toBe('fact 204')
+      expect(auditOut).toHaveLength(500)
+      // Newest first: the just-added "fact 504" is at the head.
+      expect(auditOut[0]!.contentPreview).toBe('fact 504')
       // The oldest surviving should be "fact 5" (facts 0-4 trimmed).
-      expect(auditOut[199]!.contentPreview).toBe('fact 5')
+      expect(auditOut[499]!.contentPreview).toBe('fact 5')
 
       await root2.dispose()
     })

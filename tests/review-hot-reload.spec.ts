@@ -56,7 +56,7 @@ class RecordingStore extends MemoryStore {
 
 /** The accumulator shape the fake projection handle reports. */
 interface FakeAccumulator {
-  candidates: { text: string; signal: string; seq: number }[]
+  candidates: { text: string; signal: string; seq: number; strong?: boolean; context?: string }[]
   count: number
   openCalls: Record<string, never>
   openStreaks: Record<string, never>
@@ -144,6 +144,113 @@ const BASE_CONFIG: review.Config = {
   consolidation: 'legacy-judge',
   curatorEnabled: false,
 }
+
+describe('review drain: strong signals and measured budget', () => {
+  it('drains a single explicit-remember candidate below the threshold', async () => {
+    const ctx = new Context()
+    const store = new RecordingStore()
+    const calls: LlmCall[] = []
+    const session = fakeSession('session-strong')
+    const state: FakeAccumulator = {
+      candidates: [{ text: '记住我叫陈宏伟', signal: 'keyword', seq: 1, strong: true }],
+      count: 1,
+      openCalls: {},
+      openStreaks: {},
+    }
+    seatSeams(ctx, store, calls, state, () => 'user: 用户名叫陈宏伟')
+    const fiber = await mountReview(ctx, { ...BASE_CONFIG, reviewCandidateThreshold: 10 })
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    // One candidate, threshold 10 — only the strong marker makes this drain.
+    expect(calls).toHaveLength(1)
+    expect(store.added).toHaveLength(1)
+    await fiber.dispose()
+  })
+
+  it('leaves a weak candidate below the threshold for the next crossing', async () => {
+    const ctx = new Context()
+    const store = new RecordingStore()
+    const calls: LlmCall[] = []
+    const session = fakeSession('session-weak')
+    const state: FakeAccumulator = {
+      candidates: [{ text: '我习惯用 pnpm', signal: 'preference', seq: 1 }],
+      count: 1,
+      openCalls: {},
+      openStreaks: {},
+    }
+    seatSeams(ctx, store, calls, state, () => 'user: prefers pnpm')
+    const fiber = await mountReview(ctx, { ...BASE_CONFIG, reviewCandidateThreshold: 3 })
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    expect(calls).toHaveLength(0)
+    await fiber.dispose()
+  })
+
+  it('charges the budget for the calls a drain actually made', async () => {
+    const ctx = new Context()
+    const store = new RecordingStore()
+    const calls: LlmCall[] = []
+    const session = fakeSession('session-budget')
+    // Two partitions (a pitfall and a plain candidate) = two LLM calls, while
+    // the old accounting charged one per drain.
+    const state: FakeAccumulator = {
+      candidates: [
+        { text: 'tool "bash" failed 2 time(s). Last error: x.', signal: 'pitfall-resolved', seq: 1 },
+        { text: 'remember that deploys use helm', signal: 'keyword', seq: 2, strong: true },
+      ],
+      count: 2,
+      openCalls: {},
+      openStreaks: {},
+    }
+    seatSeams(ctx, store, calls, state, () => 'global: use helm for deploys')
+    const fiber = await mountReview(ctx, { ...BASE_CONFIG, extractionBudget: 2, reviewCandidateThreshold: 10 })
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    expect(calls).toHaveLength(2)
+
+    // The budget (2) is now spent by exactly those two calls: a new strong
+    // candidate must not run a third.
+    state.candidates = [{ text: 'remember that deploys use helm', signal: 'keyword', seq: 3, strong: true }]
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    expect(calls).toHaveLength(2)
+    await fiber.dispose()
+  })
+
+  it('does not charge a drain whose call failed', async () => {
+    const ctx = new Context()
+    const store = new RecordingStore()
+    let attempts = 0
+    ctx.provide('llm', {
+      stream: () => {
+        attempts += 1
+        return (async function* () {
+          yield { type: 'block-start', index: 0, blockType: 'text' } as StreamChunk
+          throw new Error('stream failed')
+        })()
+      },
+    } as never)
+    ctx.provide('memory', store)
+    const session = fakeSession('session-fail')
+    const state: FakeAccumulator = {
+      candidates: [{ text: 'remember that deploys use helm', signal: 'keyword', seq: 1, strong: true }],
+      count: 1,
+      openCalls: {},
+      openStreaks: {},
+    }
+    ctx.provide('sessionProjections', { register: async () => ({ stateOf: () => state }) } as never)
+    const fiber = await mountReview(ctx, { ...BASE_CONFIG, extractionBudget: 1, reviewCandidateThreshold: 10 })
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    expect(attempts).toBe(1)
+    // The failed call charged nothing, so the same session still has budget:
+    // the retry reaches the LLM again instead of being refused.
+    await ctx.waterfall('agent/pre-step', stepPayload(session), nextStep)
+    await settle()
+    expect(attempts).toBe(2)
+    await fiber.dispose()
+  })
+})
 
 describe('memory-review runtime state across a settings re-apply', () => {
   it('keeps the high-water mark for the same session', async () => {

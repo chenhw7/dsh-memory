@@ -421,6 +421,160 @@ const RULES = `
   line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
 }
+
+/* Operation counters and swallowed-failure diagnostics (Overview tab). */
+.dsm-s-metric-group {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--dsw-alias-separator);
+}
+
+.dsm-s-metric-group-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsm-s-metric-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsm-s-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 16px;
+}
+
+.dsm-s-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dsm-s-metric-value {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsm-s-metric-label {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsm-s-failure-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsm-s-failure-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsm-s-failure-site {
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+}
+
+.dsm-s-failure-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-error, #c0392b);
+}
+
+/* Audit trail tab. */
+.dsm-s-audit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dsm-s-audit-table {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsm-s-audit-head,
+.dsm-s-audit-row {
+  display: grid;
+  grid-template-columns: 150px 90px 90px 80px minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 4px;
+  font-size: 12px;
+  align-items: start;
+}
+
+.dsm-s-audit-head {
+  border-bottom: 1px solid var(--dsw-alias-separator);
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 500;
+}
+
+.dsm-s-audit-row {
+  border-bottom: 1px solid var(--dsw-alias-separator-weak, var(--dsw-alias-separator));
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsm-s-audit-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsm-s-audit-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsm-s-audit-ts {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Create form (Manage tab). */
+.dsm-s-create-box {
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-separator);
+  border-radius: 8px;
+  background: var(--dsw-alias-fill-subtle, transparent);
+}
+
+.dsm-s-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dsm-s-create-label {
+  min-width: 96px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
 `
 
 const cls = {
@@ -468,6 +622,30 @@ const cls = {
   badgeHits: 'dsm-s-badge-hits',
   editForm: 'dsm-s-edit-form',
   textarea: 'dsm-s-textarea',
+  // Operation counters + swallowed-failure diagnostics (Overview).
+  metricGroup: 'dsm-s-metric-group',
+  metricGroupTitle: 'dsm-s-metric-group-title',
+  metricHint: 'dsm-s-metric-hint',
+  metricGrid: 'dsm-s-metric-grid',
+  metric: 'dsm-s-metric',
+  metricValue: 'dsm-s-metric-value',
+  metricLabel: 'dsm-s-metric-label',
+  failureList: 'dsm-s-failure-list',
+  failureRow: 'dsm-s-failure-row',
+  failureSite: 'dsm-s-failure-site',
+  failureCount: 'dsm-s-failure-count',
+  // Audit trail tab.
+  auditBar: 'dsm-s-audit-bar',
+  auditTable: 'dsm-s-audit-table',
+  auditHead: 'dsm-s-audit-head',
+  auditRow: 'dsm-s-audit-row',
+  auditCell: 'dsm-s-audit-cell',
+  auditPreview: 'dsm-s-audit-preview',
+  auditTs: 'dsm-s-audit-ts',
+  // Create form (Manage tab).
+  createBox: 'dsm-s-create-box',
+  createRow: 'dsm-s-create-row',
+  createLabel: 'dsm-s-create-label',
   field: 'dsm-s-field',
   formRow: 'dsm-s-form-row',
   reviewHead: 'dsm-s-review-head',

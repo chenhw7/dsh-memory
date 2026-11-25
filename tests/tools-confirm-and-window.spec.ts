@@ -319,6 +319,60 @@ describe('tool writes under human-confirm mode (P1-1/P1-2)', () => {
   })
 })
 
+describe('lifecycle verbs under human-confirm mode (governance parity)', () => {
+  it('memory_remove queues a removal proposal and keeps the entry', async () => {
+    const { ctx, store } = await setup({ confirmBeforeWrite: true })
+    const { entry } = await store.add({ scope: 'global', content: 'a fact to delete', source: 'ui' })
+
+    const result = await callTool(ctx, 'memory_remove', { id: entry.id })
+    expect(result.isError).toBe(false)
+    const value = result.value as { removed: boolean; pending?: boolean }
+    expect(value.removed).toBe(false)
+    expect(value.pending).toBe(true)
+    // Nothing was deleted: the proposal carries the entry's own content so the
+    // queue row shows what is being proposed for removal.
+    expect(store.rows.has(entry.id)).toBe(true)
+    expect(store.proposals[0]).toMatchObject({ targetEntryId: entry.id, action: 'remove', content: 'a fact to delete', source: 'tool' })
+  })
+
+  it('memory_pin and memory_unpin queue proposals instead of mutating', async () => {
+    const { ctx, store } = await setup({ confirmBeforeWrite: true })
+    const { entry } = await store.add({ scope: 'global', content: 'pin target', source: 'ui' })
+
+    const pinned = await callTool(ctx, 'memory_pin', { id: entry.id })
+    expect((pinned.value as { pending?: boolean }).pending).toBe(true)
+    expect(store.get(entry.id)!.pinned).toBeUndefined()
+
+    const unpinned = await callTool(ctx, 'memory_unpin', { id: entry.id })
+    expect((unpinned.value as { pending?: boolean }).pending).toBe(true)
+    expect(store.proposals.map(proposal => proposal.action)).toEqual(['pin', 'unpin'])
+  })
+
+  it('memory_forget turns a topic sweep into one removal proposal per match and deletes nothing', async () => {
+    const { ctx, store } = await setup({ confirmBeforeWrite: true })
+    const { entry: a } = await store.add({ scope: 'global', content: 'postgres tuning note', source: 'ui' })
+    const { entry: b } = await store.add({ scope: 'global', content: 'postgres migration note', source: 'ui' })
+
+    const result = await callTool(ctx, 'memory_forget', { topic: 'postgres', confirm: true })
+    expect(result.isError).toBe(false)
+    const value = result.value as { removedCount: number; pendingCount?: number }
+    expect(value.removedCount).toBe(0)
+    expect(value.pendingCount).toBe(2)
+    expect(store.rows.has(a.id)).toBe(true)
+    expect(store.rows.has(b.id)).toBe(true)
+    expect(store.proposals.every(proposal => proposal.action === 'remove')).toBe(true)
+  })
+
+  it('the same verbs still mutate directly when confirmBeforeWrite is off', async () => {
+    const { ctx, store } = await setup({ confirmBeforeWrite: false })
+    const { entry } = await store.add({ scope: 'global', content: 'direct delete', source: 'ui' })
+    const result = await callTool(ctx, 'memory_remove', { id: entry.id })
+    expect((result.value as { removed: boolean }).removed).toBe(true)
+    expect(store.rows.has(entry.id)).toBe(false)
+    expect(store.proposals).toHaveLength(0)
+  })
+})
+
 describe('scannerAllowlist production wiring (§3.10)', () => {
   /** A sample that trips the DeepSeek secret pattern but is a documented placeholder. */
   const SAMPLE_KEY = 'sk-' + '0'.repeat(32)

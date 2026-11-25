@@ -24,6 +24,8 @@ import type { RecallSource } from '../types.ts'
 import { Bm25Index, tokenizeForSearch, buildCorpusStats, buildCorpusStatsFromTokens, uniqueTokens, weightedOverlapSimilarity } from './bm25.ts'
 import { nextIdentityRecord } from './identity-util.js'
 import { INJECTION_FIELDS, DEFAULT_INJECTION_SETTINGS, resolveInjectionSettings } from './settings.ts'
+import { lastActiveTimestamp } from './decay.ts'
+import { DEFAULT_AUDIT_CAP, DEFAULT_SUGGESTION_CAP } from './limits.ts'
 import type { MemoryInjectionSettings } from './settings.ts'
 import { SqliteMemoryStore, SQLITE_MIGRATION_MARKER } from './sqlite.ts'
 import {
@@ -229,7 +231,7 @@ export interface IdentityTables {
  * default like {@link DEFAULT_ENTRIES_CAP}: settable per deployment through
  * the `config:` entry on the `memory-store` composition row.
  */
-const DEFAULT_AUDIT_CAP = 200
+
 
 /**
  * Maximum memory entries retained in the `entries` table. Write paths
@@ -249,11 +251,7 @@ const DEFAULT_AUDIT_CAP = 200
  */
 const DEFAULT_ENTRIES_CAP = 500
 
-/**
- * Maximum pending suggestions retained (P1-1). Overflow evicts the
- * lowest-signal rows first: fewest hits, then oldest `lastSeenAt`.
- */
-const DEFAULT_SUGGESTION_CAP = 200
+
 
 /**
  * Maximum identity-history snapshots retained per document kind. Overflow
@@ -585,6 +583,8 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly injectionSettings: () => MemoryInjectionSettings
   /** Per-site counts of swallowed failures, surfaced through `health()`. */
   private readonly failureCounts = new Map<string, number>()
+  /** Per-site operation counters for read paths that write no audit record. */
+  private readonly metricCounts = new Map<string, number>()
   /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
   private auditSeq: number | undefined
 
@@ -647,6 +647,11 @@ export class DomainMemoryStore extends MemoryStore {
   override reportFailure(site: string, error?: unknown): void {
     this.failureCounts.set(site, (this.failureCounts.get(site) ?? 0) + 1)
     this.failureLogger?.warn(`dsh-memory: ${site} failed${error === undefined ? '' : `: ${String(error)}`}`)
+  }
+
+  override reportMetric(site: string, amount = 1): void {
+    if (amount <= 0) return
+    this.metricCounts.set(site, (this.metricCounts.get(site) ?? 0) + amount)
   }
 
   // ─── Meta table (subsystem state rows, § consolidation/migration) ──────────
@@ -919,6 +924,11 @@ export class DomainMemoryStore extends MemoryStore {
    * not a mutation. Idempotent per call batch (one call adds exactly one
    * hit per entry, regardless of duplicates inside `ids`); unknown ids and
    * entries removed mid-pass are skipped like a stale recall stamp.
+   *
+   * No audit row is written: the audit table records mutations with their
+   * before/after content, and a hit changes neither, so logging it only
+   * pushed real mutations out of the capped table. Hits are counted as the
+   * `usage.hits` metric instead.
    * @param ids - the ids of the entries the assistant's answer echoed.
    */
   override async markHits(ids: readonly MemoryId[]): Promise<void> {
@@ -926,15 +936,14 @@ export class DomainMemoryStore extends MemoryStore {
     // One batch = one hit per entry, regardless of duplicates inside `ids`
     // (the caller passes the echoed id set; a set has no multiplicity).
     for (const id of [...new Set(ids)]) {
-      const snapshot = this.entries.get(id)
-      if (snapshot === undefined) continue
+      if (this.entries.get(id) === undefined) continue
       try {
         await this.entries.update(id, current => ({
           ...current,
           hitCount: (current.hitCount ?? 0) + 1,
           lastHitAt: now,
         }))
-        await this.appendAudit('update', id, this.entries.get(id) ?? snapshot, 'review', undefined)
+        this.reportMetric('usage.hits', 1)
       } catch (error) {
         // A missing id (entry removed between the caller's answer and this
         // write) or a domain going away mid-pass is a normal end-of-life for
@@ -1007,6 +1016,7 @@ export class DomainMemoryStore extends MemoryStore {
         category: matched.category ?? input.category,
         summary: matched.summary ?? input.summary,
         projectName: matched.projectName ?? input.projectName,
+        ...input.action !== undefined && matched.action === undefined ? { action: input.action } : {},
         hits: matched.hits + 1,
         lastSeenAt: now,
       }
@@ -1025,6 +1035,7 @@ export class DomainMemoryStore extends MemoryStore {
       ...input.summary !== undefined ? { summary: input.summary } : {},
       ...input.projectName !== undefined ? { projectName: input.projectName } : {},
       ...input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {},
+      ...input.action !== undefined ? { action: input.action } : {},
       ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
     }
     await this.suggestions.put(suggestion.id, suggestion)
@@ -1126,6 +1137,19 @@ export class DomainMemoryStore extends MemoryStore {
       await this.suggestions.delete(id)
       return undefined
     }
+    // Lifecycle proposals: the human's yes applies the store operation to the
+    // target. A target that vanished meanwhile leaves nothing to do, which is
+    // the same end state the operation wanted.
+    const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+    if (action === 'remove' || action === 'pin' || action === 'unpin') {
+      if (suggestion.targetEntryId !== undefined) {
+        if (action === 'remove') await this.remove(suggestion.targetEntryId)
+        else if (action === 'pin') await this.pin(suggestion.targetEntryId)
+        else await this.unpin(suggestion.targetEntryId)
+      }
+      await this.suggestions.delete(id)
+      return undefined
+    }
     let entry: MemoryEntry | undefined
     if (suggestion.targetEntryId !== undefined && this.entries.get(suggestion.targetEntryId) !== undefined) {
       entry = await this.update(suggestion.targetEntryId, {
@@ -1176,7 +1200,8 @@ export class DomainMemoryStore extends MemoryStore {
    * row landed. Eviction runs in one pass down TO the cap (not one per add),
    * ordered by the use signal — pinned entries are exempt; the rest go by
    * ascending `accessCount` (never-recalled reads as 0), then ascending
-   * `lastRecalledAt` ?? `createdAt` (longest-unrecalled first). When every
+   * {@link lastActiveTimestamp} (longest-idle first: the newest of create,
+   * edit, recall, and hit). When every
    * remaining candidate is protected (e.g. all pinned), the table is allowed
    * to exceed the cap — the cap is a soft target, eviction never deletes a
    * protected entry to reach it.
@@ -1196,7 +1221,7 @@ export class DomainMemoryStore extends MemoryStore {
     all.sort((a, b) =>
       (a.pinned === true ? 1 : 0) - (b.pinned === true ? 1 : 0)
       || (a.accessCount ?? 0) - (b.accessCount ?? 0)
-      || (a.lastRecalledAt ?? a.createdAt) - (b.lastRecalledAt ?? b.createdAt))
+      || lastActiveTimestamp(a) - lastActiveTimestamp(b))
     const excess = all.length - this.entriesCap
     for (let i = 0; i < excess; i++) {
       const victim = all[i]!
@@ -1400,7 +1425,7 @@ export class DomainMemoryStore extends MemoryStore {
       // Snapshot pass is a cheap pre-filter only: every decision below is
       // re-made on the record current at its write-chain slot, so a pin that
       // lands between this iteration and the write is still honored.
-      const lastActive = snapshot.lastRecalledAt ?? snapshot.createdAt
+      const lastActive = lastActiveTimestamp(snapshot)
       if (now - lastActive < decayMs) continue
       if (snapshot.scope === 'project') {
         // Hard decay: KvTable.update cannot express delete, so the pinned
@@ -1445,7 +1470,7 @@ export class DomainMemoryStore extends MemoryStore {
       let stamped: MemoryEntry | undefined
       try {
         stamped = await this.entries.update(snapshot.id, current => {
-          const lastActiveNow = current.lastRecalledAt ?? current.createdAt
+          const lastActiveNow = lastActiveTimestamp(current)
           if (now - lastActiveNow < decayMs) return current
           const graceFactor = current.importance !== undefined && current.importance >= 4 ? 1.5 : 1
           if (now - lastActiveNow < decayMs * graceFactor) return current
@@ -1501,6 +1526,7 @@ export class DomainMemoryStore extends MemoryStore {
       ...lastActivityTs !== undefined ? { lastActivityTs } : {},
       ...lastExtractionTs !== undefined ? { lastExtractionTs } : {},
       ...this.failureCounts.size > 0 ? { backgroundFailures: Object.fromEntries(this.failureCounts) } : {},
+      ...this.metricCounts.size > 0 ? { metrics: Object.fromEntries(this.metricCounts) } : {},
     }
   }
 

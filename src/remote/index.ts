@@ -187,6 +187,7 @@ function toSuggestionJson(suggestion: MemorySuggestion): MemorySuggestionJson {
     ...suggestion.summary !== undefined ? { summary: suggestion.summary } : {},
     ...suggestion.projectName !== undefined ? { projectName: suggestion.projectName } : {},
     ...suggestion.targetEntryId !== undefined ? { targetEntryId: suggestion.targetEntryId } : {},
+    ...suggestion.action !== undefined ? { action: suggestion.action } : {},
     ...suggestion.identityKind !== undefined ? { identityKind: suggestion.identityKind } : {},
     ...suggestion.sessionId !== undefined ? { sessionId: suggestion.sessionId } : {},
   }
@@ -229,6 +230,7 @@ export interface MemoryAddRequest {
   readonly scope: 'global' | 'project' | 'user'
   readonly content: string
   readonly category?: string
+  readonly summary?: string
   readonly projectName?: string
 }
 
@@ -277,6 +279,8 @@ export interface MemoryHealthResult {
   lastActivityTs?: number
   lastExtractionTs?: number
   backgroundFailures?: Record<string, number>
+  /** Operation counters for read paths that write no audit record. */
+  metrics?: Record<string, number>
 }
 
 /** Distinct `projectName` values across all `project`-scoped entries. */
@@ -286,6 +290,10 @@ export interface MemoryProjectsResult {
 
 export interface MemoryAuditRequest {
   readonly limit?: number
+  /** Keep records whose `op` matches one of these (absent = every op). */
+  readonly ops?: readonly string[]
+  /** Keep records whose `source` matches one of these (absent = every source). */
+  readonly sources?: readonly string[]
 }
 
 export interface MemoryAuditResult {
@@ -308,6 +316,8 @@ export interface MemorySuggestionJson {
   readonly lastSeenAt: number
   /** When set, adoption rewrites this entry instead of creating a new one. */
   readonly targetEntryId?: string
+  /** What adoption does: `add`, `update`, `remove`, `pin`, or `unpin`. */
+  readonly action?: string
   /**
    * When set, the proposal targets an identity document (confirm-mode
    * `identity_update`): adoption rewrites the document instead of any entry,
@@ -534,6 +544,7 @@ export class MemoryRemoteService extends TypertRemoteService {
         content: request.content,
         source: 'ui',
         ...request.category !== undefined ? { category: request.category as MemoryEntry['category'] } : {},
+        ...request.summary !== undefined && request.summary.length > 0 ? { summary: request.summary } : {},
         ...request.projectName !== undefined ? { projectName: request.projectName } : {},
       }
       const { entry } = await store.add(input)
@@ -727,6 +738,7 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (h.lastActivityTs !== undefined) result.lastActivityTs = h.lastActivityTs
     if (h.lastExtractionTs !== undefined) result.lastExtractionTs = h.lastExtractionTs
     if (h.backgroundFailures !== undefined) result.backgroundFailures = h.backgroundFailures
+    if (h.metrics !== undefined) result.metrics = h.metrics
     return result
   }
 
@@ -751,8 +763,11 @@ export class MemoryRemoteService extends TypertRemoteService {
     const store = this.memory()
     if (store === undefined) return { entries: [] }
     const all = store.exportAuditLog()
+    const filtered = all.filter(record =>
+      (request.ops === undefined || request.ops.includes(record.op))
+      && (request.sources === undefined || request.sources.includes(record.source)))
     const limit = request.limit ?? 100
-    const entries = limit > 0 ? all.slice(-limit) : all
+    const entries = limit > 0 ? filtered.slice(-limit) : filtered
     return { entries }
   }
 }

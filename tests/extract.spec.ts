@@ -567,7 +567,7 @@ describe('runReviewExtraction', () => {
     const { store, added } = recordingStore(entries)
     const ctx = fakeCtx(() => makeTextStream('user: prefers dark mode'), store)
     const agent = { session: fakeSession() } as unknown as Agent
-    const n = await runReviewExtraction(ctx, agent, [{ text: 'remember that', signal: 'keyword', seq: 1 }])
+    const n = (await runReviewExtraction(ctx, agent, [{ text: 'remember that', signal: 'keyword', seq: 1 }])).stored
     expect(n).toBe(1)
     expect(added).toHaveLength(1)
     expect(added[0]!.content).toBe('prefers dark mode')
@@ -594,10 +594,10 @@ describe('runReviewExtraction', () => {
         : makeTextStream('global: be concise')
     }, store)
     const agent = { session: fakeSession() } as unknown as Agent
-    const n = await runReviewExtraction(ctx, agent, [
+    const n = (await runReviewExtraction(ctx, agent, [
       { text: 'tool "bash" failed 2 time(s). Last error: x.', signal: 'pitfall-resolved', seq: 1 },
       { text: 'remember that', signal: 'keyword', seq: 2 },
-    ])
+    ])).stored
     expect(systems).toEqual([PITFALL_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT])
     expect(n).toBe(2)
     expect(added).toHaveLength(2)
@@ -615,9 +615,9 @@ describe('runReviewExtraction', () => {
       return makeTextStream('project: [pitfall] x')
     }, store)
     const agent = { session: fakeSession() } as unknown as Agent
-    const n = await runReviewExtraction(ctx, agent, [
+    const n = (await runReviewExtraction(ctx, agent, [
       { text: 'failed 2 time(s)', signal: 'pitfall-resolved', seq: 1 },
-    ])
+    ])).stored
     expect(systems).toEqual([PITFALL_SYSTEM_PROMPT])
     expect(n).toBe(1)
     expect(added[0]!.category).toBe('failure')
@@ -637,7 +637,7 @@ describe('runFlushExtraction', () => {
     const { store, added } = recordingStore()
     const ctx = fakeCtx(() => makeTextStream('global: be concise'), store)
     const session = fakeSession()
-    const n = await runFlushExtraction(ctx, session, ['user: hi', 'assistant: hello'])
+    const n = (await runFlushExtraction(ctx, session, ['user: hi', 'assistant: hello'])).stored
     expect(n).toBe(1)
     expect(added[0]!.scope).toBe('global')
   })
@@ -704,7 +704,7 @@ describe('curator pass (P1-13)', () => {
       { id: 'mem-1' as never, scope: 'user', content: 'long winded original one '.repeat(30), createdAt: 0, updatedAt: 0 },
       { id: 'mem-2' as never, scope: 'user', content: 'long winded original two '.repeat(30), createdAt: 0, updatedAt: 0 },
     ]
-    const rewritten = await runCuration(ctx, session, selected)
+    const rewritten = (await runCuration(ctx, session, selected)).stored
     expect(rewritten).toBe(1)
     expect(updatedCalls).toHaveLength(1)
     expect(updatedCalls[0]).toEqual({ id: 'mem-1', content: 'tight rewrite' })

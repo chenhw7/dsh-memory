@@ -508,6 +508,8 @@ export function apply(ctx: Context, config: LiveConfig<AutoRecallSettings> = DEF
           // recalled through the tool surface.
           const hits = result.entries.filter(entry => entry.staleSince === undefined && entry.status !== 'superseded')
           if (hits.length > 0) {
+            memory.reportMetric('autoRecall.steps', 1)
+            memory.reportMetric('autoRecall.hits', hits.length)
             memory.markRecalled(hits.map(entry => entry.id), 'fence')
             // The auto-recall fence replaces the standing round's injected set for
             // the hit ledger: these are the entries the model sees THIS round.
@@ -532,7 +534,10 @@ export function apply(ctx: Context, config: LiveConfig<AutoRecallSettings> = DEF
       })
       // Committed to emitting: mark the digest sent only now, so any failure
       // above falls through with the flag intact and the digest re-tries.
-      if (digestEmitting && session !== undefined) digestSent.add(session)
+      if (digestEmitting && session !== undefined) {
+        digestSent.add(session)
+        memory.reportMetric('digest.emitted', 1)
+      }
       return { kind: 'enter', messages: [...payload.messages, message] }
     } catch (error) {
       // Injection must never break the step: fall through unchanged, but stay observable.

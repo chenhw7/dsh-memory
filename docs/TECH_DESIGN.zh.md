@@ -25,7 +25,7 @@
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影：将约定/踩坑条目渲染进 `project-notes` prompt 段（0.6 起不写仓库文件——见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)），注册 `ctx.projectNotes` 服务并发布 `ctx.projectNotes.settings()`；`session/created` 时清理 ≤0.5.x 文件导出残留 |
 | `memory-identity` | `@chenhw7/dsh-memory/identity` | 注册 `ctx.identity`；从 store 的 identity 表播种并读取两份自我文档（SOUL.md / USER.md，§7.10），并发布 `ctx.identity.settings()` |
 | `memory-autorecall` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`soul` @80、`user-profile` @81、`memory` @6000、`project-notes` @6001）+ 消息尾部注入中间件（一次性清单 + 每步召回围栏）；持有自动召回设置切片 |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | Memory 面板背后的 `@Remote` 服务（四个 tab、完整写路径） |
 
 记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。每个旋钮都是五个可编辑 profile 条目之一自带 `Config` 的字段，因此设置页写入的就是拥有该字段的那一行；可编辑字段以 `volatile` 声明，宿主就地更新读值而不重启该条目的 fiber，后端选择、容量与种子目录等挂载期字段则重启该行。检索质量不是靠断言而是有证据：一个固定的 golden set（35 条 × 35 组查询，中英混合，含同义改写切片与词形变化切片）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.902），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
 
@@ -306,7 +306,8 @@ interface MemoryEntry {
   - `identity_history` — 以 `` `${kind}#${version}` `` 为键的 KV 表，承载全量版本快照；身份层的审计面（以 entryId 为键的 `audit` 表装不下身份写入）。每类封顶 **20 版**、最旧先淘汰——回滚因此只能在该窗口内恢复。
 - **审计表**为每次 `add`/`update`/`remove`（pin/unpin 变更不写审计）追加一条 `AuditEntry`：
   - `source`：`'tool'` | `'review'` | `'flush'` | `'ui'` | `'janitor'` —— 触发者。经批量整合 `supersedeEntry` 接口落下的 supersede 复用 `'janitor'`：`AuditSource` 枚举没有整合成员，扩展持久化枚举形状不是该接口的职责（与 `trimEntries` 淘汰记录同一理由）。
-  - `op`：`'add'` | `'update'` | `'remove'`。
+  - `op`：`'add'` | `'update'` | `'remove'`（外加破玻璃式原始读取的 `'readRaw'`）。
+  - 表上限 **500 条**（使用命中不再写审计后从 200 提高），保留最新。
   - `contentPreview`：前 ~100 字符；若预览本身未通过扫描则替换为 `'[content redacted]'`。
   - `ts`：Unix epoch ms，外加单调递增 `seq`（首次追加时从介质播种），同毫秒写入因此有确定性顺序。
   - `category?`、`sessionId?`：可选溯源字段。
@@ -337,7 +338,7 @@ interface MemorySuggestion {
 }
 ```
 
-一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；拒绝 → 删除该行）。身份提议（`identityKind` 已设置，confirm 模式下的 `identity_update`）是队列的第二类：去重以文档类别为键而非作用域/内容重叠，`scope` 为持久化行形状固定为 `'global'`，采纳经身份写路径改写文档（`source: 'ui'`）且不产生任何记忆条目；条目提议永不与身份行相配——两个去重维度保持分离。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 IDF 加权 token 重叠 > 0.3（`SUGGESTION_DUP_THRESHOLD`）的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
+一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；生命周期动词 `remove`/`pin`/`unpin` 则对目标施加同名 store 操作，同样只在你采纳后发生；拒绝 → 删除该行）。身份提议（`identityKind` 已设置，confirm 模式下的 `identity_update`）是队列的第二类：去重以文档类别为键而非作用域/内容重叠，`scope` 为持久化行形状固定为 `'global'`，采纳经身份写路径改写文档（`source: 'ui'`）且不产生任何记忆条目；条目提议永不与身份行相配——两个去重维度保持分离。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 IDF 加权 token 重叠 > 0.3（`SUGGESTION_DUP_THRESHOLD`）的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
 
 ### 6.5 会话事件词汇
 
@@ -362,16 +363,18 @@ interface MemorySuggestion {
   - `list`：可选 scope + project 过滤，按 `createdAt` 升序。
   - `pin(id)` / `unpin(id)`：设置 `pinned` 字段（不写审计记录）；返回更新后的条目或 `undefined`。
   - `janitor(decayDays)`：**两层生命周期策略**。快照迭代仅作候选预筛；每个写入决策都在**写入链槽位上重读当前记录**（`KvTable.update` 原子 RMW，与召回戳同一纪律）：
+    - **活动时钟与淘汰共用**（`store/decay.ts` 的 `lastActiveTimestamp`）：取 `createdAt`、`updatedAt`、`lastRecalledAt`、`lastHitAt` 的最新值。旧实现只读 `lastRecalledAt ?? createdAt`，用户刚编辑过的条目会被判过期、也会比真正安静的条目先被淘汰——新鲜度与淘汰顺序同存储自己的信号不一致。
     - `project` 作用域 → **硬衰减**：守卫 update 先重读 `pinned`（pinned → 原样返回并跳过），未 pinned 才删除并审计 `remove`/`janitor`（守卫与删除之间残留一个宿主原语无法关闭的窄窗口，代码注释如实记录）；
     - `global`/`user` 作用域 → **软衰减**：过期判定、importance 宽限、pinned 豁免、衰减幂等全部在 update 的 transform 内基于重读值判定，通过则打 `staleSince = now` 戳并审计 `update`/`janitor`；从不自动删除。stale 条目退出注入面（prompt 快照、索引、笔记文件、自动召回）但保持可搜索；再次召回即清除该戳。`importance` 4–5 的条目享有 1.5× 的宽限窗口（模型"这条重要"的自评延长可容忍的静默期；召回仍是更强的信号——`stampRecalled` 直接清除衰减戳）。
     - **`supersedeEntry(id, supersededBy, annotate?)`：** 把 `status` 翻转为 `'superseded'`、盖 `supersededBy`、并把调用方的标注追加到正文——单次原子写入（对已 superseded 的条目幂等；以 `update`/`'janitor'` 来源审计）。整合是唯一被允许翻转条目状态的写入方——`update` 刻意不接受它。抽象 `MemoryStore` 的默认实现是返回 `undefined` 的 no-op，未实现该接口的 provider 保持契约合规，其上的 conflict 裁决退化为普通 add。返回被 supersede 的条目，id 不存在时返回 `undefined`；superseded 条目不在 janitor 的处理范围内——其生命周期由整合层持有。
     返回被硬衰减（移除）的 project 条目数。
-  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`consolidate-call`、`consolidate-apply`、`consolidate-supersede`、`consolidate-add`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
+  - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures?, metrics? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`consolidate-call`、`consolidate-apply`、`consolidate-supersede`、`consolidate-add`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
+  - `reportMetric(site, amount = 1)`：`reportFailure` 旁边的计数接口，服务于那些既不是失败、也不写审计记录的操作——`tool.search`、`tool.searchFallback`、`autoRecall.steps`、`autoRecall.hits`、`digest.emitted`、`extract.calls`、`usage.hits`、`flush.compaction`、`flush.dispose`、`curator.passes`，经 `health().metrics` 呈现。使用命中因此不再追加审计行：审计表记录的是带前后正文的变更，命中两者都不改，审计它只会把真正的变更挤出这张有上限的表。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
   - **建议队列（待确认人审表）：**
     - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 IDF 加权 token 重叠 > 0.3 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
     - `listSuggestions()`：`hits` 最高者在前——队列的渲染顺序编码了"频率即信号"。
-    - `adoptSuggestion(id, override?)`：合并可选的人类修改（"先编辑后采纳"——content/category/summary），然后走**完整 store 契约**写入——提议指向既有条目时走 `store.update(targetEntryId, …)`，否则走 `store.add(…)`——使人类决策与手工编辑一样带着扫描 + 审计落库（来自 UI 时 `source: 'ui'`），并删除队例行。
+    - `adoptSuggestion(id, override?)`：合并可选的人类修改（"先编辑后采纳"——content/category/summary），然后按提议的 `action` 分派——`add` 新建条目、`update` 改写目标、生命周期动词 `remove`/`pin`/`unpin` 对目标施加同名 store 操作——使人类决策与手工编辑一样带着扫描 + 审计落库（来自 UI 时 `source: 'ui'`），并删除队例行。旧行没有 `action`，按原规则推断（有 `targetEntryId` 即 `update`，否则 `add`）。
     - `rejectSuggestion(id)`：删除队例行；什么都不写。
 - **BM25 模块（`bm25.ts`）**——纯函数、零依赖：
   - `tokenizeForSearch(text)`：小写化；Latin/字母数字 run 输出单个词元；CJK run 同时输出逐字一元与相邻二元 bigram（bigram 让中文查询具备词级精度——记忆不再匹配所有含"记"的条目——一元保留单字召回）。词袋保留重复项（词频供 BM25 使用）。
@@ -419,14 +422,16 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
   - **`tool/call`** —— 记入 `openCalls`（callId → `{ name, signature, seq }`，上限 64，LRU 淘汰）。签名归一化主参数：`command`/`cmd` 折叠为前两个 token（`npm test`），路径类键直接取路径值，否则退化为裸工具名；≤120 字符。
   - **`tool/result`** —— 一次 `tool/result` 携带的是一条 role 为 `tool` 的独立消息：正文文本块直接在 `data.message.content` 上，调用 id 在 `data.message.toolCallId`（tool 结果不再是 `tool-result` 类型的内容块）。错误开启/延长同签名**失败序列**（计数、截断的最后错误文本 ≤500 字符、首末 seq；至多保留 8 条序列）。随后的**成功**关闭序列：当失败次数达到 `pitfallStreakThreshold`（默认 2）时发出恰好一条携带完整弧线的 **`pitfall-resolved`** 候选（"failed N time(s) before succeeding … resolved by the call at seq X"）。一次性失败不产生候选——压缩/销毁 flush 仍能看到完整事件作为兜底。
 - 收集层只负责*放宽漏斗*：准入保守性（已验证流程、重复主题）由提取 prompt 强制，漏掉一个模式是免费损失，误命中则代价低廉。一条习惯（`preference`/`convention`）仅在用户明确要求或同一主题重复出现时入库——一次性的场景性偏好被丢弃。
+- **三类信号、两档强度。** `keyword`（明确的"记住"指令，`strong`）、`preference`（陈述式长期偏好：我喜欢 / 我习惯 / 一律用 / I prefer / always use / our convention，弱）、`correction`（修订：不对 / 不是…而是 / 改成 / instead of，弱）——外加下方的 `pitfall-resolved` 配对。偏好陈述是最常见的偏好进入对话的方式，缺了它是漏斗最大的洞；扩充后的修订模式补上了那些针对具体陈述（而非泛泛否定）的措辞。
+- **修订带着它修订的对象。** fold 保留最近一条 `assistant/message` 正文（`lastAssistantText`，≤300 字符），作为 `context` 挂到修订候选上；review prompt 以 `revises assistant: …` 形式把它引在片段下，系统提示要求模型提取被更正后的事实、绝不提取被取代的那个。「不对，用 pnpm」离开它所回应的那一轮是无法解读的。
 - 无贡献的事件返回*同一个* state 引用——投影注册表的 `Object.is` 门使 no-op 折叠近乎免费。此路径不跑任何 LLM。
 
 #### 7.3.2 周期 review（drain）与成本护栏
 
 - `agent/pre-step` 监听器读取 agent 会话的投影快照。
 - **会话级高水位**（`WeakMap<Session, number>`）记录上次成功提取覆盖的最大候选 seq；`unprocessed = seq > 高水位的候选`。
-- 当 `unprocessed.length >= reviewCandidateThreshold`（默认 **10**）且预算允许时执行一次 `runReviewExtraction`。高水位**只在成功后推进**——失败的批次保持未处理并在下次越线时重试，写入路径保证重复入库幂等（merge 折入既有条目、新事实只 add 一次）。
-- **提取预算：** `extractionBudget`（默认 **20**，0 = 不限）是跨 review drain、两种 flush 与 curator pass 共享的会话级预算。按 drain/flush/curator *触发*记账（而非内部每次 LLM 调用），因此一个同时发踩坑调用与 review 调用的 drain 只消耗一个单位。
+- 当 `unprocessed.length >= reviewCandidateThreshold`（默认 **10**）**或任何未处理候选带 `strong` 标记**且预算允许时执行一次 `runReviewExtraction`。高水位**只在成功后推进**——失败的批次保持未处理并在下次越线时重试，写入路径保证重复入库幂等（merge 折入既有条目、新事实只 add 一次）。
+- **提取预算：** `extractionBudget`（默认 **20**，0 = 不限）是跨 review drain、两种 flush 与 curator pass 共享的会话级预算。运行前**预检**，运行结束后按该次实际发起的 LLM 调用数**记账**（`ExtractionRunStats.llmCalls`，在每处缝隙计数：两次 review 提示、flush 提示、整合 pass、legacy 逐对裁决）——瞬态失败不再扣费，需要裁决或整合的 drain 按真实成本扣费，取代旧的「每触发一次算一个单位」估算。
 - **裁决开关：** `judgeEnabled`（默认 **true**）控制 legacy 路径上预过滤命中是否跑 LLM 去重裁决。`false`（或无 session）时预过滤命中直接合并（更廉价，可能误合并）。它对默认的 two-tier 整合路径没有作用。
 - 整个 drain 包裹在 try/catch 中：**review 失败绝不能阻塞 step。**
 
@@ -638,7 +643,7 @@ context 插件（`memory-autorecall`）注册的 `agent/pre-step` 中间件至�
 
 ### 7.8 客户端 UI — `/client`（`src/client/`）
 
-客户端有三类界面：Plugins 页签内的**一张 bundle 配置页**、左侧栏的 **Memory 管理面板**（完整写路径——三个 tab 分别覆盖健康仪表盘、待确认提议审核队列、带写操作的条目管理），以及紧随其后的**身份治理面板**——身份层的只读表面：两份文档带版本历史渲染、两步回滚阀门、markdown 导出，任何位置都没有编辑器；文档由 AI 在对话中书写，人只治理（§7.10）。两个管理面板都住在左侧栏的全局面板列表里（`sidebar.panellist` 图标 + `main` 页），不占用 Settings 导航；身份层的*配置*仍在下文 bundle 配置页的 `memory-identity` section。
+客户端有三类界面：Plugins 页签内的**一张 bundle 配置页**、左侧栏的 **Memory 管理面板**（完整写路径——四个 tab 分别覆盖健康仪表盘、待确认提议审核队列、条目管理、审计轨迹），以及紧随其后的**身份治理面板**——身份层的只读表面：两份文档带版本历史渲染、两步回滚阀门、markdown 导出，任何位置都没有编辑器；文档由 AI 在对话中书写，人只治理（§7.10）。两个管理面板都住在左侧栏的全局面板列表里（`sidebar.panellist` 图标 + `main` 页），不占用 Settings 导航；身份层的*配置*仍在下文 bundle 配置页的 `memory-identity` section。
 
 #### Bundle 配置页（`plugins.bundle.config` slot）
 
@@ -662,12 +667,14 @@ context 插件（`memory-autorecall`）注册的 `agent/pre-step` 中间件至�
 
 #### 侧栏管理面板（`main` + `sidebar.panellist` slot，id `memory` / `identity`）
 
-两个面板各占左侧栏全局面板列表的一格，覆盖整个 web profile 的记忆库（三 scope × 全部工作区）。注册契约是成对的：`sidebar.panellist` 的 list `id` 同时是 `main` 的 key——侧栏按该 id 选中主面板页（`layout.selectPanel` 对未注册的 key 直接抛错），行标题由注册的 `label` 函数给出（locale 变化时重读），图标组件只收 `{ size, active }` 画 glyph。两个注册都是**无条件**的：本包的 client 半只在 bundle 被组合时加载，而该 bundle 的 patch 总会插入这些行；不拿配置传输做门控（宿主只投影含 volatile 字段的命名空间，见 §7.4），导航入口不应依赖一个无关传输。面板自带滚动容器与版心（`.dsm-s-panel`，顶边按 `--dsh-frame-top-clearance` 留白、左侧按 `--dsh-frame-leading-clearance` 让开窗口控件），`main` 槽位的挂载会被 layout 保留，因此 `load()` 必须幂等。三个 tab 把 Memory 面板的职责分开：
+两个面板各占左侧栏全局面板列表的一格，覆盖整个 web profile 的记忆库（三 scope × 全部工作区）。注册契约是成对的：`sidebar.panellist` 的 list `id` 同时是 `main` 的 key——侧栏按该 id 选中主面板页（`layout.selectPanel` 对未注册的 key 直接抛错），行标题由注册的 `label` 函数给出（locale 变化时重读），图标组件只收 `{ size, active }` 画 glyph。两个注册都是**无条件**的：本包的 client 半只在 bundle 被组合时加载，而该 bundle 的 patch 总会插入这些行；不拿配置传输做门控（宿主只投影含 volatile 字段的命名空间，见 §7.4），导航入口不应依赖一个无关传输。面板自带滚动容器与版心（`.dsm-s-panel`，顶边按 `--dsh-frame-top-clearance` 留白、左侧按 `--dsh-frame-leading-clearance` 让开窗口控件），`main` 槽位的挂载会被 layout 保留，因此 `load()` 必须幂等。四个 tab 把 Memory 面板的职责分开：
 
-- **Overview tab — 健康仪表盘条：** 总数 / 三 scope 分布 / 置顶 / 休眠（stale，带 hint）/ 审计数 / 最近活动 / 最近提取，来自 `health()`。
+- **Overview tab — 健康仪表盘条：** 总数 / 三 scope 分布 / 置顶 / 休眠（stale，带 hint）/ 审计数 / 最近活动 / 最近提取，来自 `health()`。条下是「看起来闲置」的存储真正需要的两块诊断：**操作计数**（`metrics`：工具检索、零命中兜底、自动召回步数与命中、清单注入、提取调用、冲刷与策展次数、使用命中——进程内单调递增，hint 直说这点）与**被吞掉的后台失败**（`backgroundFailures`）：每条静默降级的尽力而为路径在这里自报计数与名字，于是「什么都没发生」和「有东西悄悄坏了」不再长得一样。
 - **Review tab — 待确认提议队列（P1-1/P1-2）：** `suggestList()` 按 `hits` 最高者在前渲染，每行显示 scope/category 徽标、再观察次数（×N）、首/末次时间戳、溯源，以及——当设置了 `targetEntryId` 时——它将要改写的既有条目。行操作：**采纳**（可选"先编辑后采纳"修改 content/category/summary，经 store 契约以 `source: 'ui'` 落实）与**拒绝**（行被删除，什么都不写）。tab 徽标显示待确认数量；后台刷新保持队列鲜活且不重置编辑中的表单。
+- **Manage tab — 新建表单：** 一条经宿主 `add` 路径直接写入的条目（扫描门禁、`source: 'ui'`、可选类别与摘要），用于人想立刻记下、不必等一轮对话或一次阈值的事实；创建成功后页面重载、表单收起。其下是工具栏：
 - **Manage tab — 工具栏：** scope 分段切换；工作区下拉（数据源 `projects()`）；BM25 搜索框（300 ms 防抖）；类别多选 chips；**逐行写操作：编辑（content / category / summary 内联）、置顶/取消置顶、归档/取消归档（手动休眠戳）、删除**。
 - **列表（懒加载，无分页器）：** 普通浏览经 IntersectionObserver 哨兵加手动"加载更多"兜底，追加 50 条的远程批次（`list` limit/offset，最新优先），并带 `Showing {shown} of {total}` 进度行。搜索或类别筛选激活时，一次无上限 `search` 取回全量命中，后续分片从该本地缓存中揭示——wire 的 search 无 offset，两种模式下 total 均精确。行内含内容截断展开、scope/category 徽标、projectName、📌 置顶与 😴 休眠（灰显 + hint）标记、三个时间戳。
+- **Audit tab — 变更轨迹：** 每次 `add`/`update`/`remove` 与破玻璃式 `readRaw` 读取，最新在后，可按 `op` 与 `source` 筛选；首次打开才加载（诊断面，不属于落地页），使用命中永不出现——命中是计数器而非变更。
 - **召回卫生：** 管理类读取永不计为召回。`memoryRemote.search` 对每个查询盖 `recordRecall: false`，因此浏览既不刷新 `lastRecalledAt` 也不复活休眠条目——模型工具的搜索保持默认盖章行为。
 - **状态机（`memory-section-store.ts`）：** Controller + `createSnapshotStore`（镜像宿主 section-store 房规），`idle → loading → ready/error`；seq token 丢弃过期响应（含被筛选变更取代的追加批）；筛选变更重取第一批发（`reload`），`loadMore` 追加下一分片（浏览时取远程批、筛选时取本地缓存片），初次挂载/重试/断连恢复走全量 `load()`；`connection/reset` 触发自动重载。行操作统一走一个带守卫的 `act()` 辅助——乐观记账、内联 `actionError` 呈现（编辑/删除/置顶/归档/采纳/拒绝）、操作后后台刷新。
 - **数据面（实测结论）：** 调用直接走通用 `/api` RPC 通道——`connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`。宿主 `TypertGatewayService` 对 `/api` 上所有 `<namespace>/<method>` 形态的 endpoint 做 source-mode discovery（反射带 `typertRemote` 绑定的服务按形参名分发），**无需客户端 `$mount` 贡献物**。不走 `$mount` 的原因：(1) 贡献物方法名不得与命名空间服务自有成员撞名（`remove` 即撞，已把服务方法改名 `removeEntry` 规避）；(2) cordis 不允许 fiber inject 声明自己 apply 里才创建的服务，「自产自销」式挂载会触发 *cannot get property "remote.memoryRemote" without inject*。注意 `connection.api.*`（如 ui-agent-preset 的 `api.agentPresets`）是另一套 apiproxy HTTP RPC 面，与 Typert namespace 无关。

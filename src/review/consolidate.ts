@@ -37,6 +37,7 @@ import type { MemoryEntry, MemoryId, AddMemoryInput, AuditSource } from '../type
 import type { ParsedMemory, ExtractionModelOverride } from './extract.ts'
 import { mergeContent } from './dedup.ts'
 import { collectStreamText } from './extract.ts'
+import type { ExtractionStats } from './extract.ts'
 
 /** Producer attribution for the synthetic consolidation request message. */
 const CONSOLIDATE_SOURCE = MEMORY_REVIEW_SOURCE
@@ -318,6 +319,8 @@ export function supersededAnnotation(supersededBy: string): string {
 export interface ApplyConsolidationOptions {
   /** Provenance tag for the audit trail (`'review'` or `'flush'`). */
   readonly source?: AuditSource | undefined
+  /** Call counter the write path increments per LLM call it starts. */
+  readonly stats?: ExtractionStats | undefined
   /** Session id recorded in the audit trail and on the LLM call. */
   readonly sessionId?: string | undefined
   /** Project name inferred from the cwd; an entry's own tag wins over it. */
@@ -404,6 +407,7 @@ export async function applyConsolidation(
       sessionId: session!.id,
       ...opts.signal === undefined ? {} : { signal: opts.signal },
     }
+    if (opts.stats !== undefined) opts.stats.llmCalls += 1
     const text = await collectStreamText(ctx, options)
     verdicts = parseConsolidateVerdicts(text, {
       candidateIds: all.map(candidate => candidate.candidateId),
