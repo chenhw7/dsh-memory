@@ -29,6 +29,7 @@ const CREATE_SCOPES: readonly { readonly value: 'global' | 'project' | 'user'; r
 export function MemoryCreateForm(props: {
   open: boolean
   projects: readonly string[]
+  actionError?: string | null
   translate: (key: LocaleKey) => string
   onToggle: () => void
   onSubmit: (input: {
@@ -39,7 +40,7 @@ export function MemoryCreateForm(props: {
     projectName?: string
   }) => Promise<boolean>
 }): ReactNode {
-  const { open, projects, translate, onToggle, onSubmit } = props
+  const { open, projects, actionError, translate, onToggle, onSubmit } = props
   const [scope, setScope] = useState<'global' | 'project' | 'user'>('user')
   const [content, setContent] = useState('')
   const [category, setCategory] = useState('')
@@ -160,7 +161,7 @@ export function MemoryCreateForm(props: {
           onChange={(event) => { setSummary(event.target.value) }}
         />
       </div>
-      {error === null ? null : <p className={css.error} role="alert">{error}</p>}
+      {error === null ? null : <p className={css.error} role="alert">{actionError ?? error}</p>}
       <div className={css.createRow}>
         <button type="button" className={css.actionBtn} disabled={!valid || saving} onClick={() => { void submit() }}>
           {translate('createSubmit')}

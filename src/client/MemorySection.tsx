@@ -83,6 +83,7 @@ const METRIC_ROWS: readonly { readonly key: string; readonly labelKey: LocaleKey
   { key: 'extract.calls', labelKey: 'metricLabelExtractCalls' },
   { key: 'curator.passes', labelKey: 'metricLabelCurator' },
   { key: 'flush.compaction', labelKey: 'metricLabelFlush' },
+  { key: 'flush.dispose', labelKey: 'metricLabelFlushDispose' },
   { key: 'usage.hits', labelKey: 'metricLabelHits' },
 ]
 
@@ -437,6 +438,8 @@ function SuggestionRow(props: {
   onReject: () => void
 }): ReactNode {
   const { suggestion, scopeLabels, translate, onAdopt, onReject } = props
+  const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+  const editable = action === 'add' || action === 'update'
   const [editing, setEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(suggestion.content)
   const category = suggestion.category
@@ -456,7 +459,7 @@ function SuggestionRow(props: {
           ? null
           : <span className={css.badge}>{translate(proposalActionKey(suggestion)!)}</span>}
       </div>
-      {editing
+      {editable && editing
         ? (
           <div className={css.editForm}>
             <textarea
@@ -480,21 +483,31 @@ function SuggestionRow(props: {
             </div>
           </div>
         )
-        : (
-          <button type="button" className={`${css.content} ${css.contentOpen}`} onClick={() => { setEditing(true) }}>
-            {suggestion.content}
-          </button>
-        )}
+        : editable
+          ? (
+            <button type="button" className={`${css.content} ${css.contentOpen}`} onClick={() => { setEditing(true) }}>
+              {suggestion.content}
+            </button>
+          )
+          : (
+            <p className={`${css.content} ${css.contentOpen}`}>
+              {suggestion.content}
+            </p>
+          )}
       <p className={css.meta}>
         <span>{`${translate('metaSeen')} ${formatTs(suggestion.lastSeenAt, '—')}`}</span>
         <span>{`${translate('metaFirstSeen')} ${formatTs(suggestion.firstSeenAt, '—')}`}</span>
       </p>
-      {!editing
+      {!(editable && editing)
         ? (
           <div className={css.actions}>
-            <button type="button" className={css.actionBtn} onClick={() => { setEditing(true) }}>
-              {translate('editAndAdopt')}
-            </button>
+            {editable
+              ? (
+                <button type="button" className={css.actionBtn} onClick={() => { setEditing(true) }}>
+                  {translate('editAndAdopt')}
+                </button>
+              )
+              : null}
             <button type="button" className={css.actionBtn} onClick={() => { onAdopt(undefined) }}>
               {translate('adoptAction')}
             </button>
@@ -769,6 +782,7 @@ function MemorySectionContent(props: MemorySectionProps): ReactNode {
             <MemoryCreateForm
               open={creating}
               projects={state.projects}
+              actionError={state.actionError}
               translate={t}
               onToggle={() => { setCreating(open => !open) }}
               onSubmit={(input) => props.createEntry(input)}

@@ -585,7 +585,7 @@ export class MemoryRemoteService extends TypertRemoteService {
     if (!this.writesAllowed()) return { removed: false }
     const store = this.memory()
     if (store === undefined) return { removed: false }
-    const removed = await store.remove(request.id as MemoryId)
+    const removed = await store.remove(request.id as MemoryId, 'ui')
     return { removed }
   }
 
@@ -637,6 +637,15 @@ export class MemoryRemoteService extends TypertRemoteService {
       if (suggestion.identityKind !== undefined) {
         const record = store.getIdentity(suggestion.identityKind)
         return { identity: { kind: suggestion.identityKind, version: record?.version ?? 0 }, found: true }
+      }
+      const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+      if (action === 'remove' || action === 'pin' || action === 'unpin') {
+        // Confirm the provider actually consumed the proposal (no-op providers leave the row behind).
+        if (store.getSuggestion(request.id as never) !== undefined) return { found: false }
+        const refreshed = action !== 'remove' && suggestion.targetEntryId !== undefined
+          ? store.get(suggestion.targetEntryId)
+          : undefined
+        return refreshed !== undefined ? { entry: toEntryJson(refreshed), found: true } : { found: true }
       }
       if (entry === undefined) return { found: false }
       return { entry: toEntryJson(entry), found: true }

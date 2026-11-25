@@ -18,7 +18,7 @@ Status: implemented
 
 **更正带着它更正的对象。** 投影状态保留最近一条助手消息正文（≤300 字符），作为 `context` 挂到更正候选上；review prompt 以 `revises assistant: …` 引用它，系统提示要求提取被更正后的事实、绝不提取被取代的那个。「不对，用 pnpm」离开那一轮是无法解读的——否则模型只看到一个否定，得靠猜。
 
-**每条提议携带 `action`，采纳时按它分派。** `SuggestionAction` 为 `add | update | remove | pin | unpin`；缺失即旧的推断规则（有目标为 `update`，否则 `add`）。`adoptSuggestion` 施加 action 指名的 store 操作，于是生命周期动词与写入共用同一队列、同一条 `source: 'ui'` 审计路径、同一道人类门禁。工具面在 `confirmBeforeWrite` 打开时把 `memory_remove`、`memory_forget`、`memory_pin`、`memory_unpin` 走 `observeSuggestion` 并回报 `pending: true`；按主题批量删除会变成每个命中条目一条删除提议，仍受批量上限约束。
+**每条提议携带 `action`，采纳时按它分派。** `SuggestionAction` 为 `add | update | remove | pin | unpin`；缺失即旧的推断规则（有目标为 `update`，否则 `add`）。`DomainMemoryStore` 与 `SqliteMemoryStore` 均持久化 `action`（SQLite 在打开旧表时补齐该列），并按 `(targetEntryId, effectiveAction)` 对指向同条目的提议去重，避免删除与编辑互相吞并。`adoptSuggestion` 施加 action 指名的 store 操作，于是生命周期动词与写入共用同一队列、同一条 `source: 'ui'` 审计路径（`remove` 接受可选 `source`）、同一道人类门禁；`suggestAdopt` 确认队列行被消费后对生命周期提议返回 `found: true`。工具面在 `confirmBeforeWrite` 打开时把 `memory_remove`、`memory_forget`、`memory_pin`、`memory_unpin` 走 `observeSuggestion`（对目标正文先做 `redactBlocked`，使命中扫描器的存量条目仍可提议删除）并回报 `pending: true`；按主题批量删除会变成每个命中条目一条删除提议，仍受批量上限约束。
 
 **预算按实际发生的调用记账。** `hasBudget` 是纯预检；`chargeBudget(session, calls)` 在运行报告自己的 `ExtractionRunStats.llmCalls` 之后执行，计数点在每处缝隙（两次 review 提示、flush 提示、整合 pass、legacy 逐对裁决）。瞬态失败不再扣费，需要裁决的运行按真实成本扣费，取代旧的「每触发一次算一个单位」估算。
 
@@ -55,4 +55,4 @@ Status: implemented
 
 ## 测试
 
-`npm run build` 绿；`npm run test` **1123 通过 / 6 跳过**（`judge-real-api` 无 `DEEPSEEK_API_KEY` 时自跳过）。新增覆盖：`tests/decay-clock.spec.ts`（活动时钟、衰减与淘汰顺序）、`tests/tools-confirm-and-window.spec.ts` 的治理对等块（remove/forget/pin/unpin 在两种设置下的排队与直接变更）、`tests/review-hot-reload.spec.ts` 的 drain/预算块（一个 strong 候选在阈值下触发、弱候选等待、两次调用扣两单位、失败调用不扣）、`tests/accumulator.spec.ts` 的信号类块（强度、偏好类、更正上下文），以及 `tests/memory-section.client.spec.tsx` 的 jsdom 追加（计数与失败面板、审计 tab 加载与筛选重取、新建表单写入与拒绝）。真机：一个携带本 bundle 的隔离 `dsh web` profile 在无头 Chrome 里渲染出第四个 tab、计数、审计筛选，并经表单真实写入一条条目。
+`npm run build` 绿；`npm run test` **1136 通过 / 6 跳过**（`judge-real-api` 无 `DEEPSEEK_API_KEY` 时自跳过）。新增覆盖：`tests/decay-clock.spec.ts`（活动时钟、衰减与淘汰顺序）、`tests/tools-confirm-and-window.spec.ts` 的治理对等块（remove/forget/pin/unpin 在两种设置下的排队、含违规内容条目的脱敏删除提议与直接变更）、`tests/suggestions.spec.ts`（`(targetEntryId, action)` 去重隔离、`'ui'` 删除审计与 SQLite 列迁移）、`tests/remote-service.spec.ts`（`suggestAdopt` 生命周期往返与 UI 删除审计）、`tests/review-hot-reload.spec.ts` 的 drain/预算块（一个 strong 候选在阈值下触发、弱候选等待、两次调用扣两单位、失败调用不扣）、`tests/accumulator.spec.ts` 的信号类块（强度、偏好类、更正上下文），以及 `tests/memory-section.client.spec.tsx` 的 jsdom 追加（计数与失败面板、审计 tab 加载/筛选/变更刷新与竞态保护、生命周期提议禁编辑、新建表单写入与服务端拒绝透传）。真机：一个携带本 bundle 的隔离 `dsh web` profile 在无头 Chrome 里渲染出第四个 tab、计数、审计筛选，并经表单真实写入一条条目。

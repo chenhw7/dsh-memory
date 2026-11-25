@@ -404,7 +404,7 @@ export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): v
     if (!hasBudget(session)) return
     void flushOnCompaction(ctx, session, eventLogs, event.data.compactionId, cfg.extractionModel, cfg.judgeEnabled, cfg.confirmBeforeWrite, cfg.consolidation).then((calls) => {
       chargeBudget(session, calls)
-      ctx.get('memory')?.reportMetric('flush.compaction', 1)
+      if (calls > 0) ctx.get('memory')?.reportMetric('flush.compaction', 1)
     }).catch((error: unknown) => {
       // Best-effort: never blocks compaction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-compaction', error)

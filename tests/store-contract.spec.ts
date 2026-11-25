@@ -1095,6 +1095,14 @@ function runBackendHardeningSuite(name: string, makeStore: () => MemoryStore): v
       const updated = await store.update(entry.id, { content: 'anchored fact', anchors: [secret, 'other-anchor'] })
       expect(updated!.anchors).toEqual(['other-anchor'])
     })
+
+    it('markHits counts usage.hits only for existing entries and skips unknown ids', async () => {
+      const store = makeStore()
+      const { entry } = await store.add({ scope: 'global', content: 'echoed entry' })
+      await store.markHits([entry.id, 'missing-id' as MemoryId])
+      expect(store.get(entry.id)!.hitCount).toBe(1)
+      expect(store.health().metrics?.['usage.hits']).toBe(1)
+    })
   })
 }
 

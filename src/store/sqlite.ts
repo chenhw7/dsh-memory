@@ -47,6 +47,7 @@ import type {
   IdentityKind,
   IdentityRecord,
   MemoryEntry,
+  AuditSource,
   MemoryHealth,
   MemoryId,
   MemorySearchQuery,
@@ -93,7 +94,7 @@ const AUDIT_COLUMNS = [
 /** The suggestions table's columns (MemorySuggestion fields). */
 const SUGGESTION_COLUMNS = [
   'id', 'scope', 'category', 'content', 'summary', 'projectName', 'identityKind', 'hits',
-  'firstSeenAt', 'lastSeenAt', 'targetEntryId', 'source', 'sessionId',
+  'firstSeenAt', 'lastSeenAt', 'targetEntryId', 'action', 'source', 'sessionId',
 ] as const
 
 /** The identity table's columns (IdentityRecord fields, keyed by kind). */
@@ -199,7 +200,7 @@ export class SqliteMemoryStore extends MemoryStore {
     this.auditSeq = this.maxAuditSeq()
   }
 
-  /** Create the tables when absent (zero-migration: existing databases reopen untouched). */
+  /** Create the tables when absent and add forward-compatible columns on existing databases. */
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, ${ENTRY_COLUMNS.filter(column => column !== 'id').map(column => `"${column}"`).join(', ')});
@@ -209,6 +210,10 @@ export class SqliteMemoryStore extends MemoryStore {
       CREATE TABLE IF NOT EXISTS identity (kind TEXT PRIMARY KEY, ${IDENTITY_COLUMNS.filter(column => column !== 'kind').join(', ')});
       CREATE TABLE IF NOT EXISTS identity_history (id TEXT PRIMARY KEY, ${IDENTITY_HISTORY_COLUMNS.filter(column => column !== 'id').join(', ')});
     `)
+    const suggestionCols = this.db.prepare('PRAGMA table_info(suggestions)').all() as Array<{ name: string }>
+    if (!suggestionCols.some(col => col.name === 'action')) {
+      this.db.exec('ALTER TABLE suggestions ADD COLUMN action TEXT')
+    }
   }
 
   /** The resolved `memory` entry settings; see {@link MemoryStore.settings}. */
@@ -328,12 +333,12 @@ export class SqliteMemoryStore extends MemoryStore {
     return asEntry(updated)
   }
 
-  override async remove(id: MemoryId): Promise<boolean> {
+  override async remove(id: MemoryId, source?: AuditSource): Promise<boolean> {
     const existing = this.get(id)
     if (existing === undefined) return false
     this.transaction(() => {
       this.db.prepare('DELETE FROM entries WHERE id = ?').run(id as string)
-      this.appendAudit('remove', id as string, existing as unknown as Row, undefined, undefined, existing.content)
+      this.appendAudit('remove', id as string, existing as unknown as Row, source, undefined, existing.content)
     })
     return true
   }
@@ -441,18 +446,20 @@ export class SqliteMemoryStore extends MemoryStore {
   override async markHits(ids: readonly MemoryId[]): Promise<void> {
     const now = Date.now()
     for (const id of [...new Set(ids)]) {
+      let applied = false
       try {
         this.transaction(() => {
           const current = this.get(id)
           if (current === undefined) return
           this.insertEntry({ ...current, hitCount: (current.hitCount ?? 0) + 1, lastHitAt: now })
+          applied = true
         })
+        if (applied) this.reportMetric('usage.hits', 1)
       } catch (error) {
         if (error instanceof Error && !error.message.includes('no record')) {
           this.reportFailure('mark-hits', error)
         }
       }
-      this.reportMetric('usage.hits', 1)
     }
   }
 
@@ -550,18 +557,22 @@ export class SqliteMemoryStore extends MemoryStore {
       throw new Error(`memory content rejected by scanner: ${scan.reasons.join('; ')}`)
     }
     const now = Date.now()
-    const existing = this.listSuggestions().find(suggestion =>
-      suggestion.identityKind === undefined
-      && suggestion.scope === input.scope
-      && (input.targetEntryId !== undefined
-        ? suggestion.targetEntryId === input.targetEntryId
-        : jaccardish(suggestion.content, input.content) > 0.6))
+    const inputAction = input.action ?? (input.targetEntryId !== undefined ? 'update' : 'add')
+    const existing = this.listSuggestions().find(suggestion => {
+      if (suggestion.identityKind !== undefined || suggestion.scope !== input.scope) return false
+      if (input.targetEntryId !== undefined) {
+        const suggestionAction = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+        return suggestion.targetEntryId === input.targetEntryId && suggestionAction === inputAction
+      }
+      return jaccardish(suggestion.content, input.content) > 0.6
+    })
     if (existing !== undefined) {
       const updated: Row = {
         ...existing,
         hits: existing.hits + 1,
         lastSeenAt: now,
         ...(existing.category === undefined && input.category !== undefined ? { category: input.category } : {}),
+        ...(existing.action === undefined && input.action !== undefined ? { action: input.action } : {}),
         ...(input.content.length > existing.content.length ? { content: input.content } : {}),
       }
       this.transaction(() => { this.insertSuggestion(updated) })
@@ -578,6 +589,7 @@ export class SqliteMemoryStore extends MemoryStore {
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
       ...(input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {}),
+      ...(input.action !== undefined ? { action: input.action } : {}),
       ...(input.source !== undefined ? { source: input.source } : {}),
       ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     }

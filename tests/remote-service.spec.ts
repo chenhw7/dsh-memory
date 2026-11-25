@@ -93,8 +93,22 @@ class TestMemoryStore extends MemoryStore {
     return updated
   }
 
-  override async remove(id: string): Promise<boolean> {
-    return this.map.delete(id)
+  override async remove(id: string, source?: import('../src/index.ts').AuditSource): Promise<boolean> {
+    const existing = this.map.get(id)
+    if (existing === undefined) return false
+    const deleted = this.map.delete(id)
+    if (deleted) {
+      this.auditLog.push({
+        id: `audit-${this.auditLog.length + 1}` as never,
+        op: 'remove',
+        entryId: existing.id,
+        scope: existing.scope,
+        source: source ?? 'tool',
+        ts: Date.now(),
+        contentPreview: existing.content.slice(0, 100),
+      })
+    }
+    return deleted
   }
 
   override search(query: MemorySearchQuery): { entries: readonly MemoryEntry[]; total: number } {
@@ -221,6 +235,8 @@ class TestMemoryStore extends MemoryStore {
       firstSeenAt: now,
       lastSeenAt: now,
       source: input.source,
+      ...(input.targetEntryId !== undefined ? { targetEntryId: input.targetEntryId } : {}),
+      ...(input.action !== undefined ? { action: input.action } : {}),
       ...(input.identityKind !== undefined ? { identityKind: input.identityKind } : {}),
     }
     this.suggestionRows.set(suggestion.id as string, suggestion)
@@ -243,8 +259,18 @@ class TestMemoryStore extends MemoryStore {
       this.suggestionRows.delete(id)
       return undefined
     }
+    const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+    if (action === 'remove' || action === 'pin' || action === 'unpin') {
+      if (suggestion.targetEntryId !== undefined) {
+        if (action === 'remove') await this.remove(suggestion.targetEntryId, 'ui')
+        else if (action === 'pin') await this.pin(suggestion.targetEntryId)
+        else await this.unpin(suggestion.targetEntryId)
+      }
+      this.suggestionRows.delete(id)
+      return undefined
+    }
     // Entry proposals stay the base no-op — this stand-in serves the identity
-    // governance tests; entry adoption is covered by the real-store suites.
+    // and lifecycle governance tests; entry adoption is covered by the real-store suites.
     return super.adoptSuggestion(id as never)
   }
 }
@@ -648,5 +674,49 @@ describe('memoryRemote identity governance surface', () => {
     await store.observeSuggestion({ scope: 'global', content: '画像提案', source: 'tool', identityKind: 'user' })
     const list = service.suggestList()
     expect(list.suggestions[0]?.identityKind).toBe('user')
+  })
+
+  it('suggestAdopt reports found:true for adopted remove/pin/unpin proposals and audits UI removals', async () => {
+    const { store, service } = setup(
+      [
+        entry({ scope: 'global', content: 'pin target', id: 'mem-pin' }),
+        entry({ scope: 'global', content: 'remove target', id: 'mem-rm' }),
+      ],
+      { remoteWritesEnabled: true },
+    )
+    const pinProposal = await store.observeSuggestion({
+      scope: 'global',
+      content: 'pin target',
+      targetEntryId: 'mem-pin' as MemoryId,
+      action: 'pin',
+      source: 'tool',
+    })
+    const pinRes = await service.suggestAdopt({ id: pinProposal.id as string })
+    expect(pinRes.found).toBe(true)
+    expect(pinRes.entry?.pinned).toBe(true)
+    expect(store.get('mem-pin' as MemoryId)?.pinned).toBe(true)
+
+    const rmProposal = await store.observeSuggestion({
+      scope: 'global',
+      content: 'remove target',
+      targetEntryId: 'mem-rm' as MemoryId,
+      action: 'remove',
+      source: 'tool',
+    })
+    const rmRes = await service.suggestAdopt({ id: rmProposal.id as string })
+    expect(rmRes.found).toBe(true)
+    expect(rmRes.entry).toBeUndefined()
+    expect(store.get('mem-rm' as MemoryId)).toBeUndefined()
+    expect(store.exportAuditLog().find(r => r.op === 'remove' && r.entryId === 'mem-rm')?.source).toBe('ui')
+  })
+
+  it('removeEntry audits direct UI deletions with source ui', async () => {
+    const { store, service } = setup(
+      [entry({ scope: 'global', content: 'direct delete', id: 'mem-del' })],
+      { remoteWritesEnabled: true },
+    )
+    const res = await service.removeEntry({ id: 'mem-del' })
+    expect(res.removed).toBe(true)
+    expect(store.exportAuditLog().find(r => r.op === 'remove' && r.entryId === 'mem-del')?.source).toBe('ui')
   })
 })

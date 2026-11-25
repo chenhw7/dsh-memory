@@ -121,9 +121,10 @@ export abstract class MemoryStore {
   /**
    * Remove one entry by id.
    * @param id - The entry id.
+   * @param source - Provenance tag for the audit trail; defaults to `'tool'` when omitted.
    * @returns `true` when the entry existed and was removed, `false` when absent.
    */
-  abstract remove(id: MemoryId): Promise<boolean>
+  abstract remove(id: MemoryId, source?: AuditSource): Promise<boolean>
 
   /**
    * Search entries by scope, category, project, and a text query. The text

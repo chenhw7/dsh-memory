@@ -293,7 +293,7 @@ dsh web
 | `curatorEveryNSessions` | `20` | 每 N 次会话创建运行一次 curator pass。 |
 | `curatorMaxEntries` | `5` | 每次 curation 最多选中的条目数（最长优先）。 |
 | `curatorMinChars` | `400` | 只有长度不小于该值的条目才会被选中改写。 |
-| `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在左侧栏 Memory 面板的待确认页采纳。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
+| `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在左侧栏 Memory 面板的待确认页采纳；生命周期动词（`memory_remove`、`memory_forget`、`memory_pin`、`memory_unpin`）走同一门禁，作为删除 / 置顶 / 取消置顶提议入队。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
 
 > 特意**没有 `memory-tools` 设置条目**：工具行本身不拥有旋钮。它从 `ctx.memory.settings()` 读 `maxSearchResults`、从 `ctx.memoryReview.settings()` 读 `confirmBeforeWrite`、从 `ctx.identity.settings()` 读身份开关与预算。它自己的 `config.maxSearchResults` 只在没有 store 组合时兜底。
 

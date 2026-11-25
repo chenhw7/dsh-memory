@@ -278,6 +278,77 @@ describe('lifecycle proposals survive the durable round-trip', () => {
     expect(adopted).toBeUndefined()
     expect(store.get(entry.id)).toBeUndefined()
     expect(store.listSuggestions()).toHaveLength(0)
+    const removalAudit = store.listAudit().find(r => r.op === 'remove' && r.entryId === entry.id)
+    expect(removalAudit?.source).toBe('ui')
+  })
+
+  it('distinct actions targeting the same entry never collapse into one proposal', async () => {
+    const store = makeStore()
+    const { entry } = await store.add({ scope: 'global', content: 'original fact' })
+
+    // Queue an implicit update proposal, then a removal against the same entry:
+    // the removal must become its own row instead of mutating the update into a remove.
+    const edit = await store.observeSuggestion({
+      scope: 'global',
+      content: 'updated fact',
+      targetEntryId: entry.id,
+      source: 'tool',
+    })
+    const removal = await store.observeSuggestion({
+      scope: 'global',
+      content: entry.content,
+      targetEntryId: entry.id,
+      action: 'remove',
+      source: 'tool',
+    })
+    expect(removal.id).not.toBe(edit.id)
+    expect(store.listSuggestions()).toHaveLength(2)
+    expect(store.getSuggestion(edit.id)?.action).toBeUndefined()
+    expect(store.getSuggestion(removal.id)?.action).toBe('remove')
+
+    // Re-observing the SAME (targetEntryId, action) pair still deduplicates and bumps hits.
+    const removalAgain = await store.observeSuggestion({
+      scope: 'global',
+      content: entry.content,
+      targetEntryId: entry.id,
+      action: 'remove',
+      source: 'tool',
+    })
+    expect(removalAgain.id).toBe(removal.id)
+    expect(removalAgain.hits).toBe(2)
+    expect(store.listSuggestions()).toHaveLength(2)
+  })
+
+  it('sqlite persists proposal action across reopens and migrates legacy tables', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { DatabaseSync } = await import('node:sqlite')
+    const { SqliteMemoryStore } = await import('../src/store/sqlite.ts')
+
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-sqlite-sug-'))
+    const dbPath = join(dir, 'memory.db')
+    try {
+      // Seed a legacy database whose suggestions table predates the `action` column.
+      const legacy = new DatabaseSync(dbPath)
+      legacy.exec('CREATE TABLE suggestions (id TEXT PRIMARY KEY, scope TEXT, category TEXT, content TEXT, summary TEXT, projectName TEXT, identityKind TEXT, hits INTEGER, firstSeenAt INTEGER, lastSeenAt INTEGER, targetEntryId TEXT, source TEXT, sessionId TEXT)')
+      legacy.close()
+
+      const store = new SqliteMemoryStore({ dbPath })
+      const { entry } = await store.add({ scope: 'global', content: 'sqlite fact' })
+      const edit = await store.observeSuggestion({ scope: 'global', content: 'sqlite edited', targetEntryId: entry.id, source: 'tool' })
+      const removal = await store.observeSuggestion({ scope: 'global', content: entry.content, targetEntryId: entry.id, action: 'remove', source: 'tool' })
+      expect(removal.id).not.toBe(edit.id)
+      store.close()
+
+      // Reopen and verify the action column survived the durable round-trip.
+      const reopened = new SqliteMemoryStore({ dbPath })
+      expect(reopened.getSuggestion(removal.id)?.action).toBe('remove')
+      expect(reopened.getSuggestion(edit.id)?.action).toBeUndefined()
+      reopened.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('adopting a pin proposal pins the target without touching its content', async () => {

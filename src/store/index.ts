@@ -784,12 +784,12 @@ export class DomainMemoryStore extends MemoryStore {
     return updated
   }
 
-  override async remove(id: MemoryId): Promise<boolean> {
+  override async remove(id: MemoryId, source?: AuditSource): Promise<boolean> {
     const existing = this.entries.get(id)
     if (existing === undefined) return false
     const removed = await this.entries.delete(id)
     if (removed) {
-      await this.appendAudit('remove', id, existing, undefined, undefined)
+      await this.appendAudit('remove', id, existing, source, undefined)
     }
     return removed
   }
@@ -993,13 +993,20 @@ export class DomainMemoryStore extends MemoryStore {
       throw new Error(`suggestion summary rejected by scanner: ${summaryScan.reasons.join('; ')}`)
     }
     const now = Date.now()
-    // Match against existing proposals: same target entry wins outright;
-    // otherwise nearest-content in the same scope above the dup threshold.
+    // Match against existing proposals: same target entry AND same effective
+    // action wins outright (so a removal and an edit against the same entry
+    // never collapse into each other); otherwise nearest-content in the same
+    // scope above the dup threshold.
     let matched: MemorySuggestion | undefined
+    const inputAction = input.action ?? (input.targetEntryId !== undefined ? 'update' : 'add')
     const inputTokens = uniqueTokens(input.content)
     for (const [, suggestion] of this.suggestions.entries()) {
       if (input.targetEntryId !== undefined) {
-        if (suggestion.targetEntryId === input.targetEntryId) { matched = suggestion; break }
+        const suggestionAction = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
+        if (suggestion.targetEntryId === input.targetEntryId && suggestionAction === inputAction) {
+          matched = suggestion
+          break
+        }
         continue
       }
       // Identity rows never match entry proposals: their dedup dimension is
@@ -1148,7 +1155,7 @@ export class DomainMemoryStore extends MemoryStore {
     const action = suggestion.action ?? (suggestion.targetEntryId !== undefined ? 'update' : 'add')
     if (action === 'remove' || action === 'pin' || action === 'unpin') {
       if (suggestion.targetEntryId !== undefined) {
-        if (action === 'remove') await this.remove(suggestion.targetEntryId)
+        if (action === 'remove') await this.remove(suggestion.targetEntryId, 'ui')
         else if (action === 'pin') await this.pin(suggestion.targetEntryId)
         else await this.unpin(suggestion.targetEntryId)
       }

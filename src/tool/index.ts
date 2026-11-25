@@ -314,7 +314,10 @@ export function apply(ctx: Context, config: Config): void {
   async function queueLifecycleProposal(store: MemoryStore, action: 'remove' | 'pin' | 'unpin', entry: MemoryEntry): Promise<void> {
     await store.observeSuggestion({
       scope: entry.scope,
-      content: entry.content,
+      // Redact before queueing: a lifecycle proposal displays the target entry
+      // rather than writing new content, so a legacy scanner-blocked entry
+      // must still be removable in confirm mode without duplicating raw secrets.
+      content: redactBlocked(entry.content),
       targetEntryId: entry.id,
       action,
       source: 'tool',

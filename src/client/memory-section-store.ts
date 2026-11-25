@@ -189,6 +189,9 @@ export class MemorySectionController {
   /** Guards against overlapping loads painting partial results. */
   private seq = 0
 
+  /** Guards against overlapping audit loads (rapid filter clicks) painting stale results. */
+  private auditSeq = 0
+
   /** Rows requested per audit load. */
   private readonly auditLimit = AUDIT_PAGE_SIZE
 
@@ -459,7 +462,10 @@ export class MemorySectionController {
       if (entry === undefined) return { ok: false, message: error ?? 'add failed' }
       return { ok: true }
     })
-    if (created) await this.load()
+    if (created) {
+      await this.load()
+      if (this.store.getSnapshot().auditStatus !== 'idle') void this.loadAudit()
+    }
     return created
   }
 
@@ -472,6 +478,7 @@ export class MemorySectionController {
    * @returns once the snapshot reflects the host.
    */
   async loadAudit(): Promise<void> {
+    const ticket = ++this.auditSeq
     const snapshot = this.store.getSnapshot()
     this.set({ auditStatus: snapshot.audit.length === 0 ? 'loading' : snapshot.auditStatus })
     try {
@@ -482,8 +489,10 @@ export class MemorySectionController {
         ...snapshot.auditSources.length > 0 ? { sources: snapshot.auditSources } : {},
       })
       if (!response.result.ok) throw new Error(response.result.error.message)
+      if (ticket !== this.auditSeq) return
       this.set({ auditStatus: 'ready', auditError: null, audit: response.result.value.entries })
     } catch (error) {
+      if (ticket !== this.auditSeq) return
       this.set({ auditStatus: 'error', auditError: messageOf(error) })
     }
   }
@@ -592,6 +601,7 @@ export class MemorySectionController {
     })
     if (done) {
       this.set({ pending: this.store.getSnapshot().pending.filter(s => s.id !== id), actionError: null })
+      if (this.store.getSnapshot().auditStatus !== 'idle') void this.loadAudit()
       await this.reload()
     }
     return done
@@ -611,9 +621,10 @@ export class MemorySectionController {
     return done
   }
 
-  /** Post-mutation repaint: health numbers + the visible list + the queue. */
+  /** Post-mutation repaint: health numbers + the visible list + the queue (+ audit when open). */
   private async refreshAfterMutation(): Promise<void> {
     void this.refreshPending()
+    if (this.store.getSnapshot().auditStatus !== 'idle') void this.loadAudit()
     try {
       const [health] = await Promise.all([this.requireApi().health()])
       if (health.result.ok) this.set({ health: health.result.value })

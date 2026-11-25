@@ -363,6 +363,27 @@ describe('lifecycle verbs under human-confirm mode (governance parity)', () => {
     expect(store.proposals.every(proposal => proposal.action === 'remove')).toBe(true)
   })
 
+  it('memory_remove in confirm mode redacts legacy scanner-blocked content instead of refusing', async () => {
+    const { ctx, store } = await setup({ confirmBeforeWrite: true })
+    const secret = 'my key is sk-' + 'a'.repeat(48)
+    // Bypass add() to seed a legacy entry whose content trips a scanner rule.
+    const poisoned: MemoryEntry = {
+      id: 'mem-poison' as MemoryId,
+      scope: 'global',
+      content: secret,
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    store.rows.set(poisoned.id, poisoned)
+
+    const result = await callTool(ctx, 'memory_remove', { id: poisoned.id })
+    expect(result.isError).toBe(false)
+    expect((result.value as { pending?: boolean }).pending).toBe(true)
+    expect(store.proposals[0]?.action).toBe('remove')
+    expect(store.proposals[0]?.content).toContain('[BLOCKED')
+    expect(store.proposals[0]?.content).not.toContain('sk-')
+  })
+
   it('the same verbs still mutate directly when confirmBeforeWrite is off', async () => {
     const { ctx, store } = await setup({ confirmBeforeWrite: false })
     const { entry } = await store.add({ scope: 'global', content: 'direct delete', source: 'ui' })

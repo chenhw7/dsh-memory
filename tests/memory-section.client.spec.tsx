@@ -617,6 +617,65 @@ describe('audit trail tab', () => {
       expect(calls.some(call => call[0]?.ops?.includes('remove') === true)).toBe(true)
     })
   })
+  it('refreshes an already-opened audit trail after a row mutation and ignores stale filter responses', async () => {
+    const handles = renderSection({ audit: AUDIT_ROWS })
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabAudit }))
+    expect(await screen.findByText('Always pin the CI runner version')).toBeTruthy()
+    const callsBefore = (handles.api.auditLog as ReturnType<typeof vi.fn>).mock.calls.length
+
+    // Mutate a row on the Manage tab — the opened audit tab must re-fetch.
+    fireEvent.click(screen.getByRole('tab', { name: en.tabManage }))
+    const row = (await screen.findAllByRole('listitem'))[0]!
+    fireEvent.click(within(row).getByRole('button', { name: en.unpinAction }))
+    await waitFor(() => {
+      expect((handles.api.auditLog as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsBefore)
+    })
+
+    // Out-of-order audit responses: an older slow response must not overwrite a newer filter.
+    let resolveSlow!: (v: ReturnType<typeof ok<{ entries: readonly AuditEntryJson[] }>>) => void
+    const slow = new Promise<ReturnType<typeof ok<{ entries: readonly AuditEntryJson[] }>>>(resolve => { resolveSlow = resolve })
+    vi.mocked(handles.api.auditLog)
+      .mockReturnValueOnce(slow)
+      .mockResolvedValueOnce(ok({ entries: [AUDIT_ROWS[1]!] }))
+
+    fireEvent.click(screen.getByRole('tab', { name: en.tabAudit }))
+    const addChip = [...document.querySelectorAll('button')].find(b => b.textContent === 'add')!
+    const removeChip = [...document.querySelectorAll('button')].find(b => b.textContent === 'remove')!
+    fireEvent.click(addChip)
+    fireEvent.click(removeChip)
+
+    await waitFor(() => {
+      expect(screen.queryByText('Always pin the CI runner version')).toBeNull()
+      expect(screen.getByText('prefers concise answers')).toBeTruthy()
+    })
+    // Now settle the older slow request — the newer filtered view must stand.
+    resolveSlow(ok({ entries: [AUDIT_ROWS[0]!] }))
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    expect(screen.queryByText('Always pin the CI runner version')).toBeNull()
+    expect(screen.getByText('prefers concise answers')).toBeTruthy()
+  })
+})
+
+describe('lifecycle proposals in review tab', () => {
+  it('hides Edit & adopt on removal/pin proposals so the reviewer cannot enter a dead-end editor', async () => {
+    const removalProposal = {
+      id: 'sug-rm',
+      scope: 'global' as const,
+      content: 'stale convention to remove',
+      hits: 1,
+      firstSeenAt: 1_700_000_000_000,
+      lastSeenAt: 1_700_000_000_000,
+      targetEntryId: 'mem-1',
+      action: 'remove' as const,
+      source: 'tool' as const,
+    }
+    const handles = renderSection({ pending: [removalProposal] })
+    fireEvent.click(await screen.findByRole('tab', { name: en.tabReviewWithCount.replace('{count}', '1') }))
+    expect(await screen.findByText(en.actionRemoveBadge)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.editAndAdopt })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: en.adoptAction }))
+    await waitFor(() => expect(handles.api.suggestAdopt).toHaveBeenCalledWith({ id: 'sug-rm' }))
+  })
 })
 
 describe('create form', () => {
@@ -634,7 +693,7 @@ describe('create form', () => {
     expect(firstCall?.[0]).toMatchObject({ content: 'The deploy runs through helm.', scope: 'user' })
   })
 
-  it('reports a rejection instead of drops it', async () => {
+  it('surfaces the host rejection reason instead of dropping it', async () => {
     const handles = renderSection({ addError: 'rejected by scanner' })
     fireEvent.click(await screen.findByRole('tab', { name: en.tabManage }))
     fireEvent.click(await screen.findByRole('button', { name: en.createTitle }))
@@ -642,6 +701,7 @@ describe('create form', () => {
       target: { value: 'npm_TOKEN=abcdef123456' },
     })
     fireEvent.click(screen.getByRole('button', { name: en.createSubmit }))
-    expect(await screen.findByText(en.createFailed)).toBeTruthy()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('rejected by scanner')
   })
 })
