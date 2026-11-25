@@ -86,7 +86,7 @@ sequenceDiagram
         Tool->>Tool: confirmMode() — live read of confirmBeforeWrite (memory-review ns)
         alt Human-confirm mode ON
             Tool->>Store: store.observeSuggestion({ ...input, source: 'tool' })
-            Note over Store: queue dedup: same targetEntryId or<br/>same-scope Jaccard > 0.15 → hits++, lastSeenAt<br/>superset content replaces; cap 200 (hit-aware eviction)
+            Note over Store: queue dedup: same targetEntryId or<br/>same-scope IDF-weighted overlap > 0.3 → hits++, lastSeenAt<br/>superset content replaces; cap 200 (hit-aware eviction)
             Store-->>Tool: suggestion
             Tool-->>Model: { pending: true, suggestionId }<br/>"queued for human review"
         else Default (confirmBeforeWrite OFF)
@@ -591,11 +591,11 @@ sequenceDiagram
 
 ## 11. Frontend UI Remote Interaction (@Remote service)
 
-The Memory settings section (all three tabs) drives this service directly over the generic `/api` RPC channel — `connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })` — with no client-side contribution mount (the host's TypertGatewayService claims `<namespace>/<method>` endpoints by reflecting the service's `typertRemote` binding).
+The sidebar's Memory panel (all three tabs) drives this service directly over the generic `/api` RPC channel — `connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })` — with no client-side contribution mount (the host's TypertGatewayService claims `<namespace>/<method>` endpoints by reflecting the service's `typertRemote` binding).
 
 ```mermaid
 sequenceDiagram
-    participant UI as Memory section (browser)
+    participant UI as Memory panel (browser)
     participant Remote as memoryRemote @Remote service
     participant Store as store/index.ts
     participant Scanner as scanner.ts
@@ -632,9 +632,9 @@ sequenceDiagram
 
 ---
 
-## 12. Client Settings UI (Five Cards + Memory Section)
+## 12. Client UI (Bundle Config Page + Sidebar Panels)
 
-The browser registers ONE configuration page into Settings → Plugins → the bundle's own page (`plugins.bundle.config`, key `@chenhw7/dsh-memory`), holding five sections — one per entry — plus the standalone **Memory** section (`settings.section`, id `memory`, order 25) with its three tabs (Overview / Review / Manage); each section edits staged drafts that commit as ONE revision-fenced `mutate`.
+The browser registers ONE configuration page into Settings → Plugins → the bundle's own page (`plugins.bundle.config`, key `@chenhw7/dsh-memory`), holding five sections — one per entry — and registers two management panels into the left sidebar's global panel list: `main` occupants keyed `memory` / `identity`, each paired with a `sidebar.panellist` icon of the same id; the three tabs (Overview / Review / Manage) live inside the Memory page. Configuration sections edit staged drafts that commit as ONE revision-fenced `mutate`.
 
 ```mermaid
 sequenceDiagram
@@ -655,8 +655,9 @@ sequenceDiagram
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
     Client->>Form: whileServed([memory · memory-notes · memory-autorecall · memory-identity · memory-review])<br/>→ configForms.get(entryId) for each
     Client->>Browser: slots.register('plugins.bundle.config', key '@chenhw7/dsh-memory', SettingsPage)
-    Client->>Browser: slots.register('settings.section', id 'memory', order 25)
-    Note over Browser,Section: Memory section mounts: Overview (health dashboard) ·<br/>Review (suggestList queue, adopt/reject with edits) ·<br/>Manage (browse + edit/pin/archive/delete)
+    Client->>Browser: slots.register('main', key 'memory') + slots.register('sidebar.panellist', id 'memory', order 30)
+    Client->>Browser: slots.register('main', key 'identity') + slots.register('sidebar.panellist', id 'identity', order 31)
+    Note over Browser,Section: Memory panel mounts: Overview (health dashboard) ·<br/>Review (suggestList queue, adopt/reject with edits) ·<br/>Manage (browse + edit/pin/archive/delete)
 
     Note over Card,Catalog: Phase 2: User opens a card
 
@@ -680,8 +681,8 @@ sequenceDiagram
 
     Note over Runtime: Phase 4: Live application (no restart)
 
-    Runtime->>Runtime: the host re-runs apply(ctx, config) for the changed entry
-    Note over Runtime: context: sections rebuild per assembly, and lazily re-freeze a session<br/>whose snapshot the restart cleared · review: knobs re-resolved per event<br/>tool-memory: search cap from ctx.memory, confirmBeforeWrite from ctx.memoryReview<br/>notes/identity: their services expose settings() for the same reads
+    Runtime->>Runtime: volatile fields: the host updates the live refs in place (no restart); ordinary fields: re-run apply(ctx, config)
+    Note over Runtime: context: sections rebuild per assembly, live knobs land on the next step,<br/>frozen content catches up at the next freeze; ordinary-field restarts re-freeze lazily<br/>review: knobs re-resolved per event · tool-memory: search cap from ctx.memory,<br/>confirmBeforeWrite from ctx.memoryReview · notes/identity: their services expose settings()
 
     Note over Browser,Remote: Phase 5: Memory section data plane (three tabs)
 

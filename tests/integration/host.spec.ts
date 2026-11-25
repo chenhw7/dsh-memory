@@ -81,10 +81,10 @@ async function boot(options: BootOptions = {}): Promise<{
   const root = await ctx.plugin(Storage)
   await ctx.plugin(storageJson, { root: dir })
   await ctx.plugin(storageDomain, { backend: 'json' })
-  await ctx.plugin(memoryStore, memoryStore.Config({ ...BASE_MEMORY, ...options.config }))
+  await ctx.plugin(memoryStore, { ...BASE_MEMORY, ...options.config })
   await ctx.plugin(SystemPrompt)
-  await ctx.plugin(memoryNotes, memoryNotes.Config(BASE_NOTES))
-  await ctx.plugin(memoryContext, memoryContext.Config({}))
+  await ctx.plugin(memoryNotes, BASE_NOTES)
+  await ctx.plugin(memoryContext, {})
   const store = ctx.get('memory') as memoryStore.DomainMemoryStore
   const session = fakeSession()
   const assemble = (): Promise<PromptAssembly> => ctx.get('systemPrompt').assemble({ agent: { session } })

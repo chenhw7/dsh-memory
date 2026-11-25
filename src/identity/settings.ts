@@ -10,6 +10,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { liveValue, type LiveConfig } from '../live-config.ts'
 
 /** Whether the identity layer (soul / user-profile sections) is enabled. Opt-in: default off. */
 export const DEFAULT_IDENTITY_ENABLED = false
@@ -32,9 +33,11 @@ export interface IdentitySettings {
 
 /** Schema fields for the `memory-identity` entry (the identity card's form). */
 export const IDENTITY_FIELDS = {
-  identityEnabled: z.boolean().default(DEFAULT_IDENTITY_ENABLED),
-  soulCharLimit: z.number().step(1).min(0).default(DEFAULT_SOUL_CHAR_LIMIT),
-  userCharLimit: z.number().step(1).min(0).default(DEFAULT_USER_CHAR_LIMIT),
+  identityEnabled: z.boolean().default(DEFAULT_IDENTITY_ENABLED).volatile(),
+  soulCharLimit: z.number().step(1).min(0).default(DEFAULT_SOUL_CHAR_LIMIT).volatile(),
+  userCharLimit: z.number().step(1).min(0).default(DEFAULT_USER_CHAR_LIMIT).volatile(),
+  // Mount-time input: the seed directory is read while the identity layer
+  // mounts, so a change restarts the entry instead of editing it live.
   identitySeedDir: z.string(),
 }
 
@@ -53,11 +56,11 @@ export const DEFAULT_IDENTITY_SETTINGS: IdentitySettings = {
  * @param value - the entry config, possibly partial or absent.
  * @returns the fully-resolved identity settings.
  */
-export function resolveIdentitySettings(value: Partial<IdentitySettings> | undefined): IdentitySettings {
+export function resolveIdentitySettings(value: Partial<LiveConfig<IdentitySettings>> | undefined): IdentitySettings {
   return {
-    identityEnabled: value?.identityEnabled ?? DEFAULT_IDENTITY_ENABLED,
-    soulCharLimit: value?.soulCharLimit ?? DEFAULT_SOUL_CHAR_LIMIT,
-    userCharLimit: value?.userCharLimit ?? DEFAULT_USER_CHAR_LIMIT,
-    identitySeedDir: value?.identitySeedDir ?? DEFAULT_IDENTITY_SEED_DIR,
+    identityEnabled: liveValue(value?.identityEnabled) ?? DEFAULT_IDENTITY_ENABLED,
+    soulCharLimit: liveValue(value?.soulCharLimit) ?? DEFAULT_SOUL_CHAR_LIMIT,
+    userCharLimit: liveValue(value?.userCharLimit) ?? DEFAULT_USER_CHAR_LIMIT,
+    identitySeedDir: liveValue(value?.identitySeedDir) ?? DEFAULT_IDENTITY_SEED_DIR,
   }
 }

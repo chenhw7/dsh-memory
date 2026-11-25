@@ -17,7 +17,7 @@
  *
  * All knobs are live configuration: the `memory-review` entry's `Config` is
  * the settings surface, and handlers read the resolved value per event. The
- * host re-runs `apply` when the card commits a change, so a new value lands on
+ * editable knobs are `volatile` (commits update the live refs in place), so a new value lands on
  * the next event without a restart.
  *
  * @module @chenhw7/dsh-memory/review
@@ -25,6 +25,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { liveValue, type LiveConfig } from '../live-config.ts'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
@@ -135,25 +136,25 @@ export interface Config {
   sweepTopN?: number
 }
 
-export const Config: z<Config> = z.object({
-  reviewEnabled: z.boolean().default(true),
-  reviewCandidateThreshold: z.number().step(1).min(1).default(10),
-  flushOnCompaction: z.boolean().default(true),
-  flushOnDispose: z.boolean().default(true),
-  extractionModelProvider: z.string().default(''),
-  extractionModelModel: z.string().default(''),
-  extractionBudget: z.number().step(1).min(0).default(20),
-  judgeEnabled: z.boolean().default(true),
-  pitfallStreakThreshold: z.number().step(1).min(1).default(2),
-  curatorEnabled: z.boolean().default(true),
-  curatorEveryNSessions: z.number().step(1).min(1).default(20),
-  curatorMaxEntries: z.number().step(1).min(1).default(5),
-  curatorMinChars: z.number().step(1).min(1).default(400),
-  confirmBeforeWrite: z.boolean().default(false),
-  consolidation: z.union(['two-tier', 'legacy-judge'] as const).default('two-tier'),
-  sweepEnabled: z.boolean().default(false),
-  sweepEveryNSessions: z.number().step(1).min(1).default(20),
-  sweepTopN: z.number().step(1).min(2).default(20),
+export const Config = z.object({
+  reviewEnabled: z.boolean().default(true).volatile(),
+  reviewCandidateThreshold: z.number().step(1).min(1).default(10).volatile(),
+  flushOnCompaction: z.boolean().default(true).volatile(),
+  flushOnDispose: z.boolean().default(true).volatile(),
+  extractionModelProvider: z.string().default('').volatile(),
+  extractionModelModel: z.string().default('').volatile(),
+  extractionBudget: z.number().step(1).min(0).default(20).volatile(),
+  judgeEnabled: z.boolean().default(true).volatile(),
+  pitfallStreakThreshold: z.number().step(1).min(1).default(2).volatile(),
+  curatorEnabled: z.boolean().default(true).volatile(),
+  curatorEveryNSessions: z.number().step(1).min(1).default(20).volatile(),
+  curatorMaxEntries: z.number().step(1).min(1).default(5).volatile(),
+  curatorMinChars: z.number().step(1).min(1).default(400).volatile(),
+  confirmBeforeWrite: z.boolean().default(false).volatile(),
+  consolidation: z.union(['two-tier', 'legacy-judge'] as const).default('two-tier').volatile(),
+  sweepEnabled: z.boolean().default(false).volatile(),
+  sweepEveryNSessions: z.number().step(1).min(1).default(20).volatile(),
+  sweepTopN: z.number().step(1).min(2).default(20).volatile(),
 })
 
 /** Resolved config with every default materialized. */
@@ -181,29 +182,31 @@ interface ResolvedConfig {
 const DISPOSE_FLUSH_TIMEOUT_MS = 5_000
 
 /** Resolve the raw config into the runtime form (re-run per resolved read). */
-function resolveConfig(config: Config): ResolvedConfig {
-  const hasOverride = (config.extractionModelProvider ?? '').length > 0 || (config.extractionModelModel ?? '').length > 0
+function resolveConfig(config: Partial<LiveConfig<Config>>): ResolvedConfig {
+  const provider = liveValue(config.extractionModelProvider) ?? ''
+  const model = liveValue(config.extractionModelModel) ?? ''
+  const hasOverride = provider.length > 0 || model.length > 0
   return {
-    reviewEnabled: config.reviewEnabled ?? true,
-    reviewCandidateThreshold: config.reviewCandidateThreshold ?? 10,
-    flushOnCompaction: config.flushOnCompaction ?? true,
-    flushOnDispose: config.flushOnDispose ?? true,
+    reviewEnabled: liveValue(config.reviewEnabled) ?? true,
+    reviewCandidateThreshold: liveValue(config.reviewCandidateThreshold) ?? 10,
+    flushOnCompaction: liveValue(config.flushOnCompaction) ?? true,
+    flushOnDispose: liveValue(config.flushOnDispose) ?? true,
     extractionModel: hasOverride ? {
-      ...(config.extractionModelProvider ?? '').length > 0 ? { provider: config.extractionModelProvider } : {},
-      ...(config.extractionModelModel ?? '').length > 0 ? { model: config.extractionModelModel } : {},
+      ...provider.length > 0 ? { provider } : {},
+      ...model.length > 0 ? { model } : {},
     } : undefined,
-    extractionBudget: config.extractionBudget ?? 20,
-    judgeEnabled: config.judgeEnabled ?? true,
-    pitfallStreakThreshold: config.pitfallStreakThreshold ?? 2,
-    curatorEnabled: config.curatorEnabled ?? true,
-    curatorEveryNSessions: config.curatorEveryNSessions ?? 20,
-    curatorMaxEntries: config.curatorMaxEntries ?? 5,
-    curatorMinChars: config.curatorMinChars ?? 400,
-    confirmBeforeWrite: config.confirmBeforeWrite ?? false,
-    consolidation: config.consolidation ?? 'two-tier',
-    sweepEnabled: config.sweepEnabled ?? false,
-    sweepEveryNSessions: config.sweepEveryNSessions ?? 20,
-    sweepTopN: config.sweepTopN ?? 20,
+    extractionBudget: liveValue(config.extractionBudget) ?? 20,
+    judgeEnabled: liveValue(config.judgeEnabled) ?? true,
+    pitfallStreakThreshold: liveValue(config.pitfallStreakThreshold) ?? 2,
+    curatorEnabled: liveValue(config.curatorEnabled) ?? true,
+    curatorEveryNSessions: liveValue(config.curatorEveryNSessions) ?? 20,
+    curatorMaxEntries: liveValue(config.curatorMaxEntries) ?? 5,
+    curatorMinChars: liveValue(config.curatorMinChars) ?? 400,
+    confirmBeforeWrite: liveValue(config.confirmBeforeWrite) ?? false,
+    consolidation: liveValue(config.consolidation) ?? 'two-tier',
+    sweepEnabled: liveValue(config.sweepEnabled) ?? false,
+    sweepEveryNSessions: liveValue(config.sweepEveryNSessions) ?? 20,
+    sweepTopN: liveValue(config.sweepTopN) ?? 20,
   }
 }
 
@@ -264,11 +267,24 @@ async function flushOnDispose(ctx: Context, session: Session, modelOverride: Ext
 }
 
 /**
+ * Per-session review state held at module scope: a settings change re-runs
+ * this entry's `apply` (the host's per-entry configuration model), and the
+ * restarted fiber must not lose the in-flight session's accumulator marks,
+ * extraction budget, or compaction event log. Sessions are the WeakMap keys,
+ * so the state dies with them; the curator cadence counter is the one value
+ * that outlives a fiber on purpose — it paces passes across the whole process.
+ */
+const highWaterMarks = new WeakMap<Session, number>()
+const extractionCalls = new WeakMap<Session, number>()
+const eventLogs = new WeakMap<Session, SessionEventLog>()
+let curatorSessionCount = 0
+
+/**
  * Install the memory-review function plugin.
  * @param ctx - Cordis context carrying the LLM seam.
  * @param config - plugin configuration (defaults applied by schemastery).
  */
-export function apply(ctx: Context, config: Config = {}): void {
+export function apply(ctx: Context, config: Partial<LiveConfig<Config>> = {}): void {
   // The entry config IS the settings surface: the host resolves it (schema
   // defaults → composition base → user layer) and re-runs this function when
   // the review card commits a change, so `resolved()` always reads the live
@@ -284,11 +300,6 @@ export function apply(ctx: Context, config: Config = {}): void {
   // `decayDays` belongs to the store entry (`ctx.memory`); read it from the
   // service and fall back to the builtin default when no store is composed.
   const readDecayDays = (): number => ctx.get('memory')?.settings().decayDays ?? DEFAULT_DECAY_DAYS
-
-  /** Per-session high-water mark: the seq of the last candidate covered by an extraction. */
-  const highWaterMarks = new WeakMap<Session, number>()
-  /** Per-session extraction call count (§3.6 cost guardrail). */
-  const extractionCalls = new WeakMap<Session, number>()
 
   /** Check and increment the per-session extraction budget. Returns false when exhausted. */
   function checkBudget(session: Session): boolean {
@@ -317,12 +328,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     }).then((handle) => { accumulator = handle })
   })
 
-  // Bounded per-session event log for the compaction flush. The flush needs
-  // the raw text of the events a `compaction/summary` shadows, and the host
-  // deprecates synchronous session-log reads, so this plugin keeps its own
-  // copy of what it already receives — texts by seq plus each summary's
-  // shadowed seqs. A WeakMap: the log dies with its session.
-  const eventLogs = new WeakMap<Session, SessionEventLog>()
+  // Bounded per-session event log for the compaction flush (module-scoped:
+  // the log must survive a settings re-apply). The flush needs the raw text of
+  // the events a `compaction/summary` shadows, and the host deprecates
+  // synchronous session-log reads, so this plugin keeps its own copy of what it
+  // already receives — texts by seq plus each summary's shadowed seqs. A
+  // WeakMap: the log dies with its session.
   const eventLogFor = (session: Session): SessionEventLog => {
     let log = eventLogs.get(session)
     if (log === undefined) {
@@ -363,7 +374,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     return next()
   })
 
-  // Flush on compaction/end (fire-and-forget; never blocks compaction).
+  // Flush on compaction/end (fire-and-forget; never blocks compaction). The
+  // same root-scoped feed the event log subscribes to, with the same `global`
+  // escape so the pair cannot diverge when this entry is composed under an
+  // agent scope.
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'compaction/end') return
     if (event.data.error !== undefined) return
@@ -374,7 +388,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       // Best-effort: never blocks compaction, but stays observable.
       ctx.get('memory')?.reportFailure('flush-compaction', error)
     })
-  })
+  }, { global: true })
 
   // Flush on session/disposed (fire-and-forget; never blocks dispose).
   ctx.on('session/disposed', (session) => {
@@ -406,19 +420,20 @@ export function apply(ctx: Context, config: Config = {}): void {
   // entries to the LLM for a concise rewrite (nanobot-style consolidation,
   // bounded by the extraction budget). Fire-and-forget; never blocks
   // session creation. Selection is deterministic: length desc, then age.
-  let sessionCount = 0
   ctx.on('session/created', (session: Session) => {
-    sessionCount++
+    curatorSessionCount++
     const cfg = resolved()
     if (!cfg.curatorEnabled) return
-    if (sessionCount % cfg.curatorEveryNSessions !== 0) return
+    if (curatorSessionCount % cfg.curatorEveryNSessions !== 0) return
     const memory = ctx.get('memory')
     if (memory === undefined) return
     const selected: MemoryEntry[] = memory.list()
       .filter(entry => entry.content.length >= cfg.curatorMinChars)
       .sort((a, b) => b.content.length - a.content.length || a.createdAt - b.createdAt)
       .slice(0, cfg.curatorMaxEntries)
-    if (selected.length < 2) return
+    // One oversized entry is still worth a pass: the curator rewrites each
+    // selected entry on its own, so a single long entry is a full batch.
+    if (selected.length === 0) return
     if (!checkBudget(session)) return
     void runCuration(ctx, session, selected, cfg.extractionModel, cfg.confirmBeforeWrite).catch((error: unknown) => {
       // Best-effort: curation failures never surface into session creation, but stay observable.

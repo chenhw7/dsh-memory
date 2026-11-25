@@ -40,7 +40,7 @@ export const inject: string[] = []
  * host addresses the entry by, so the page's section and this schema are one
  * binding.
  */
-export const Config: z<IdentitySettings> = z.object(IDENTITY_FIELDS)
+export const Config = z.object(IDENTITY_FIELDS)
 
 /**
  * The raw (unbudgeted) contents of the two identity documents for one
@@ -186,6 +186,7 @@ class IdentityServiceImpl extends IdentityService {
  * @param config - the `memory-identity` entry config.
  */
 export function apply(ctx: Context, config: IdentitySettings = DEFAULT_IDENTITY_SETTINGS): void {
-  const settings = resolveIdentitySettings(config)
-  ctx.provide('identity', new IdentityServiceImpl(ctx, () => settings))
+  // Live read: the editable fields are volatile (the fiber is not restarted
+  // when they change); the seed directory stays a mount-time plain field.
+  ctx.provide('identity', new IdentityServiceImpl(ctx, () => resolveIdentitySettings(config)))
 }

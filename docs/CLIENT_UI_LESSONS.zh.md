@@ -113,7 +113,22 @@ npm run build          # 重新构建 lib/client/index.js
 
 - **两个 keyed slot：** `plugins.bundle.config`（bundle 详情页的正文，key = 包名，如 `@chenhw7/dsh-memory`）与 `plugins.row.config`（单行配置页，key = `<包名>#<行 id>`）。bundle 自己的配置进前者；后者属于官方插件行。
 - **一条目一个表单：** `ctx.configForms.get<T>(entryId)` 给出该条目的 `ConfigForm`（`getSnapshot` / `subscribe` / `set` / `unset` / `mutate`）。读到的 `value` 是宿主镜像里的已解析段（schema 默认 + 组合 base + 用户层），不要自己再维护一份默认值表。
-- **按服务状态挂载：** 用 `ctx.configForms.whileServed([...entryIds], register)` 包住 `ctx.slots.register`，页面只在宿主至少服务其中一个条目时存在；否则一个没组合这些条目的部署里会留下一张空页。
+- **按服务状态挂载：** 用 `ctx.configForms.whileServed([...entryIds], register)` 包住配置页的 `ctx.slots.register`；否则一个没组合这些条目的部署里会留下一张空页。注意「服务」只覆盖声明了 `volatile` 字段的命名空间（宿主用 `volatileForm(schema)` 过滤 `describe()`），所以空页与「字段没标 volatile」是同一个症状——先检查 schema 标记，再怀疑 `whileServed`。
 - **一次保存 = 一次 `mutate(ops, revision)`：** 把整段草稿与已提交值的差异做成有序 `set`/`unset` 列表一次提交，`revision` 取快照里的 `revision`——宿主据此做 CAS，过期即拒绝并触发回读。逐字段 `set` 只适合单个开关或 reset 这类单点写入。
 - **覆盖状态按存在性判断：** 快照的 `user` 是用户层原始文档，字段被覆盖与否看它**是否带有该键**，不看取值是否等于默认值——两者相等的显式覆盖依然是覆盖。`base` 是清空后回落的那一层。
 - **`view` 是 `'summary' | 'page'`：** `plugins.bundle.config` 的贡献物总被要求 `page`；只画卡片形态的组件遇到别的 view 必须自己返回 `null`，否则会在官方插件卡的摘要位上渲染出一整页。
+
+---
+
+## 8. 管理面放左侧栏面板，配置面留在 Plugins
+
+插件把「管理」错放在 Settings 会成为孤岛：Settings 的导航属于宿主的偏好与配置，而当前生态的管理面是**左侧栏全局面板列表**（`sidebar.panellist`）加**主面板**（`main`）。dsh-context、skills-manager、ssh、schedules 都走这对槽位；dsh-context 甚至完全不用 `settings.section`。
+
+- **成对注册，id 即 key：** `ctx.slots.register({ name: 'main', key: 'memory' }, Page)` 与 `ctx.slots.register({ name: 'sidebar.panellist', id: 'memory', order: 30, label: () => t('nav') }, Icon)`。侧栏按 list `id` 选中 `main` 的 key，`ctx.layout.selectPanel(id)` 对未注册的 key **直接抛错**——只注册图标会得到一个点了就报错的按钮。先注册 `main` 再注册图标。
+- **图标只画 glyph：** `sidebar.panellist` 的 owner props 是 `{ size, active }`；行标题来自注册的 `label`（函数形式会随 locale 变化重读），不要试图在图标组件里渲染文字。
+- **入口不要按配置传输门控：** `main` 与图标无条件注册——client 半只在 bundle 被组合时加载，而 bundle 的 patch 总会插入它读取的行；把导航挂到 `configForms` 上会让入口依赖一个与它无关、且只投影 volatile 命名空间的传输（0.10.x 的实测症状就是配置页与面板一起消失）。页面自身对缺席数据降级（远端缺失时显示错误态）即可。
+- **页面自带宽窄与滚动：** `main` 面板不继承 Settings 的版心。面板要自己给滚动容器和最大宽度，顶边按 `--dsh-frame-top-clearance`（48px 常量）留白，左侧用 `--dsh-frame-leading-clearance`（macOS 折叠侧栏、窗口控件条带挂载时才有值）让开；`main` 的挂载会被 layout 保留（切走再切回不重挂），所以首次加载与刷新必须幂等。
+- **配置别搬进去：** 配置仍属于 `plugins.bundle.config`（§7）——面板里用一句 intro 文案指向 Plugins 页签即可，不要把表单塞进管理面板。要让配置页真的出现，条目的可编辑字段必须标 `.volatile()`（宿主只投影 volatile 命名空间），并且插件要按 live ref 读取——否则页面、表单、保存一起静默消失。
+- **多行 bundle 要给每行一个包身份：** 客户端模块扫描器按「最近的 package.json」认包，同一 package 被多个活动行解析到时会整体拒绝。子路径行目录各放一个只含 `name` + `type: module` 的 `package.json`（不带 `dsh.client`），让根行独占 client 发现——参考 `dsh-ops/lib/components/*/package.json`。
+
+**规则：** 内容/管理 → `main` + `sidebar.panellist`；配置 → `plugins.bundle.config`；Settings 只留宿主级偏好。

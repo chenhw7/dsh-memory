@@ -12,7 +12,12 @@
 # way, extraction flushes stay on (they are part of the chain under test), and
 # exactly one injection surface (the system-prompt memory section) is live.
 
-- id: memory-context
+# The injection knobs are split across the rows that own them: the mode and
+# the decay window live on the store row, the sibling surfaces on their own
+# entries. A patch that named the retired `memory-context` row would silently
+# match nothing (the launcher warns and continues), leaving the measurement
+# on factory defaults.
+- id: memory
   config:
     # The suite pins index mode (existence lines in <memory-index>) as a
     # stable, data-resident measurement baseline; it is NOT the factory
@@ -21,10 +26,21 @@
     memoryMode: index
     # No janitor decay inside a run: seed and planted entries must survive.
     decayDays: 0
-    # One injection surface per run: project-notes and step-level auto-recall
-    # are excluded so the system-prompt memory section is the only channel.
+
+# One injection surface per run: project-notes and step-level auto-recall are
+# excluded so the system-prompt memory section is the only channel.
+- id: memory-notes
+  config:
     notesEnabled: false
+
+- id: memory-autorecall
+  config:
     autoRecallEnabled: false
+
+# Enabled by the run's identity axis (`--identity`); off by default.
+- id: memory-identity
+  config:
+    identityEnabled: false
 
 - id: memory-review
   config:

@@ -181,7 +181,7 @@ describe('per-entry Config — one schema per settings page section', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     ctx.provide('memory', new MiniStore(3))
-    const fiber = await ctx.plugin(context, context.Config({}))
+    const fiber = await ctx.plugin(context, {})
     const messages = [createUserMessage({ content: [{ type: 'text', text: 'how do I run the deploy script for staging?' }], source: { kind: 'user' } })]
     const payload = { agent: { session: undefined }, messages, turn: 0, step: 0, signal: new AbortController().signal }
     const innerNext = async (): Promise<{ kind: string; messages: unknown[] }> => ({ kind: 'enter', messages })
@@ -191,13 +191,13 @@ describe('per-entry Config — one schema per settings page section', () => {
 
     // A card write re-runs this entry's apply; the fence obeys the next step.
     await fiber.dispose()
-    const offFiber = await ctx.plugin(context, context.Config({ autoRecallEnabled: false }))
+    const offFiber = await ctx.plugin(context, { autoRecallEnabled: false })
     const off = await ctx.waterfall('agent/pre-step', payload, innerNext)
     expect((off as { messages: unknown[] }).messages).toHaveLength(1)
 
     // And back on again — live, no restart.
     await offFiber.dispose()
-    await ctx.plugin(context, context.Config({ autoRecallEnabled: true }))
+    await ctx.plugin(context, { autoRecallEnabled: true })
     const after = await ctx.waterfall('agent/pre-step', payload, innerNext)
     const appended = (after as { messages: unknown[] }).messages
     expect(appended).toHaveLength(2)
@@ -207,17 +207,17 @@ describe('per-entry Config — one schema per settings page section', () => {
   it('identity enablement rides the identity entry live', async () => {
     const ctx = new Context()
     ctx.provide('memory', new MiniStore(0))
-    const fiber = await ctx.plugin(identity, identity.Config({}))
+    const fiber = await ctx.plugin(identity, {})
     // Disabled by default: the empty snapshot.
     expect(ctx.get('identity')!.snapshotFor()).toEqual({ soul: '', user: '' })
 
     // The card write re-runs the entry's apply: the next read sees it.
     await fiber.dispose()
-    const enabled = await ctx.plugin(identity, identity.Config({ identityEnabled: true }))
+    const enabled = await ctx.plugin(identity, { identityEnabled: true })
     expect(ctx.get('identity')!.snapshotFor().soul.length).toBeGreaterThan(0)
 
     await enabled.dispose()
-    await ctx.plugin(identity, identity.Config({ identityEnabled: false }))
+    await ctx.plugin(identity, { identityEnabled: false })
     expect(ctx.get('identity')!.snapshotFor()).toEqual({ soul: '', user: '' })
   })
 })

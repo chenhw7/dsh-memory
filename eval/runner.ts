@@ -115,26 +115,25 @@ export function effectiveMemoryMode(options: Pick<RunOptions, 'memoryMode' | 'no
 }
 
 /**
- * The memory-context config overlay for one run. An overlay row REPLACES the
- * pinned row's config, so the pins that keep the measurement clean are
- * restated here — without them the omitted knobs would fall back to factory
- * defaults (decay 30d would soft-decay seeded entries mid-run) and blur runs.
- * The identity axis rides the same row: `identityEnabled` turns the
- * `soul`/`user-profile` sections (and the identity_update gate) on; an
- * identity-seeded medium is axis-independent, so the injection is the only
- * variable between an on/off pair.
+ * The injection-axis config overlay for one run: one patch row per entry that
+ * owns a knob. An overlay row REPLACES the pinned row's config, so the pins
+ * that keep the measurement clean are restated here — without them the omitted
+ * knobs would fall back to factory defaults (decay 30d would soft-decay seeded
+ * entries mid-run) and blur runs. The identity axis rides the `memory-identity`
+ * row: `identityEnabled` turns the `soul`/`user-profile` sections (and the
+ * identity_update gate) on; an identity-seeded medium is axis-independent, so
+ * the injection is the only variable between an on/off pair.
+ * @param mode - the injection mode this run measures.
+ * @param identityOn - whether the identity sections stay injected.
+ * @returns patch rows for the store, notes, auto-recall, and identity entries.
  */
-export function memoryModePatch(mode: EffectiveMemoryMode, identityOn: boolean): Record<string, unknown> {
-  return {
-    id: 'memory-context',
-    config: {
-      memoryMode: mode,
-      decayDays: 0,
-      notesEnabled: false,
-      autoRecallEnabled: false,
-      identityEnabled: identityOn,
-    },
-  }
+export function memoryModePatch(mode: EffectiveMemoryMode, identityOn: boolean): Array<Record<string, unknown>> {
+  return [
+    { id: 'memory', config: { memoryMode: mode, decayDays: 0 } },
+    { id: 'memory-notes', config: { notesEnabled: false } },
+    { id: 'memory-autorecall', config: { autoRecallEnabled: false } },
+    { id: 'memory-identity', config: { identityEnabled: identityOn } },
+  ]
 }
 
 /**
@@ -251,7 +250,7 @@ async function runScenario(scenario: EvalScenario, options: RunOptions): Promise
         ...(workspaceCwd !== undefined ? { cwd: workspaceCwd } : {}),
         model: modelOptions(options),
         configPatches: [
-          memoryModePatch(memoryMode, options.identity === true),
+          ...memoryModePatch(memoryMode, options.identity === true),
           // The noise lane pins the review threshold to 1 so its
           // keyword-triggered extraction fires mid-session (see
           // noisyReviewPatch for the dispose-flush race it works around).

@@ -324,7 +324,7 @@ describe('project-notes budget — frozen at snapshot time, not per assembly', (
       const base = { notesEnabled: true }
       // The host validates the stored document against the entry's Config
       // before apply sees it.
-      await ctx.plugin(notes, notes.Config({ ...base, ...seed }))
+      await ctx.plugin(notes, { ...base, ...seed })
       await ctx.plugin(context)
       // Enough conventions that a 300- vs 500-char budget renders differently.
       // Fixed timestamps: the render sorts by `updatedAt`, so wall-clock

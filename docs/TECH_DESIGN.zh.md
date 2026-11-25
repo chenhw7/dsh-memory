@@ -27,7 +27,7 @@
 | `memory-autorecall` | `@chenhw7/dsh-memory/context` | system prompt 注入段（`soul` @80、`user-profile` @81、`memory` @6000、`project-notes` @6001）+ 消息尾部注入中间件（一次性清单 + 每步召回围栏）；持有自动召回设置切片 |
 | `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 设置 UI「记忆」区背后的 `@Remote` 服务（三个 tab、完整写路径） |
 
-记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。每个旋钮都是五个可编辑 profile 条目之一自带 `Config` 的字段，因此设置页写入的就是拥有该字段的那一行，由宿主重新应用该行。检索质量不是靠断言而是有证据：一个固定的 golden set（35 条 × 35 组查询，中英混合，含同义改写切片与词形变化切片）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.902），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
+记忆是带三种作用域（`global` / `project` / `user`）的结构化记录，持久化到 `$DSH_HOME/storages/` 下的单个 JSON 文件。每条写入路径都经过针对密钥、提示注入和泄露模式的安全扫描；每条面向 prompt 的读取路径都会对未通过扫描的内容做再脱敏（`redactBlocked`）。每个旋钮都是五个可编辑 profile 条目之一自带 `Config` 的字段，因此设置页写入的就是拥有该字段的那一行；可编辑字段以 `volatile` 声明，宿主就地更新读值而不重启该条目的 fiber，后端选择、容量与种子目录等挂载期字段则重启该行。检索质量不是靠断言而是有证据：一个固定的 golden set（35 条 × 35 组查询，中英混合，含同义改写切片与词形变化切片）在 CI 中对真实 store 实测（success@5 = 100%、MRR = 0.902），各注入模式的常驻注入成本也按同样方式测量（见 §7.9）。
 
 ---
 
@@ -61,7 +61,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 - **G6 — 两层生命周期。** 过期 `project` 条目硬衰减（移除）；过期 `global`/`user` 条目软衰减（打 `staleSince` 戳，从常驻注入隐藏但仍可搜索）；固定条目始终豁免。
 - **G7 — 项目笔记 prompt 段。** 约定与踩坑从 KV store 渲染进每次会话的 system prompt（`project-notes` 段），与 memory 段落之间无重复注入；不向用户仓库写入任何文件（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）。
 - **G8 — 写入与读取双重安全。** 每条写入路径扫描密钥 / 注入 / 泄露模式；每个面向 prompt 的表面对未通过扫描的内容再脱敏。
-- **G9 — 前端可配置。** 全部设置经 dsh 设置界面以一张 bundle 配置页暴露，页内五个 section，每个绑定到声明这些字段的 profile 条目；提交的改动由宿主校验，拥有该条目的那一行重新应用。
+- **G9 — 前端可配置。** 全部设置经 dsh 设置界面以一张 bundle 配置页暴露，页内五个 section，每个绑定到声明这些字段的 profile 条目；提交的改动由宿主校验，`volatile` 字段就地生效而不重启条目。
 - **G10 — 一条命令安装 / 卸载。** `dsh plugin add` / `dsh plugin remove`；卸载保留用户数据。
 - **G11 — 写路径上的人类治理。** 可选的人审模式（`confirmBeforeWrite`）把每次自动提取*以及*模型发起的写入都路由进待确认提议队列（重复信号累计 `hits`）；采纳（可带修改）是提议变成记忆的唯一途径，因此模型永远无法自我提升（self-promote）。
 - **G12 — 可度量的检索与注入经济性。** 固定 golden set 把召回质量变成 CI 守护的指标（success@k / P@1 / MRR，含 zh/en 切片），把各模式的常驻注入成本变成数字；prompt 预算在字符旁边报告 `≈tokens`。
@@ -80,7 +80,7 @@ dsh 的插件系统——Cordis 依赖注入、profile bundle、`cordis.patch.ym
 6. **该响的地方响，该静的地方静。** 缺失服务在用户最早能看见的点（工具调用）响亮失败，而后台提取静默降级为 no-op。
 7. **prompt 预算纪律与缓存稳定性——指令驻留，数据不驻留。** 冻结段落只承载指令语域文本（policy 指引、框定说明）；数据（记忆内容、索引、清单）走一次性步尾清单消息或每步召回围栏，store 变化时无需逐出任何常驻内容。每个注入块都有上限（`memoryCharLimit` **以及 `memoryMaxEntries`**、notes 的分半区预算 `notesConventionsCharLimit`/`notesPitfallsCharLimit`、清单 `memoryDigestCharLimit`、自动召回围栏固定 1200 字符），且其 ≈token 成本直接报告在表面上。四段按易变度排序——`soul` @80 / `user-profile` @81（整会话冻结），`memory` @6000 / `project-notes` @6001 位于宿主工具指引（TOOL_* 1000–2900、TOOLS_SDK 5000）之后、`DELIVERABLE_FILE_REFERENCES`（9000）之前——compaction 重冻结只牵连前缀尾部，绝不牵连工具指引中段。召回快照按会话冻结（稳定 KV-cache 前缀）；**compaction 是唯一被认可的重新冻结时机**——前缀本来就要重建，同一时机也为一次性清单消息重新布防。
 8. **零重复注入。** 渲染进 `project-notes` 段的条目在 notes 启用期间被排除出 memory 快照/索引；两个表面的成员资格来自同一个共享谓词（`isRenderedEntry`）。
-9. **零配置起步、前端可调。** 各条目 schema 出厂即有合理默认；每个旋钮都能在设置页编辑，提交的改动会重新应用拥有该字段的条目。
+9. **零配置起步、前端可调。** 各条目 schema 出厂即有合理默认；每个可编辑旋钮都以 `volatile` 声明并能在设置页编辑，提交的改动就地生效。
 
 ---
 
@@ -143,7 +143,7 @@ flowchart TB
   - `session/disposed` — 派生消息的 flush 提取（上限 5 秒）;
   - `session/created`（全局）— 冻结会话上下文快照、`decayDays > 0` 时运行 janitor、推进 curator 计数，并按项目根目录执行一次性 ≤0.5.x notes 残留清理。
 - **Prompt 注册表：** 四个注入段——`soul` 位于顺序 **80**、`user-profile` 位于 **81**（身份层启用时），`memory` 位于 **6000**、`project-notes` 位于 **6001**；后两者在宿主工具指引（SECTION_ORDERS：TOOL_* 1000–2900、TOOLS_SDK 5000）之后、`DELIVERABLE_FILE_REFERENCES`（9000）之前。
-- **设置：** 每个 profile 条目自带 `export const Config` 并在 `apply(ctx, config)` 中接收；宿主按 schema 默认值 → 组合 `config:` base → 用户层解析，并在收到已提交的改动时重新执行 `apply`。兄弟插件之间通过拥有该条目的服务共享旋钮（`ctx.memory.settings()`、`ctx.projectNotes.settings()`、`ctx.identity.settings()`、`ctx.memoryReview.settings()`），从不跨命名空间读取。
+- **设置：** 每个 profile 条目自带 `export const Config` 并在 `apply(ctx, config)` 中接收；宿主按 schema 默认值 → 组合 `config:` base → 用户层解析。`volatile` 字段由宿主在提交后**就地更新**（不重启 fiber），其余字段通过重启该条目生效；因此本包的设置 resolver 都经 `liveValue` 读取，既接受宿主注入的 live ref，也接受测试里的普通值。兄弟插件之间通过拥有该条目的服务共享旋钮（`ctx.memory.settings()`、`ctx.projectNotes.settings()`、`ctx.identity.settings()`、`ctx.memoryReview.settings()`），从不跨命名空间读取。
 
 ### 5.3 端到端数据流
 
@@ -337,7 +337,7 @@ interface MemorySuggestion {
 }
 ```
 
-一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；拒绝 → 删除该行）。身份提议（`identityKind` 已设置，confirm 模式下的 `identity_update`）是队列的第二类：去重以文档类别为键而非作用域/内容重叠，`scope` 为持久化行形状固定为 `'global'`，采纳经身份写路径改写文档（`source: 'ui'`）且不产生任何记忆条目；条目提议永不与身份行相配——两个去重维度保持分离。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 Jaccard > 0.15 的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
+一条建议（suggestion）**不是**记忆：它从不注入、从不参与检索、从不衰减——它等待人类决策（采纳 → 内容经完整 store 契约作为 add 写入，或在设置了 `targetEntryId` 时作为 update；拒绝 → 删除该行）。身份提议（`identityKind` 已设置，confirm 模式下的 `identity_update`）是队列的第二类：去重以文档类别为键而非作用域/内容重叠，`scope` 为持久化行形状固定为 `'global'`，采纳经身份写路径改写文档（`source: 'ui'`）且不产生任何记忆条目；条目提议永不与身份行相配——两个去重维度保持分离。再观察时：同一 `targetEntryId` 的提议直接去重胜出，同作用域 IDF 加权 token 重叠 > 0.3（`SUGGESTION_DUP_THRESHOLD`）的提议计为一次重复（`hits` 与 `lastSeenAt` 递增）；信息量严格更大（超集）的内容会替换队列中的原文。队列封顶 **200 条**；溢出时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
 
 ### 6.5 会话事件词汇
 
@@ -369,7 +369,7 @@ interface MemorySuggestion {
   - `health()`：`{ totalEntries, byScope, pinned, auditRecords, stale?, lastActivityTs?, lastExtractionTs?, backgroundFailures? }` —— `stale` 统计当前处于软衰减的条目；`lastExtractionTs` 取最新一条 `review`/`flush` 来源的审计记录时间；`backgroundFailures` 按站点（`audit-append`、`review-drain`、`flush-compaction`、`flush-dispose`、`janitor`、`curator`、`judge`、`consolidate-call`、`consolidate-apply`、`consolidate-supersede`、`consolidate-add`、`row-rewrite`、`compaction-refreeze`、`auto-recall`、`recall-stamp`、`notes-snapshot`、`legacy-cleanup`）统计被后台 best-effort 路径吞掉的失败——每次上报同时经宿主 `ctx.logger` 通道 warn 一条，静默退化的路径因此可观测（进程内计数，重启归零）。
   - `listAudit()` 新→旧返回；`exportAuditLog()` 旧→新返回；两者均按 `ts` 排序、单调 `seq` 决胜、再按 id。
   - **建议队列（待确认人审表）：**
-    - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 Jaccard > 0.15 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
+    - `observeSuggestion(input)`：先过扫描器，再对既有待议去重——同一 `targetEntryId` 直接胜出；同作用域 IDF 加权 token 重叠 > 0.3 计为重复（`hits` 递增、刷新 `lastSeenAt`、采纳较新的字段、严格超集的内容可替换原文）。否则以 `hits: 1` 新入一行。超过 200 行上限时先淘汰 `hits` 最低的，再按 `lastSeenAt` 最旧淘汰。
     - `listSuggestions()`：`hits` 最高者在前——队列的渲染顺序编码了"频率即信号"。
     - `adoptSuggestion(id, override?)`：合并可选的人类修改（"先编辑后采纳"——content/category/summary），然后走**完整 store 契约**写入——提议指向既有条目时走 `store.update(targetEntryId, …)`，否则走 `store.add(…)`——使人类决策与手工编辑一样带着扫描 + 审计落库（来自 UI 时 `source: 'ui'`），并删除队例行。
     - `rejectSuggestion(id)`：删除队例行；什么都不写。
@@ -510,7 +510,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
 
 #### 设置：每个 profile 条目一个 `Config`
 
-五个 profile 条目承载设置，各自声明 `export const Config`（schemastery），由宿主按 schema 默认值 → 组合 `config:` base → 用户层分层解析后交给 `apply(ctx, config)`。条目 id **就是**设置命名空间，因此设置页按这个 id 寻址某一行的配置；已提交的改动会重新执行该条目的 `apply`（fiber 重启），这也是处理器总能读到用户刚保存的值的原因：
+五个 profile 条目承载设置，各自声明 `export const Config`（schemastery），由宿主按 schema 默认值 → 组合 `config:` base → 用户层分层解析后交给 `apply(ctx, config)`。条目 id **就是**设置命名空间，因此设置页按这个 id 寻址某一行的配置。可编辑字段全部以 `.volatile()` 声明：宿主把它们作为 live ref 注入，提交后就地更新，处理器在下一个事件读到新值；`storage`/`entriesCap`/`crossProcessProbeMs`/`identitySeedDir` 这类挂载期字段不标 volatile，改动会重启该条目的 fiber。设置页能看到的命名空间也由 volatile 字段决定——宿主只投影含 volatile 字段的条目：
 
 | 条目（= 设置命名空间） | 持有者 | 键（默认值） |
 |---|---|---|
@@ -543,7 +543,7 @@ review 插件是自动沉淀层。一个 store，五个触发器：周期 drain�
   - `index` —— `readMemoryIndex`：`renderMemoryIndex` 存在性行（`<scope/category> · <project> · <id> · <summary-or-content[:80]>`——条目的 `summary` 优先于截断正文），层级排序 project → user → global，预算耗尽时折叠为类别汇总行；
   - `notes` —— `ctx.get('projectNotes')?.snapshotFor(cwd)`（禁用或服务缺失时空）；
   - 三者存入 `WeakMap<Session, FrozenSnapshot>`，每次冻结读取一次，使两次 compaction 之间的 system prompt 前缀保持 KV-cache 稳定。
-- **冻结快照在设置变更后靠首次触碰重建。** 已提交的设置改动会重跑 `apply`，替换掉 per-session 的 `WeakMap`；在旧 fiber 下创建的会话否则会渲染出空段落。因此 `snapshotOf(session)` 在活跃会话没有快照时惰性冻结，下一次组装便按当前设置与 store 重建。这次重启有两个后果，直说无妨：重建出的快照反映的是重启时刻的 store，而非会话创建时刻的 store；一次性清单标记也随之重置，因此会话可能在一次设置改动后再次收到一次清单。
+- **冻结快照与设置：两档说清。** 可编辑旋钮是 `volatile`：提交后宿主就地更新 live ref，段落在下一次组装读到新的模式/预算，而冻结的内容快照（与一次性清单标记）保持到下一个冻结边界——compaction 或新会话——所以一次设置改动不再强制前缀重建。挂载期普通字段（`storage`、`entriesCap`、`crossProcessProbeMs`、`identitySeedDir`）仍会重启该条目；fiber 换了之后，`snapshotOf(session)` 为没有快照的活跃会话惰性冻结，下一次组装按当前设置与 store 重建。
 - **防重复注入排除：** notes 启用时快照读取器排除满足 `isRenderedEntry(entry, projectNameOf(cwd))` 的条目，笔记已渲染的内容不会再出现在 memory 段落/索引里。
 - **superseded 可见性：** prompt 快照、存在索引、自动召回围栏与清单消息都把 `status: 'superseded'` 的条目按与软衰减相同的方式剔除——矛盾裁决不能让落败的事实继续流入新会话。superseded 条目经工具面（§7.2）保持可见，携带 `superseded` 字段与正文标注。
 - **冲突标注（已接线）：** 在单个作用域内，`annotateConflicts` 把 `correction` 类别条目视为较新的陈述，对与其重叠的旧条目标注——Jaccard ≥ 0.2 且含矛盾信号词（"actually"、"不对"、"改了"等）判 `conflicting`，渲染"(⚠ contradicts a newer correction — verify before trusting)"；仅有主题重叠（≥ 0.15）判 `stale`，渲染"(⚠ possibly outdated…)"。确定性且发生在冻结时刻，标注随快照一起缓存稳定。
@@ -638,11 +638,11 @@ context 插件（`memory-autorecall`）注册的 `agent/pre-step` 中间件至�
 
 ### 7.8 客户端 UI — `/client`（`src/client/`）
 
-客户端有三类界面：Plugins 页签内的**一张 bundle 配置页**、Settings 独立导航区的 **Memory 内容管理区**（完整写路径——三个 tab 分别覆盖健康仪表盘、待确认提议审核队列、带写操作的条目管理），以及**身份治理区**（id `identity`、order 26，紧随 Memory）——身份层的只读表面：两份文档带版本历史渲染、两步回滚阀门、markdown 导出，任何位置都没有编辑器；文档由 AI 在对话中书写，人只治理（§7.10）。身份层的*配置*不在这个区里，而在下文 bundle 配置页的 `memory-identity` section。
+客户端有三类界面：Plugins 页签内的**一张 bundle 配置页**、左侧栏的 **Memory 管理面板**（完整写路径——三个 tab 分别覆盖健康仪表盘、待确认提议审核队列、带写操作的条目管理），以及紧随其后的**身份治理面板**——身份层的只读表面：两份文档带版本历史渲染、两步回滚阀门、markdown 导出，任何位置都没有编辑器；文档由 AI 在对话中书写，人只治理（§7.10）。两个管理面板都住在左侧栏的全局面板列表里（`sidebar.panellist` 图标 + `main` 页），不占用 Settings 导航；身份层的*配置*仍在下文 bundle 配置页的 `memory-identity` section。
 
 #### Bundle 配置页（`plugins.bundle.config` slot）
 
-向 Settings → Plugins 贡献**一张页面**，挂在 `plugins.bundle.config` slot 下、以本 bundle 的包名（`@chenhw7/dsh-memory`）为 key；Plugins 页把它渲染为该 bundle 详情页的正文。注册经 `ctx.configForms.whileServed([...条目 id], register)` 门控，因此页面只在宿主至少服务它编辑的五个条目之一时出现——一个都没组合的部署毫无痕迹。页面渲染**五个可折叠 section**，每个绑定到声明这些字段的条目的 `ConfigForm`（`ctx.configForms.get(entryId)`），因此保存就落在拥有该字段的那一行：
+向 Settings → Plugins 贡献**一张页面**，挂在 `plugins.bundle.config` slot 下、以本 bundle 的包名（`@chenhw7/dsh-memory`）为 key；Plugins 页把它渲染为该 bundle 详情页的正文。注册经 `ctx.configForms.whileServed([...条目 id], register)` 门控，因此页面只在宿主至少服务它编辑的五个条目之一时出现——一个都没组合的部署毫无痕迹；条目能被「服务」的前提是它们暴露 `volatile` 字段（宿主只投影 live 可编辑的命名空间，§7.4）。页面渲染**五个可折叠 section**，每个绑定到声明这些字段的条目的 `ConfigForm`（`ctx.configForms.get(entryId)`），因此保存就落在拥有该字段的那一行：
 
 | Section（条目 id） | 组件 | 字段 |
 |---|---|---|
@@ -660,9 +660,9 @@ context 插件（`memory-autorecall`）注册的 `agent/pre-step` 中间件至�
 - **宿主契约约束：** 宿主不以运行时值导出 `PluginCard`/`ValueField`/`CardForm`，故卡片外壳、字段组件（`fields.tsx`）与 CSS（`card-styles.ts`，经 `<style data-dsh-memory>` 注入的 `dsm-c-*` 类，逐行移植自宿主的 `--dsw-alias-*` token）均在本地复刻。`RULES` 数组必须在 `inject()` 调用前定义（esbuild 提升 `var` 声明但不提升初始化式——详见 CLIENT_UI_LESSONS）。
 - **构建：** `npm run build` 先后跑两个 tsc 程序——宿主 `tsc -p tsconfig.json`（`src/`，排除 `src/client`）与 client 类型门禁 `tsc -p tsconfig.client.json`（`src/client`，`noEmit`，JSX/DOM 对齐浏览器运行时；宿主 client 包作为 devDependency 钉在已安装 peer 的版本线上，`paths` 全部解析到 node_modules 内，门禁不依赖 harness checkout）——再由 `scripts/fix-imports.cjs` 修正 tsc 输出里的 `.ts → .js` 引用并复制 Typert 产物，最后 `scripts/build-client.cjs` 用 esbuild 把 TSX 客户端打包成 loader 兼容产物（宿主包全部 external，运行时经注入的 `require` 解析）。client 类型错误因此与宿主错误一样让构建失败。
 
-#### Memory 内容管理区（`settings.section` slot，id `memory`，order 25）
+#### 侧栏管理面板（`main` + `sidebar.panellist` slot，id `memory` / `identity`）
 
-Settings 导航中的独立「Memory」区（位于 Agent presets 之后），覆盖整个 web profile 的记忆库（三 scope × 全部工作区）。三个 tab 把该区的职责分开：
+两个面板各占左侧栏全局面板列表的一格，覆盖整个 web profile 的记忆库（三 scope × 全部工作区）。注册契约是成对的：`sidebar.panellist` 的 list `id` 同时是 `main` 的 key——侧栏按该 id 选中主面板页（`layout.selectPanel` 对未注册的 key 直接抛错），行标题由注册的 `label` 函数给出（locale 变化时重读），图标组件只收 `{ size, active }` 画 glyph。两个注册都是**无条件**的：本包的 client 半只在 bundle 被组合时加载，而该 bundle 的 patch 总会插入这些行；不拿配置传输做门控（宿主只投影含 volatile 字段的命名空间，见 §7.4），导航入口不应依赖一个无关传输。面板自带滚动容器与版心（`.dsm-s-panel`，顶边按 `--dsh-frame-top-clearance` 留白、左侧按 `--dsh-frame-leading-clearance` 让开窗口控件），`main` 槽位的挂载会被 layout 保留，因此 `load()` 必须幂等。三个 tab 把 Memory 面板的职责分开：
 
 - **Overview tab — 健康仪表盘条：** 总数 / 三 scope 分布 / 置顶 / 休眠（stale，带 hint）/ 审计数 / 最近活动 / 最近提取，来自 `health()`。
 - **Review tab — 待确认提议队列（P1-1/P1-2）：** `suggestList()` 按 `hits` 最高者在前渲染，每行显示 scope/category 徽标、再观察次数（×N）、首/末次时间戳、溯源，以及——当设置了 `targetEntryId` 时——它将要改写的既有条目。行操作：**采纳**（可选"先编辑后采纳"修改 content/category/summary，经 store 契约以 `source: 'ui'` 落实）与**拒绝**（行被删除，什么都不写）。tab 徽标显示待确认数量；后台刷新保持队列鲜活且不重置编辑中的表单。
@@ -671,8 +671,8 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 - **召回卫生：** 管理类读取永不计为召回。`memoryRemote.search` 对每个查询盖 `recordRecall: false`，因此浏览既不刷新 `lastRecalledAt` 也不复活休眠条目——模型工具的搜索保持默认盖章行为。
 - **状态机（`memory-section-store.ts`）：** Controller + `createSnapshotStore`（镜像宿主 section-store 房规），`idle → loading → ready/error`；seq token 丢弃过期响应（含被筛选变更取代的追加批）；筛选变更重取第一批发（`reload`），`loadMore` 追加下一分片（浏览时取远程批、筛选时取本地缓存片），初次挂载/重试/断连恢复走全量 `load()`；`connection/reset` 触发自动重载。行操作统一走一个带守卫的 `act()` 辅助——乐观记账、内联 `actionError` 呈现（编辑/删除/置顶/归档/采纳/拒绝）、操作后后台刷新。
 - **数据面（实测结论）：** 调用直接走通用 `/api` RPC 通道——`connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`。宿主 `TypertGatewayService` 对 `/api` 上所有 `<namespace>/<method>` 形态的 endpoint 做 source-mode discovery（反射带 `typertRemote` 绑定的服务按形参名分发），**无需客户端 `$mount` 贡献物**。不走 `$mount` 的原因：(1) 贡献物方法名不得与命名空间服务自有成员撞名（`remove` 即撞，已把服务方法改名 `removeEntry` 规避）；(2) cordis 不允许 fiber inject 声明自己 apply 里才创建的服务，「自产自销」式挂载会触发 *cannot get property "remote.memoryRemote" without inject*。注意 `connection.api.*`（如 ui-agent-preset 的 `api.agentPresets`）是另一套 apiproxy HTTP RPC 面，与 Typert namespace 无关。
-- **i18n 与样式：** 共享的 `settings.memory` locale 命名空间为该区增补 en+zh 词条；样式在 `section-styles.ts`（`dsm-s-*` 类 + `<style data-dsh-memory="section">` 注入，沿用宿主 `--dsw-alias-*` token）。配置与内容的职责分界在页面 intro 文案中锚定 Plugins 页签。
-- **测试：** host 侧 `tests/remote-service.spec.ts`（12 例：projects 聚合 / staleSince·stale 透传 / 最新优先排序 + offset 边界 / `recordRecall:false` 抑制 / archive + 建议队列方法）；客户端 jsdom 套件 `tests/memory-section.client.spec.tsx`（24 例：tab 划分 / 初始加载 / scope 切换 / 工作区筛选 / 防抖搜索 / chips / 懒加载追加与本地揭示 / 审核队列采纳·拒绝·编辑流 / 管理写操作 / 错误恢复 / stale 标记 / CJK 行）与 `identity-section.client.spec.tsx`（治理区：历史渲染、两步回滚阀门、导出）；宿主 client 包在 node_modules 里就是可被 Node 直接 import 的普通 ESM，因此不需要 stub 别名。
+- **i18n 与样式：** 共享的 `settings.memory` locale 命名空间为两个面板增补 en+zh 词条；样式在 `section-styles.ts`（`dsm-s-*` 类 + `<style data-dsh-memory="section">` 注入，沿用宿主 `--dsw-alias-*` token）。配置与内容的职责分界在页面 intro 文案中锚定 Plugins 页签。
+- **测试：** host 侧 `tests/remote-service.spec.ts`（12 例：projects 聚合 / staleSince·stale 透传 / 最新优先排序 + offset 边界 / `recordRecall:false` 抑制 / archive + 建议队列方法）；客户端注册套件 `tests/client-registration.spec.ts`（伪 slot 注册表上钉死 `main` 的 key、`sidebar.panellist` 的 id/order/label 成对关系，以及 `settings.section` 不再注册）；jsdom 套件 `tests/memory-section.client.spec.tsx`（24 例：tab 划分 / 初始加载 / scope 切换 / 工作区筛选 / 防抖搜索 / chips / 懒加载追加与本地揭示 / 审核队列采纳·拒绝·编辑流 / 管理写操作 / 错误恢复 / stale 标记 / CJK 行）与 `identity-section.client.spec.tsx`（治理面板：历史渲染、两步回滚阀门、导出）；宿主 client 包在 node_modules 里就是可被 Node 直接 import 的普通 ESM，因此不需要 stub 别名。
 
 ### 7.9 检索与注入成本基准 — `/benchmark`（`src/benchmark/`）
 
@@ -695,7 +695,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 - **跨条目读取走服务：** identity 插件经 `ctx.get('memory')` 读 store，`memory-autorecall` 经 `ctx.get('identity')?.settings()` 读本条目的设置——没有 identity 服务组合时回退内置默认值。没有可 inject 的 settings 服务：每个条目的 `Config` 在它自己的 `apply` 里到手，store 的旋钮也以同样方式到达身份写入门。
 - **写路径（`identity_update`，§7.2）：**整文档替换过三重门——`identityEnabled`、按类别字符预算、scanner——随后 store 的原子版本写（经表 read-modify-write 计算 version+1，并发改写不会铸出同一版本）加每版一份全量历史快照。confirm 模式下提案作为身份建议（`identityKind`，§6.4）入队，人采纳前不写。告知纪律——「改了这份文件，告诉用户」——落在工具描述与结果文案里。
 - **防回声：**提取永不入库身份复述——review/flush 提示词携带规则并渲染身份文档作为所指，两个提取写缝各跑一道机械预筛（对已注入文档的 IDF 加权重叠 > 0.6；关于人格的*记忆*远低于该值）。身份层关闭时预筛自然失效（没有注入文档，没有可复述对象）。
-- **治理面（§7.8）：**只读 Identity 设置区——文档 + 版本历史 + 回滚阀门（`identityRevert`，受 `remoteWritesEnabled` 与 `identityRevertEnabled` 共同控制，§7.7）+ 导出；无内容编辑器、无导入。
+- **治理面（§7.8）：**只读 Identity 侧栏面板——文档 + 版本历史 + 回滚阀门（`identityRevert`，受 `remoteWritesEnabled` 与 `identityRevertEnabled` 共同控制，§7.7）+ 导出；无内容编辑器、无导入。
 - **事件：**`identity/updated {kind, version}` 仅是声明词汇（§6.5）——无发射点；告知由工具结果承载，持久审计是 `identity_history`。
 - **Eval：**identity-v0 切片（`eval/datasets/identity-v0.jsonl`）与 `--identity` CLI 轴在 mock 巷道确定性度量注入面（soul/user-profile fence 与字符数，开关对照）；防回声预筛的端到端对照需要脚本化提取回复（noise-pilot 巷道）或真实模型判分——预筛本身由 `tests/extract.spec.ts` 夹具钉住，pilot 巷道证据记为已知缺口。决策与备选见 [Agent Note](../.agents/notes/implemented/feature/2026-09-08-identity-layer-soul-and-user-profile.zh.md)。
 
@@ -703,7 +703,7 @@ Settings 导航中的独立「Memory」区（位于 Agent presets 之后），�
 
 ## 8. 配置
 
-五个可编辑条目各自声明 `Config`，并按相同方式 resolve：schema 默认 → 组合 `config:` base → 用户层（设置页）。已提交的改动会重新执行该条目的 `apply`，因此处理器在其下一个事件读到新值，该条目的进程内缓存也随之重建（§7.4）。下述 YAML 是组合侧形状：某个键属于拥有它的行 id，写在 profile 的 `cordis.patch.yml` 里；同一个键也是设置页为该条目写入的内容。
+五个可编辑条目各自声明 `Config`，并按相同方式 resolve：schema 默认 → 组合 `config:` base → 用户层（设置页）。可编辑字段是 `volatile`：提交后宿主就地更新读值（不重启 fiber），处理器在其下一个事件读到新值；挂载期字段（后端选择、容量、探测间隔、种子目录）不标 volatile，改动通过重启该条目生效（§7.4）。下述 YAML 是组合侧形状：某个键属于拥有它的行 id，写在 profile 的 `cordis.patch.yml` 里；同一个键也是设置页为该条目写入的内容。
 
 ### `memory` 条目配置（store 插件持有）
 
@@ -873,7 +873,7 @@ dsh-memory/
 
 `exports` 暴露 `.`, `./store`, `./tool`, `./review`, `./context`, `./notes`, `./identity`, `./benchmark`（golden-set 召回指标 + 注入成本测量）, `./remote`（客户端 Typert 产物）, `./remote-service`, `./client`, `./cordis.patch.yml`, `./package.json`。
 
-`dsh.client` manifest 字段声明 `platform: "web"` 与 `inject: ["@deepseek-ai/dsh-api-remotes", "@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-store", "@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-settings-plugins"]`，告诉宿主 client-module 扫描器在哪里挂载 bundle 配置页与 Memory/Identity 区（经无操作的 `memory-root` 行发现）。注入清单里的每个包名都必须真实存在于宿主运行时，否则客户端模块加载即抛错。
+`dsh.client` manifest 字段声明 `platform: "web"` 与 `inject: ["@deepseek-ai/dsh-client-store", "@deepseek-ai/dsh-client-ui-primitives"]`——注入清单只列客户端 bundle **运行时真的 require** 的包（槽位宿主包只做类型合并，type-only import 不产生 require）；宿主经无操作的 `memory-root` 行发现本包的 client 半。注入清单里的每个包名都必须真实存在于宿主运行时，否则客户端模块加载即抛错。
 
 ### 10.2 安装路径
 
@@ -922,7 +922,7 @@ GitHub Actions 运行两个 workflow，二者都带 `if: github.repository == 'c
 - **审计日志：** 封顶 200 条；`appendAudit` 尽力而为、绝不阻塞写入；单调 `seq` 保证确定性排序。建议队列同样封顶（200 行，按 hits 感知的淘汰）。
 - **建议队列成本：** `observeSuggestion` 对队列去重（同 target 查找 + 同作用域 Jaccard，至多 200 行）——相对产生该提议的 LLM 调用可忽略；list/adopt/reject 是 O(n)/O(1) 的 KV 操作。
 - **Prompt 预算：** 记忆内容 ≤ `memoryCharLimit`（5000 字符 ≈ 1.2–1.5 k tokens）**且 ≤ `memoryMaxEntries` 条（默认 20）** + policy 块（约 0.4 k tokens，digest 档含追加指引）；快照、清单与自动召回围栏的尾注都报告 ≈tokens；index 模式把尾部折叠为类别汇总行；project-notes ≤ `notesConventionsCharLimit` + `notesPitfallsCharLimit`（1600 + 800，冻结期条目选择 + 计数行折叠）；清单消息 ≤ `memoryDigestCharLimit`（800，每会话一次）；自动召回围栏 ≤ 每步 1200 字符。各模式在 golden 夹具上的常驻成本在 §7.9 实测（digest 档段落约 434 + 466 tokens；policy-only ≈344 tokens，与 store 规模无关的固定值）。
-- **缓存稳定性：** 快照在会话创建时冻结，并在 `compaction/end`（彼时前缀本来重建）或设置改动重新应用该条目后的首次组装时刷新（惰性重冻结，§7.4——每次已提交的设置改动多一次前缀重建、多一次清单重发）；清单与自动召回围栏只触及步尾消息通道，system prompt 前缀不动——且 memory/notes 段序为 6000/6001，位于宿主工具指引之后，重冻结只花费前缀尾部。
+- **缓存稳定性：** 快照在会话创建时冻结，并在 `compaction/end`（彼时前缀本来重建）时刷新；实时 volatile 设置（模式、预算读取处）立即生效，而冻结内容在下一次冻结边界跟上（§7.4）——一次设置改动不再额外触发前缀重建；清单与自动召回围栏只触及步尾消息通道，system prompt 前缀不动——且 memory/notes 段序为 6000/6001，位于宿主工具指引之后，重冻结只花费前缀尾部。
 - **提取花费：** 按触发记账（drain / compaction / dispose / curator tick），会话级预算（默认 20）；除覆盖外复用会话 provider/model。
 - **Notes 成本：** 冻结时从内存同步渲染——0.6 起零文件 I/O（见 [Agent Note](../.agents/notes/implemented/architecture/2026-08-31-project-notes-writes-no-repository-files.zh.md)）；一次性的 ≤0.5.x 残留清理每项目根每进程执行一次。
 - **I/O：** 单个 JSON 文件；写入在域写链串行；读取走内存。
@@ -1009,7 +1009,7 @@ src/
 │   └── seeds.ts          # 内置 SOUL/USER 种子 + identitySeedDir 覆盖校验
 ├── context/
 │   ├── index.ts          # 四个 prompt 段 + 冻结快照（compaction 重冻结，
-│   │                     #   设置重新应用后惰性重冻结）+ 自动召回 pre-step 中间件；
+│   │                     #   仅在会话创建/compaction 重冻结）+ 自动召回 pre-step 中间件；
 │   │                     #   经服务读取其他条目的设置
 │   ├── settings.ts       # AutoRecallSettings：本条目的 Config 字段 + 解析器
 │   ├── policy.ts         # MEMORY_POLICY_TEXT、buildMemorySectionText、renderMemoryIndex、
@@ -1024,13 +1024,15 @@ src/
 ├── typert.remote-client.d.ts / .js   # 客户端 Typert 远端产物（导出 ./remote）
 └── client/
     ├── index.ts          # client 入口：plugins.bundle.config 页注册（whileServed）
-    │                     #   + Memory/Identity 设置区 slot + 目录 loader 装配
+    │                     #   + 侧栏 panel 注册（main key ↔ sidebar.panellist id）
+    │                     #   + 目录 loader 装配
     ├── SettingsPage.tsx  # bundle 配置页：五个可折叠 section，一条目一个
     ├── form.ts           # ConfigForm 订阅 + 每次保存一次 revision-fenced mutate
     ├── MemoryPluginCard.tsx  # 定制 memory 条目 section（草稿暂存 + save/discard）
     ├── NamespaceCard.tsx     # spec 驱动的 section 引擎（FieldSpec kinds、select 生命周期）
-    ├── MemorySection.tsx     # 三 tab 的 Memory 设置区（Overview/Review/Manage）
-    ├── IdentitySection.tsx   # 只读 Identity 治理区（历史 + 回滚）
+    ├── MemorySection.tsx     # 三 tab 的 Memory 管理面板（Overview/Review/Manage）
+    ├── IdentitySection.tsx   # 只读 Identity 治理面板（历史 + 回滚）
+    ├── panel-icons.tsx   # 左侧栏两个面板图标的 glyph（size + active）
     ├── memory-section-store.ts # 区状态机 + 写路径操作辅助（act）
     ├── identity-section-store.ts # Identity 区控制器（list/history/revert）
     ├── model-catalog.ts  # provider/model 选项解析器（纯函数、有单元测试）

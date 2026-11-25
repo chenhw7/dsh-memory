@@ -1,13 +1,12 @@
 /**
- * Scoped CSS for the Memory settings section (content management). Injected
+ * Scoped CSS for the memory and identity main-panel pages. Injected
  * once as a single `<style data-dsh-memory="section">` element; class names
  * are prefixed `dsm-s-` to avoid collisions with the plugin-card styles
  * (`dsm-c-` in ./card-styles.ts).
  *
  * The rules ride the same `--dsw-alias-*` design tokens as the deployment's
- * own settings surfaces and the ported card CSS, so the section reads as part
- * of the Settings dialog. Controls mirror the `.input` / `.select` look from
- * card-styles.ts.
+ * own pages and the ported card CSS. Controls mirror the `.input` / `.select`
+ * look from card-styles.ts.
  */
 
 const RULES = `
@@ -28,6 +27,26 @@ const RULES = `
   font-size: 13px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* The main-panel page frame: the panel owns its scroll container and column,
+   and pads its top by the frame's constant step below the window chrome. */
+.dsm-s-panel {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: calc(var(--dsh-frame-top-clearance, 0px) + 16px) 24px 48px;
+  padding-left: max(24px, var(--dsh-frame-leading-clearance, 24px));
+}
+.dsm-s-panel-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
 }
 
 /* ── Health dashboard bar ─────────────────────────────────────────────────── */
@@ -405,6 +424,8 @@ const RULES = `
 `
 
 const cls = {
+  panel: 'dsm-s-panel',
+  panelInner: 'dsm-s-panel-inner',
   section: 'dsm-s-section',
   title: 'dsm-s-title',
   intro: 'dsm-s-intro',

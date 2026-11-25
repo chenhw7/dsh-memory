@@ -1,5 +1,6 @@
 /**
- * Identity governance section — Settings → Identity. READ-ONLY by design:
+ * Identity governance page — the `main` panel behind the sidebar's Identity
+ * icon. READ-ONLY by design:
  * the two self-documents are written by the assistant itself in conversation
  * (the `identity_update` tool); this surface renders the current documents,
  * their retained version history, and exactly one write power — reverting to
@@ -32,7 +33,7 @@ export interface IdentitySectionInjected {
 
 /** Full component props. */
 export type IdentitySectionProps =
-  PropsRuntime<'settings.section'>
+  PropsRuntime<'main'>
   & PropsLocale<'settings.memory'>
   & InjectFace<IdentitySectionInjected>
 
@@ -166,8 +167,23 @@ function DocumentPanel(props: {
   )
 }
 
-/** Render the Identity section content column. */
+/**
+ * The sidebar's Identity panel: the page frame plus the governance column.
+ * @param props - composed slot props.
+ * @returns the page.
+ */
 export function IdentitySection(props: IdentitySectionProps): ReactNode {
+  return (
+    <div className={css.panel}>
+      <div className={css.panelInner}>
+        <IdentitySectionContent {...props} />
+      </div>
+    </div>
+  )
+}
+
+/** Render the Identity page's governance column. */
+function IdentitySectionContent(props: IdentitySectionProps): ReactNode {
   const { useIdentitySection, t, load } = props
   const state = useIdentitySection(snapshot => snapshot)
 

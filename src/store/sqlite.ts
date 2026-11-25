@@ -158,8 +158,8 @@ export interface SqliteStoreOptions {
   readonly suggestionCap?: number | undefined
   /** Entries cap (§ write-path governance); default 500. */
   readonly entriesCap?: number | undefined
-  /** The resolved `memory` entry settings published to sibling plugins. */
-  readonly settings?: MemoryInjectionSettings | undefined
+  /** The `memory` entry settings source published to sibling plugins (read live per call). */
+  readonly settings?: MemoryInjectionSettings | (() => MemoryInjectionSettings) | undefined
 }
 
 /**
@@ -175,14 +175,15 @@ export class SqliteMemoryStore extends MemoryStore {
   private readonly auditCap: number
   private readonly suggestionCap: number
   private readonly entriesCap: number
-  private readonly injectionSettings: MemoryInjectionSettings
+  private readonly injectionSettings: () => MemoryInjectionSettings
   private readonly failureCounts = new Map<string, number>()
   private auditSeq = 0
 
   constructor(options: SqliteStoreOptions) {
     super()
     this.failureLogger = options.failureLogger
-    this.injectionSettings = options.settings ?? DEFAULT_INJECTION_SETTINGS
+    const source = options.settings ?? DEFAULT_INJECTION_SETTINGS
+    this.injectionSettings = typeof source === 'function' ? source : () => source
     this.auditCap = options.auditCap ?? 200
     this.suggestionCap = options.suggestionCap ?? 200
     this.entriesCap = options.entriesCap ?? 500
@@ -208,7 +209,7 @@ export class SqliteMemoryStore extends MemoryStore {
 
   /** The resolved `memory` entry settings; see {@link MemoryStore.settings}. */
   settings(): MemoryInjectionSettings {
-    return this.injectionSettings
+    return this.injectionSettings()
   }
 
   override reportFailure(site: string, error?: unknown): void {

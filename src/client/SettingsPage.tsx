@@ -73,7 +73,11 @@ const AUTORECALL_SPEC: NamespaceCardSpec = {
   ],
 }
 
-/** The identity section: the identity layer's knobs. */
+/**
+ * The identity section: the identity layer's live knobs. `identitySeedDir` is
+ * a mount-time field (it restarts the entry), so the host's settings wire does
+ * not project it and it stays in the composition layer.
+ */
 const IDENTITY_SPEC: NamespaceCardSpec = {
   titleKey: 'identityCardTitle',
   descriptionKey: 'identityCardDescription',
@@ -81,7 +85,6 @@ const IDENTITY_SPEC: NamespaceCardSpec = {
     { key: 'identityEnabled', kind: 'checkbox' },
     { key: 'soulCharLimit', kind: 'number', minValue: 0 },
     { key: 'userCharLimit', kind: 'number', minValue: 0 },
-    { key: 'identitySeedDir', kind: 'text' },
   ],
 }
 

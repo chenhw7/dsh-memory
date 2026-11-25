@@ -168,8 +168,9 @@ class ProjectNotesServiceImpl extends ProjectNotesService {
  * @param config - the `memory-notes` entry config.
  */
 export function apply(ctx: Context, config: NotesConfigValue = DEFAULT_NOTES_SETTINGS): void {
-  const settings = resolveNotesSettings(config)
-  const service = new ProjectNotesServiceImpl(ctx, () => settings)
+  // Live read: the entry's editable fields are volatile, so the settings wire
+  // updates them without restarting this fiber; the service resolves per call.
+  const service = new ProjectNotesServiceImpl(ctx, () => resolveNotesSettings(config))
   ctx.provide('projectNotes', service)
 
   // One-time migration: strip the file-export artifacts a ≤0.5.x install

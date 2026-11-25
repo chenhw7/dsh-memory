@@ -26,14 +26,17 @@
 |---|---|
 | `export const Config = z.object({…})`（schemastery，插件模块导出） | 例：`dsh-storage-domain/lib/types/index.d.ts`（`export declare const Config: z<Config>`） |
 | `apply(ctx, config)` 由 Loader 用 schema 默认值 → 组合 base → 用户层解析后调用 | `@deepseek-ai/cordis` 的 `Plugin.apply(ctx, config)` 签名（`lib/types/registry.d.ts`） |
-| 配置热更 = 该条目的 fiber 重启（`internal/update` waterfall 默认走 `fiber.restart()`），即**重新执行 `apply`** | `@deepseek-ai/cordis` `lib/index.js`（`update()`） |
+| 普通字段的配置热更 = 该条目的 fiber 重启（`internal/update` waterfall 默认走 `fiber.restart()`），即**重新执行 `apply`**；`volatile` 字段不重启：loader 调 `updateVolatile` 就地更新 ref，并发出 `loader/volatile-update` | `@deepseek-ai/cordis` `lib/index.js`（`update()` / `_commitVolatile()`） |
+| **设置线协议只投影含 `volatile` 字段的命名空间**：`SettingsForms.describe()` 用 `volatileForm(schema)` 过滤，没有 volatile 字段的条目整个缺席（写入也会以 `no volatile fields` 拒绝） | `dsh-settings/lib/index.js`（`describe()` / `volatileForm()` / `write()`） |
+| volatile 字段在 `apply` 收到的 `config` 里是 live ref（`{ get(): T }`），必须 `.get()` 读取；普通字段仍是普通值 | `dsh-settings` 的 `plainConfig()` 处理 `isVolatile(value)`；`dsh-agent-default-model/lib/index.js`（`this.config.provider.get()`） |
 | `SettingsForms`（`ctx.settings`）：只剩表单/线协议面（`describe`/`update`/`replace`/`mutate`/`configure`），**没有 `get`、没有 `installSection`** | `dsh-settings/lib/types/index.d.ts` |
 | settings 命名空间 = profile 插件条目 id（`SettingsNamespace` 是条目 id 的品牌类型） | `dsh-settings/lib/types/types.d.ts` |
 
 **契约要点**：
 - **没有跨命名空间运行时读取**。插件只拿得到自己的 `Config`；兄弟插件共享的旋钮必须由拥有该条目的插件通过**服务**发布（本插件：store 发布 `ctx.memory.settings()`，notes 发布 `ctx.projectNotes.settings()`，identity 发布 `ctx.identity.settings()`，review 发布 `ctx.memoryReview.settings()`）。
 - 条目 id 即设置命名空间，改名等于换命名空间：用户层里旧 id 下的覆盖会失效。`cordis.patch.yml` 的行 id 因此是稳定契约（`memory` / `memory-review` / `memory-identity` / `memory-notes` / `memory-autorecall`）。
-- 热更 = 重启 fiber：`apply` 必须是可重入的（disposer 交给 `ctx.effect`），进程内缓存（WeakMap 的冻结快照等）会随重启清空——context 插件的 `snapshotOf()` 因此在缺失快照时**惰性重冻结**，避免设置一变就让运行中会话的记忆段落变空。
+- 热更分两档：普通字段触发 fiber 重启，`apply` 必须是可重入的（disposer 交给 `ctx.effect`）；`volatile` 字段就地更新 ref、不重启，因此插件必须**每事件读取**（本包的 resolver 经 `liveValue` 读取，同时接受宿主 ref 与测试普通值）。本包把设置页可编辑的字段全部声明为 volatile，`storage`/`entriesCap`/`crossProcessProbeMs`/`identitySeedDir` 等挂载期字段保持普通——改它们才重启条目。
+- volatile 字段是设置页能被看到的**前提**：不声明 volatile 的条目不会出现在 `describe()` 里，`ctx.configForms` 也拿不到表单（本包 0.10.x 的全部设置 UI 曾因此不可见，0.11 起修正）。
 - 0.1.x 的 `settingsNamespace()` / `installSettingsSection()` / `ctx.settings.get()` 全部已移除；`ctx.inject(['settings'], …)` 这条读配置路径不复存在。
 
 ## 3. 系统提示词注入
@@ -117,13 +120,16 @@
 | bundle patch 清单字段 `dsh.bundle.patch`（cordis.patch.yml 即包本体） | `dsh-package-manifest/lib/types/types.d.ts`（`DshBundleManifest.patch`） |
 | `dsh.client`：`platform` / `inject` / `immediately` / `external` | 同上（`DshClientManifest`） |
 | `dsh.engines`：`dsh` / `node` / `npm` 版本要求（插件管理器据此拦截不兼容安装） | 同上（`DshEnginesManifest`） |
-| `settings.section` slot（根级 list，id/order/label/inject） | `dsh-client-ui-settings/lib/types/client/contract/slots.d.ts` |
+| `main` slot（根级 keyed，key = 侧栏面板 id；`layout.selectPanel` 对未注册 key 抛错） | `dsh-client-ui-layout/lib/types/client/index.ts`（`SlotMap['main']`） |
+| `sidebar.panellist` slot（根级 list，id/order/label；owner props `{ size, active }`；图标经 `sidebar.panel.icon` 工厂按 `only: id` 渲染） | `dsh-client-ui-sidebar/lib/types/client/contract/slots.ts` |
+| `settings.section` slot（根级 list，id/order/label/inject；本包不再使用——管理面在 `main` + `sidebar.panellist`） | `dsh-client-ui-settings/lib/types/client/contract/slots.d.ts` |
 | `plugins.bundle.config` slot（keyed，bundle 页的配置区） | `dsh-client-ui-plugin-manager/lib/types/client/slot-contract.d.ts` |
 | `plugins.row.config` slot（keyed `<包名>#<行 id>`，单行配置页） | 同上 |
 | `plugins.item` slot（官方插件卡，`view: 'summary' \| 'page'`） | 同上 |
 | 配置视图 owner props：`{ view: 'summary' \| 'page', form?: { state: ConfigFormSnapshot, mutate } }` | 同上（`PluginConfigViewProps` / `ConfigPageForm`） |
 | 客户端设置传输：`ctx.configForms.get<T>(entryId)` → `ConfigForm<T>`（`getSnapshot/subscribe/set/unset/mutate`），`ctx.configForms.whileServed([...], register)` | `dsh-client-ui-settings/lib/types/client/config-form.d.ts` |
 | 客户端模块扫描器只发现**根导出行**的 dsh.client（子路径跳过） | 本仓库踩坑记录：root 包 no-op 行见 `src/index.ts` 尾注 |
+| 扫描器把每个已装配行解析到**最近的 package.json**，并拒绝同一 package 由多个活动行解析到的组合（`multiple active Loader sources`）；多行 bundle 必须为每行目录写自己的 `package.json`（仅 name + `type: module`，不带 `dsh.client`） | `dsh-client-modules/lib/index.js`（`reconcilePackage()` / `locatePkgJson()`）；`dsh-ops/lib/components/*/package.json` 是先例 |
 | 运行时外部模块只能解析「平台 seed 词」或「已装配且自带 client 半的包行」 | `dsh-client-modules/lib/client.js`（`makeRequire`：miss 即抛 "missed the module table"） |
 
 **契约要点**：
@@ -131,6 +137,8 @@
 - 本插件走 `plugins.bundle.config`：一张页面五个 section，每个 section 绑到对应条目的 `ConfigForm`（`ctx.configForms.get('memory')` 等）。页面只在 Host 至少服务其中一个条目时出现（`whileServed`），装配里没有这些条目就毫无痕迹。
 - 写路径是一次 `mutate(ops, revision)`：整段草稿一次提交，revision 来自快照（Host 侧 CAS，过期即拒绝并回读）。
 - 行标题/描述来自 `readPluginMeta(specifier)`：`<specifier>/locale/<lang>.json` 的 `meta.title` / `meta.description` 与可选的 `<specifier>/icon` 资源；子路径行没有自己的 locale 资源时回退到模块名。这就是本插件不逐行注册配置页（改走 bundle 页）的原因。
+- 管理面（本包的 Memory / Identity 面板）走**左侧栏面板对**：`sidebar.panellist` 的 list `id` 就是 `main` 的 key，侧栏的按钮按 id 选中主面板页；面板行标题是 `label` 函数、图标只收 `{ size, active }`。`main` 的挂载会被 layout 保留（`retainMainPanels`），面板的 `load()` 必须幂等；`main` 面板要自己提供滚动容器，顶边按 `--dsh-frame-top-clearance`（48px 常量）留白、左侧按 `--dsh-frame-leading-clearance`（窗口控件条带挂载时才有值）让开。
+- 多行 bundle 的 client 半只有**一次**发现机会：根行携带 `dsh.client`，其余子路径行的目录各自带一个独立 `package.json` 身份（本包由构建脚本 `scripts/fix-imports.cjs` 生成到 `lib/<row>/package.json`），扫描器才不会把它们都算成同一个 package。漏掉这一步时整个 bundle 的 client 半会被静默跳过（无错误弹窗，只是导航与配置页都不出现）。
 - 客户端 bundle 的 `require` 只能命中平台 seed 词或已装配的包行；`dsh.client.inject` 里的包名必须真的存在于 Host 运行时，否则加载即抛错。
 
 ## 9. 日志通道：cordis 内置 `ctx.logger`
@@ -147,13 +155,13 @@
 ## 10. 升级核对清单（harness bump 时过一遍）
 
 1. §1 KvTable 接口形状 / 域 version 语义是否变化；`domainTable<K,V>(schema)` 的泛型推导是否仍由 spec 反推（本插件按 `Domain<typeof memoryDomainSpec>` 取表类型）；
-2. §2 每个条目 `Config` 的解析语义（schema 默认值 → 组合 base → 用户层）与热更路径（`internal/update` 默认是否仍重启 fiber）；本包 `resolveInjectionSettings` / `resolveNotesSettings` / `resolveIdentitySettings` / `resolveAutoRecallSettings` 的 fallback 是否仍必要；
+2. §2 每个条目 `Config` 的解析语义（schema 默认值 → 组合 base → 用户层）、`volatile` 字段的就地热更路径（`updateVolatile` / `loader/volatile-update`）与设置线协议的 volatile 过滤（`volatileForm`）；本包 `resolveInjectionSettings` / `resolveNotesSettings` / `resolveIdentitySettings` / `resolveAutoRecallSettings` 的 fallback 是否仍必要；
 3. §3 `AssembleContext.agent` 是否仍透传给 section text 函数；`SECTION_ORDERS` 是否新增/改序落在我们的两个落位带内（soul 80 / user-profile 81 的 0–500 带；memory 6000 / project-notes 6001 的 TOOLS_SDK 与 DELIVERABLE_FILE_REFERENCES 之间）；人格槽位常量名是否再次变化（0.1 的 `PERSONA_SECTION` → 0.2 的 `DEPLOYMENT_PERSONA_PREFIX`/`SUFFIX`）；
 4. §4 compaction/end 的 `error` 字段与 `compaction/summary.shadowedSeqs` 是否仍在 summary 事件上、且 summary 先于 end；`session.events` 同步读是否已被彻底移除（本包已改用自建增量日志）；
 5. §4 `agent/pre-step` 的 payload/决策形状（0.2 加了 `modelSelection`）；
 6. §6 `MessageSourceMap` 的声明方式与 `ContextFormed` 的 `form` 取值；`ContentBlockMap` 是否再次变动（tool 结果是否仍为独立 tool 消息）；finish reason 枚举与 `BlockAssembler` API；
 7. §7 typertRemote 绑定发现机制、保留方法名清单、信任围栏语义；
-8. §8 slots 契约键名（`plugins.bundle.config` / `plugins.row.config` / `plugins.item` 的 key 规则）、`ConfigPageForm` 形状、`ctx.configForms` 的方法集与 `whileServed` 语义、scanner 根导出行为、客户端可解析的外部模块表；
+8. §8 slots 契约键名（`plugins.bundle.config` / `plugins.row.config` / `plugins.item` 的 key 规则，`main` 的 key ↔ `sidebar.panellist` 的 id 配对，`sidebar.panel.icon` 工厂的 owner props）、`ConfigPageForm` 形状、`ctx.configForms` 的方法集与 `whileServed` 语义、scanner 根导出行为与多行 bundle 的每行 package 身份规则、客户端可解析的外部模块表；
 9. §9 `ctx.logger` 服务形状（severity 方法集、Exporter 管道）是否变化；
 10. §11 宿主 `engines.node` 下限仍覆盖 `node:sqlite` 免 flag 线（≥22.13），`DatabaseSync` 的 open/prepare/exec（± transaction）形状未变——SQLite 后端全部前提；
 11. §12 eval SDK 会话事件面——`request/header` 载荷与 `system/message` 提示词事件形状是否变化；必跑 `npm run eval:smoke`（该缝无类型护栏，漂移是静默 undefined）；

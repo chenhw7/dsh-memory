@@ -357,7 +357,10 @@ export const Config = z.object({
  *   slice the store publishes through {@link MemoryStore.settings}.
  */
 export async function apply(ctx: Context, config: StoreConfig = { storage: 'host-medium', entriesCap: DEFAULT_ENTRIES_CAP, crossProcessProbeMs: DEFAULT_CROSS_PROCESS_PROBE_MS, ...DEFAULT_INJECTION_SETTINGS }): Promise<void> {
-  const settings = resolveInjectionSettings(config)
+  // A live read: the entry's editable fields are volatile, so the settings
+  // wire updates them without restarting this fiber and every consumer that
+  // asks for the slice sees the new value immediately.
+  const settings = (): MemoryInjectionSettings => resolveInjectionSettings(config)
   const domain: MemoryDomain = await ctx.storageDomain.open(memoryDomainSpec)
   const entries: EntriesTable = domain.table('entries')
   const audit: AuditTable = domain.table('audit')
@@ -578,8 +581,8 @@ export class DomainMemoryStore extends MemoryStore {
   private readonly entriesCap: number
   /** Warn channel for swallowed background-path failures; the host `ctx.logger`. */
   private readonly failureLogger: { warn(message: string): void } | undefined
-  /** The resolved `memory` entry settings published to sibling plugins. */
-  private readonly injectionSettings: MemoryInjectionSettings
+  /** The `memory` entry settings source published to sibling plugins (read live per call). */
+  private readonly injectionSettings: () => MemoryInjectionSettings
   /** Per-site counts of swallowed failures, surfaced through `health()`. */
   private readonly failureCounts = new Map<string, number>()
   /** Last audit `seq` handed out; lazily initialized from the medium on first append. */
@@ -595,7 +598,7 @@ export class DomainMemoryStore extends MemoryStore {
     failureLogger?: { warn(message: string): void },
     entriesCap: number = DEFAULT_ENTRIES_CAP,
     identity?: IdentityTables,
-    injectionSettings: MemoryInjectionSettings = DEFAULT_INJECTION_SETTINGS,
+    injectionSettings: MemoryInjectionSettings | (() => MemoryInjectionSettings) = DEFAULT_INJECTION_SETTINGS,
   ) {
     super()
     this.entries = entries
@@ -608,7 +611,7 @@ export class DomainMemoryStore extends MemoryStore {
     this.suggestionCap = suggestionCap
     this.entriesCap = entriesCap
     this.failureLogger = failureLogger
-    this.injectionSettings = injectionSettings
+    this.injectionSettings = typeof injectionSettings === 'function' ? injectionSettings : () => injectionSettings
     // Startup selfcheck (scale-trigger-selfcheck): judge the entry count the
     // medium opened with, once per construction. Deployments that reopen an
     // already-large medium see the warning at boot — the point where a
@@ -619,7 +622,7 @@ export class DomainMemoryStore extends MemoryStore {
 
   /** The resolved `memory` entry settings; see {@link MemoryStore.settings}. */
   settings(): MemoryInjectionSettings {
-    return this.injectionSettings
+    return this.injectionSettings()
   }
 
   /**

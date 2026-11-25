@@ -164,7 +164,7 @@ clean plant 场景靠 dispose 触发提取落盘；noisy 场景改走**周期 re
 
 ## 身份切片（identity-v0）与 `--identity` 轴
 
-`eval/datasets/identity-v0.jsonl`：3 个 zh 场景（`ident101-persona-voice` 人格声调 + 显式指令让位、`ident102-profile-recall` 画像召回、`ident201-identity-echo` 防回声前提，noisy register 走周期 review 钉）。场景携带 `identitySeed`（soul/user 文档），runner 把它们**轴无关地**预写进介质 `identity` 表；`--identity` CLI 轴只控制 `memory-context` 的 `identityEnabled` 注入开关——同一介质、开/关两跑，注入是唯一变量。
+`eval/datasets/identity-v0.jsonl`：3 个 zh 场景（`ident101-persona-voice` 人格声调 + 显式指令让位、`ident102-profile-recall` 画像召回、`ident201-identity-echo` 防回声前提，noisy register 走周期 review 钉）。场景携带 `identitySeed`（soul/user 文档），runner 把它们**轴无关地**预写进介质 `identity` 表；`--identity` CLI 轴只控制 `memory-identity` 行的 `identityEnabled` 注入开关——同一介质、开/关两跑，注入是唯一变量。
 
 - **mock 巷道的确定性度量：**identity 开——fenceTags 出现 `soul`/`user-profile`、注入字符数（实测 ident101 877 / ident102 1349 / ident201 896）；identity 关——fenceTags 空、注入 0。A/B 同构建自差不受影响（轴是运行级开关，`eval:ab` 两侧同开）。
 - **判分层（带 API key 的真实模型跑）：**身份问题的作答由 recall-v2 判分（gold 描述人格声调/画像事实/让位语义），无独立身份 rubric。

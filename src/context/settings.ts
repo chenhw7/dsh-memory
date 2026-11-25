@@ -11,6 +11,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { liveValue, type LiveConfig } from '../live-config.ts'
 
 /**
  * Append a fenced auto-recall block to each step's messages (BM25 over the
@@ -54,11 +55,11 @@ export interface AutoRecallSettings {
 
 /** Schema fields for the `memory-autorecall` entry (the Auto Recall page's form). */
 export const AUTORECALL_FIELDS = {
-  autoRecallEnabled: z.boolean().default(DEFAULT_AUTO_RECALL_ENABLED),
-  autoRecallLimit: z.number().step(1).min(1).default(DEFAULT_AUTO_RECALL_LIMIT),
-  autoRecallMinChars: z.number().step(1).min(1).default(DEFAULT_AUTO_RECALL_MIN_CHARS),
-  hitSignalEnabled: z.boolean().default(DEFAULT_HIT_SIGNAL_ENABLED),
-  hitSignalThreshold: z.number().min(0).max(1).default(DEFAULT_HIT_SIGNAL_THRESHOLD),
+  autoRecallEnabled: z.boolean().default(DEFAULT_AUTO_RECALL_ENABLED).volatile(),
+  autoRecallLimit: z.number().step(1).min(1).default(DEFAULT_AUTO_RECALL_LIMIT).volatile(),
+  autoRecallMinChars: z.number().step(1).min(1).default(DEFAULT_AUTO_RECALL_MIN_CHARS).volatile(),
+  hitSignalEnabled: z.boolean().default(DEFAULT_HIT_SIGNAL_ENABLED).volatile(),
+  hitSignalThreshold: z.number().min(0).max(1).default(DEFAULT_HIT_SIGNAL_THRESHOLD).volatile(),
 }
 
 /** The builtin values, used when the entry config is absent. */
@@ -75,12 +76,12 @@ export const DEFAULT_AUTO_RECALL_SETTINGS: AutoRecallSettings = {
  * @param config - the entry config, possibly partial.
  * @returns the settings with every default materialized.
  */
-export function resolveAutoRecallSettings(config: Partial<AutoRecallSettings> | undefined): AutoRecallSettings {
+export function resolveAutoRecallSettings(config: Partial<LiveConfig<AutoRecallSettings>> | undefined): AutoRecallSettings {
   return {
-    autoRecallEnabled: config?.autoRecallEnabled ?? DEFAULT_AUTO_RECALL_ENABLED,
-    autoRecallLimit: config?.autoRecallLimit ?? DEFAULT_AUTO_RECALL_LIMIT,
-    autoRecallMinChars: config?.autoRecallMinChars ?? DEFAULT_AUTO_RECALL_MIN_CHARS,
-    hitSignalEnabled: config?.hitSignalEnabled ?? DEFAULT_HIT_SIGNAL_ENABLED,
-    hitSignalThreshold: config?.hitSignalThreshold ?? DEFAULT_HIT_SIGNAL_THRESHOLD,
+    autoRecallEnabled: liveValue(config?.autoRecallEnabled) ?? DEFAULT_AUTO_RECALL_ENABLED,
+    autoRecallLimit: liveValue(config?.autoRecallLimit) ?? DEFAULT_AUTO_RECALL_LIMIT,
+    autoRecallMinChars: liveValue(config?.autoRecallMinChars) ?? DEFAULT_AUTO_RECALL_MIN_CHARS,
+    hitSignalEnabled: liveValue(config?.hitSignalEnabled) ?? DEFAULT_HIT_SIGNAL_ENABLED,
+    hitSignalThreshold: liveValue(config?.hitSignalThreshold) ?? DEFAULT_HIT_SIGNAL_THRESHOLD,
   }
 }

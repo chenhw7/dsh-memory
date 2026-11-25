@@ -86,7 +86,7 @@ sequenceDiagram
         Tool->>Tool: confirmMode() —— 实时读取 confirmBeforeWrite（memory-review ns）
         alt 人审模式开启
             Tool->>Store: store.observeSuggestion({ ...input, source: 'tool' })
-            Note over Store: 队列去重：同 targetEntryId 或<br/>同作用域 Jaccard > 0.15 → hits++、lastSeenAt<br/>超集内容替换；上限 200（hits 感知淘汰）
+            Note over Store: 队列去重：同 targetEntryId 或<br/>同作用域 IDF 加权重叠 > 0.3 → hits++、lastSeenAt<br/>超集内容替换；上限 200（hits 感知淘汰）
             Store-->>Tool: suggestion
             Tool-->>Model: { pending: true, suggestionId }<br/>"已入队等待人工审核"
         else 默认（confirmBeforeWrite 关闭）
@@ -591,11 +591,11 @@ sequenceDiagram
 
 ## 11. 前端 UI 远端交互（@Remote service）
 
-「记忆」设置区（全部三个 tab）直接经通用 `/api` RPC 通道驱动本服务——`connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`——无需客户端贡献物挂载（宿主 `TypertGatewayService` 通过反射服务的 `typertRemote` 绑定认领 `<namespace>/<method>` 端点）。
+侧栏 Memory 面板（全部三个 tab）直接经通用 `/api` RPC 通道驱动本服务——`connection.rpc.call('/api', 'memoryRemote/<method>', { args: { request } })`——无需客户端贡献物挂载（宿主 `TypertGatewayService` 通过反射服务的 `typertRemote` 绑定认领 `<namespace>/<method>` 端点）。
 
 ```mermaid
 sequenceDiagram
-    participant UI as Memory 区（浏览器）
+    participant UI as Memory 面板（浏览器）
     participant Remote as memoryRemote @Remote 服务
     participant Store as store/index.ts
     participant Scanner as scanner.ts
@@ -632,9 +632,9 @@ sequenceDiagram
 
 ---
 
-## 12. 客户端设置界面（bundle 配置页 + Memory 区）
+## 12. 客户端界面（bundle 配置页 + 侧栏管理面板）
 
-浏览器向「设置 → 插件 → bundle 自己的页面」注册**一个**配置页（`plugins.bundle.config`，key `@chenhw7/dsh-memory`），内含五个 section（每个条目一个），外加独立的 **Memory** 区（`settings.section`，id `memory`，order 25）及其三个 tab（Overview / Review / Manage）；每个 section 编辑本地暂存的草稿，保存时提交为**一次** revision-fenced `mutate`。
+浏览器向「设置 → 插件 → bundle 自己的页面」注册**一个**配置页（`plugins.bundle.config`，key `@chenhw7/dsh-memory`），内含五个 section（每个条目一个）；同时把两个管理面板注册进左侧栏的全局面板列表——`main` 槽位的 `memory` / `identity` 页配 `sidebar.panellist` 的同 id 图标，三个 tab（Overview / Review / Manage）挂在 Memory 页里。配置 section 编辑本地暂存的草稿，保存时提交为**一次** revision-fenced `mutate`。
 
 ```mermaid
 sequenceDiagram
@@ -655,8 +655,9 @@ sequenceDiagram
     Client->>Client: loadCatalog = createCatalogLoader(ctx.get('connection'))
     Client->>Form: whileServed([memory · memory-notes · memory-autorecall · memory-identity · memory-review])<br/>→ 逐条目 configForms.get(entryId)
     Client->>Browser: slots.register('plugins.bundle.config', key '@chenhw7/dsh-memory', SettingsPage)
-    Client->>Browser: slots.register('settings.section', id 'memory', order 25)
-    Note over Browser,Section: Memory 区挂载：Overview（健康仪表盘）·<br/>Review（suggestList 队列，采纳/拒绝可带修改）·<br/>Manage（浏览 + 编辑/置顶/归档/删除）
+    Client->>Browser: slots.register('main', key 'memory') + slots.register('sidebar.panellist', id 'memory', order 30)
+    Client->>Browser: slots.register('main', key 'identity') + slots.register('sidebar.panellist', id 'identity', order 31)
+    Note over Browser,Section: Memory 面板挂载：Overview（健康仪表盘）·<br/>Review（suggestList 队列，采纳/拒绝可带修改）·<br/>Manage（浏览 + 编辑/置顶/归档/删除）
 
     Note over Card,Catalog: 阶段 2：用户展开卡片
 
@@ -680,8 +681,8 @@ sequenceDiagram
 
     Note over Runtime: 阶段 4：实时生效（无需重启）
 
-    Runtime->>Runtime: 宿主对被改动的条目重跑 apply(ctx, config)
-    Note over Runtime: context：注入段逐次组装重建，并对重启清空了快照的会话惰性重冻结<br/>review：旋钮逐事件重解析 · tool-memory：搜索上限取自 ctx.memory，<br/>confirmBeforeWrite 取自 ctx.memoryReview · notes/identity：由各自服务暴露 settings()
+    Runtime->>Runtime: volatile 字段：宿主就地更新 live ref（不重启）；普通字段：重跑 apply(ctx, config)
+    Note over Runtime: context：注入段逐次组装重建，实时旋钮下一步生效，<br/>冻结内容在下一个冻结边界跟上；普通字段重启后惰性重冻结<br/>review：旋钮逐事件重解析 · tool-memory：搜索上限取自 ctx.memory，<br/>confirmBeforeWrite 取自 ctx.memoryReview · notes/identity：由各自服务暴露 settings()
 
     Note over Browser,Remote: 阶段 5：Memory 区数据面（三个 tab）
 

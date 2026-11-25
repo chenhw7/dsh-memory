@@ -32,9 +32,11 @@
       "@deepseek-ai/dsh-client-locale/client": ["./node_modules/@deepseek-ai/dsh-client-locale/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-ui-renderer/client": ["./node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-connection/client": ["./node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"],
-      "@deepseek-ai/dsh-api-remotes/client": ["./node_modules/@deepseek-ai/dsh-api-remotes/lib/types/client/index.d.ts"]
+      "@deepseek-ai/dsh-api-remotes/client": ["./node_modules/@deepseek-ai/dsh-api-remotes/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-layout/client": ["./node_modules/@deepseek-ai/dsh-client-ui-layout/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-sidebar/client": ["./node_modules/@deepseek-ai/dsh-client-ui-sidebar/lib/types/client/index.d.ts"]
     }
   },
-  "include": ["src/client", "tests/model-catalog.spec.ts"],
+  "include": ["src/client", "tests/model-catalog.spec.ts", "tests/client-registration.spec.ts"],
   "exclude": []
 }

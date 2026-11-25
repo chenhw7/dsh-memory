@@ -132,14 +132,20 @@ describe('identity-v0 slice — mechanical surfaces', () => {
     expect(fences[0]!.body).toContain('交付优先')
   })
 
-  it('memoryModePatch carries the identity axis on the memory-context overlay row', () => {
-    const on = memoryModePatch('index', true) as { config: Record<string, unknown> }
-    const off = memoryModePatch('index', false) as { config: Record<string, unknown> }
-    expect(on.config['identityEnabled']).toBe(true)
-    expect(off.config['identityEnabled']).toBe(false)
+  it('memoryModePatch carries the identity axis on the memory-identity overlay row', () => {
+    const rows = (identityOn: boolean) => memoryModePatch('index', identityOn)
+    const onIdentity = rows(true).find(row => row['id'] === 'memory-identity') as { config: Record<string, unknown> }
+    const offIdentity = rows(false).find(row => row['id'] === 'memory-identity') as { config: Record<string, unknown> }
+    expect(onIdentity.config['identityEnabled']).toBe(true)
+    expect(offIdentity.config['identityEnabled']).toBe(false)
+    // One row per owning entry: the retired `memory-context` row is gone.
+    expect(rows(true).map(row => row['id'])).toEqual([
+      'memory', 'memory-notes', 'memory-autorecall', 'memory-identity',
+    ])
     // The other pins stand in both positions of the axis.
-    expect(on.config['decayDays']).toBe(0)
-    expect(off.config['decayDays']).toBe(0)
+    const store = rows(false).find(row => row['id'] === 'memory') as { config: Record<string, unknown> }
+    expect(store.config['memoryMode']).toBe('index')
+    expect(store.config['decayDays']).toBe(0)
   })
 })
 

@@ -14,6 +14,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { liveValue, type LiveConfig } from '../live-config.ts'
 import type { MemoryMode } from '../context/policy.ts'
 
 // Factory default is `digest`: the system prompt carries only the frozen
@@ -74,13 +75,13 @@ export interface MemoryInjectionSettings {
  * resolver so the composition layer and the service cannot drift.
  */
 export const INJECTION_FIELDS = {
-  memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index', 'digest'] as const).default(DEFAULT_MEMORY_MODE),
-  memoryPolicyCustomText: z.string(),
-  memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT),
-  memoryDigestCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_DIGEST_CHAR_LIMIT),
-  memoryMaxEntries: z.number().step(1).min(0).default(DEFAULT_MEMORY_MAX_ENTRIES),
-  maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS),
-  decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS),
+  memoryMode: z.union(['full', 'policy-only', 'custom', 'off', 'index', 'digest'] as const).default(DEFAULT_MEMORY_MODE).volatile(),
+  memoryPolicyCustomText: z.string().volatile(),
+  memoryCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_CHAR_LIMIT).volatile(),
+  memoryDigestCharLimit: z.number().step(1).min(0).default(DEFAULT_MEMORY_DIGEST_CHAR_LIMIT).volatile(),
+  memoryMaxEntries: z.number().step(1).min(0).default(DEFAULT_MEMORY_MAX_ENTRIES).volatile(),
+  maxSearchResults: z.number().step(1).min(0).default(DEFAULT_MAX_SEARCH_RESULTS).volatile(),
+  decayDays: z.number().step(1).min(0).default(DEFAULT_DECAY_DAYS).volatile(),
 }
 
 /** The builtin values, used when no store service is composed. */
@@ -100,14 +101,15 @@ export const DEFAULT_INJECTION_SETTINGS: MemoryInjectionSettings = {
  * @param config - the entry config, possibly partial.
  * @returns the injection settings with every default materialized.
  */
-export function resolveInjectionSettings(config: Partial<MemoryInjectionSettings> | undefined): MemoryInjectionSettings {
+export function resolveInjectionSettings(config: Partial<LiveConfig<MemoryInjectionSettings>> | undefined): MemoryInjectionSettings {
+  const customPolicy = liveValue(config?.memoryPolicyCustomText)
   return {
-    memoryMode: config?.memoryMode ?? DEFAULT_MEMORY_MODE,
-    ...config?.memoryPolicyCustomText === undefined ? {} : { memoryPolicyCustomText: config.memoryPolicyCustomText },
-    memoryCharLimit: config?.memoryCharLimit ?? DEFAULT_MEMORY_CHAR_LIMIT,
-    memoryDigestCharLimit: config?.memoryDigestCharLimit ?? DEFAULT_MEMORY_DIGEST_CHAR_LIMIT,
-    memoryMaxEntries: config?.memoryMaxEntries ?? DEFAULT_MEMORY_MAX_ENTRIES,
-    maxSearchResults: config?.maxSearchResults ?? DEFAULT_MAX_SEARCH_RESULTS,
-    decayDays: config?.decayDays ?? DEFAULT_DECAY_DAYS,
+    memoryMode: liveValue(config?.memoryMode) ?? DEFAULT_MEMORY_MODE,
+    ...customPolicy === undefined ? {} : { memoryPolicyCustomText: customPolicy },
+    memoryCharLimit: liveValue(config?.memoryCharLimit) ?? DEFAULT_MEMORY_CHAR_LIMIT,
+    memoryDigestCharLimit: liveValue(config?.memoryDigestCharLimit) ?? DEFAULT_MEMORY_DIGEST_CHAR_LIMIT,
+    memoryMaxEntries: liveValue(config?.memoryMaxEntries) ?? DEFAULT_MEMORY_MAX_ENTRIES,
+    maxSearchResults: liveValue(config?.maxSearchResults) ?? DEFAULT_MAX_SEARCH_RESULTS,
+    decayDays: liveValue(config?.decayDays) ?? DEFAULT_DECAY_DAYS,
   }
 }

@@ -39,10 +39,10 @@
 - **持久化记忆** — 将事实、偏好和约定存储在持久的 KV 后端中，带审计日志。
 - **三层作用域** — `global`（跨项目）、`project`（按仓库自动检测）、`user`（跨项目 profile）。
 - **九个记忆工具 + 身份工具** — `memory_search`、`memory_add`、`memory_replace`、`memory_remove`、`memory_list`、`memory_get`、`memory_pin`、`memory_unpin`、`memory_forget`，外加 `identity_update`（见下）。
-- **身份层（opt-in）**——代理的两份自我文档：**SOUL.md**（它的人格）与 **USER.md**（它对你的了解），由代理在对话中经 `identity_update` 自己生长（显式指令始终优先；与部署 persona 共存而非替代），每个会话注入（`soul` @80 / `user-profile` @81）。内置中文种子落一次、全量版本历史、永不衰减。人没有编辑器——只有治理：只读 Identity 设置区 + 版本历史 + 两步**回滚**阀门（默认开，独立于远程写开关）+ markdown 导出。提取永不入库身份复述（提示词规则 + 机械预筛）；eval 切片与 `--identity` 轴钉住注入面（见 [TECH_DESIGN §7.10](docs/TECH_DESIGN.zh.md)）。
+- **身份层（opt-in）**——代理的两份自我文档：**SOUL.md**（它的人格）与 **USER.md**（它对你的了解），由代理在对话中经 `identity_update` 自己生长（显式指令始终优先；与部署 persona 共存而非替代），每个会话注入（`soul` @80 / `user-profile` @81）。内置中文种子落一次、全量版本历史、永不衰减。人没有编辑器——只有治理：只读 Identity 面板（左侧栏）+ 版本历史 + 两步**回滚**阀门（默认开，独立于远程写开关）+ markdown 导出。提取永不入库身份复述（提示词规则 + 机械预筛）；eval 切片与 `--identity` 轴钉住注入面（见 [TECH_DESIGN §7.10](docs/TECH_DESIGN.zh.md)）。
 - **BM25 相关性检索** — 零依赖的 Okapi BM25，CJK 感知分词（Latin 逐词；CJK 一元 + 相邻二元 bigram），固定（pin）条目在同等相关时优先靠前。检索质量不是玄学：固定 golden set（35 条 × 35 组查询，中英混合）在 CI 中实测——success@5 = 100%、MRR = 0.902——并附各注入模式的成本数字（见 [TECH_DESIGN §7.9](docs/TECH_DESIGN.zh.md)）。
 - **自动学习** — 投影累加器观察对话中的显式记忆意图、修正语句以及*已验证的失败序列*（同签名连续失败后最终成功），候选足够多时运行 LLM 提取。准入规则排除一切"仓库已记录的内容"（代码结构、git 历史、已修复 bug 的经过），模型手写的日期前缀会被剥离，时间戳永远由程序盖戳。
-- **项目笔记 prompt 段落** — 编码约定与踩坑日志渲染进每次会话的 system prompt（`project-notes` 段）。不向仓库写入任何文件：记忆完全保存在 host 侧存储中，在 Memory 设置 UI 里管理；升级时自动清理 ≤0.5.x 留下的笔记文件。
+- **项目笔记 prompt 段落** — 编码约定与踩坑日志渲染进每次会话的 system prompt（`project-notes` 段）。不向仓库写入任何文件：记忆完全保存在 host 侧存储中，在左侧栏的 Memory 面板里管理；升级时自动清理 ≤0.5.x 留下的笔记文件。
 - **digest 优先注入（默认）** — system prompt 只承载冻结的指引文本，数据改走消息尾部：会话首步一次性注入 `<memory-digest>` 库存清单（类目计数 + anchors 主题词，压缩后补发一次），每步按相关性追加 `<recalled-memory>` 召回围栏。提示词前缀整会话逐字节稳定，重冻结不再牵连常驻数据。
 - **去重管线** — 两阶段去重（停用词过滤的 Jaccard 预过滤 + 可选 LLM 裁决，合并长度有上限），防止近似重复条目累积；低频 curator pass 会将过长条目改写为简洁单行。
 - **两层记忆生命周期** — 固定重要记忆；过期的 project 作用域条目被移除，而过期的 `global`/`user` 条目做软衰减（从常驻注入面隐藏但仍可搜索，再次召回即解除）；条目也可以从界面手动归档；每次写入都有审计。
@@ -51,7 +51,7 @@
 - **安全扫描：写入时 + 读取时** — API Key、Token、提示注入模式和泄露尝试会被阻止写入；漏网内容在重新进入 prompt 的任何位置都会被替换为 `[BLOCKED: …]` 占位符。
 - **前端可配置** — 所有设置在 dsh 设置界面的 bundle 页面上暴露，实时生效。
 - **可选的写入前人工确认** — 打开一个开关（`confirmBeforeWrite`）后，自动提取*与*工具调用产生的写入一律先进入待确认队列（同一提议反复出现会累计次数并置顶）；采纳才落库（可先编辑），拒绝即丢弃。模型永不自我提升：对既有条目的修改提议在你采纳前不会改动原文。
-- **记忆管理中心** — dsh 设置界面新增独立「记忆」区，三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、懒加载条目列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
+- **记忆管理中心** — 左侧栏新增「Memory」面板（图标 + 主面板，与工具面板并列），三个标签页：概览（健康仪表盘）、待确认（提议队列）、管理——作用域与工作区筛选、BM25 搜索、类别筛选、懒加载条目列表，并带完整写操作（编辑 / 置顶 / 归档 / 删除），中英双语。
 - **时间窗浏览 + 智能列表视图** — `memory_list` 默认按最新在前返回，附带 `earliest`/`latest`/`hasStale` 元数据，支持 `since`/`until` 毫秒时间戳边界（「上周学了什么」这类查询直接在窗口内分页）；过滤条件命中 0 条但库非空时，会提示放宽过滤条件。
 - **可选摘要（渐进式披露）** — `memory_add`/`memory_replace` 接受 `summary`，提取也可以输出 `[summary:…]` 标签；index 模式与自动召回优先渲染摘要而非截断正文。
 
@@ -157,7 +157,7 @@ pnpm dsh plugin --profile web update @chenhw7/dsh-memory
 
 ### 从 0.5.x 升级
 
-0.6 版本停止向仓库导出记忆文件：`docs/agent-memory/CONVENTIONS.md` / `PITFALLS.md` 渲染文件与 `AGENTS.md` 托管指针块一并移除，记忆只通过 prompt 注入并在 Memory 设置 UI 中管理。升级后在每个项目的第一次会话里，插件会自动清理 ≤0.5.x 留下的产物：从 `AGENTS.md` 中剥离托管指针块（若文件只含指针块则整文件删除），并删除 `docs/agent-memory/` 下由插件生成的文件（只删插件生成的；目录中的其他文件保留）。你也可以随时手动删除它们——现在不会再有任何文件被写入仓库。
+0.6 版本停止向仓库导出记忆文件：`docs/agent-memory/CONVENTIONS.md` / `PITFALLS.md` 渲染文件与 `AGENTS.md` 托管指针块一并移除，记忆只通过 prompt 注入并在左侧栏 Memory 面板中管理。升级后在每个项目的第一次会话里，插件会自动清理 ≤0.5.x 留下的产物：从 `AGENTS.md` 中剥离托管指针块（若文件只含指针块则整文件删除），并删除 `docs/agent-memory/` 下由插件生成的文件（只删插件生成的；目录中的其他文件保留）。你也可以随时手动删除它们——现在不会再有任何文件被写入仓库。
 
 ## 卸载
 
@@ -215,7 +215,7 @@ dsh --profile web --dump-config | grep memory
   name: '@chenhw7/dsh-memory/remote-service'
 ```
 
-然后启动 dsh，打开 **设置 → 插件 → @chenhw7/dsh-memory**，它的页面承载五个配置 section：
+然后启动 dsh：**配置**在 **设置 → 插件 → @chenhw7/dsh-memory** 的页面（五个配置 section），**管理**在左侧栏新出现的 **Memory** 图标（条目浏览 / 待确认队列 / 健康仪表盘）与 **Identity** 图标（只读身份治理）：
 
 ```sh
 dsh web
@@ -292,7 +292,7 @@ dsh web
 | `curatorEveryNSessions` | `20` | 每 N 次会话创建运行一次 curator pass。 |
 | `curatorMaxEntries` | `5` | 每次 curation 最多选中的条目数（最长优先）。 |
 | `curatorMinChars` | `400` | 只有长度不小于该值的条目才会被选中改写。 |
-| `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在设置「记忆」区（待确认页）采纳。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
+| `confirmBeforeWrite` | `false` | 人审模式：所有提取（review/flush/curator）*与*每次 `memory_add`/`memory_replace` 调用都改为在待确认队列中生成提议，而非直接写库，直到有人在左侧栏 Memory 面板的待确认页采纳。同一提议被反复观察会累计 `hits` 并置顶；对既有条目的修改提议携带其 id，在人工采纳前不会改动原文。 |
 
 > 特意**没有 `memory-tools` 设置条目**：工具行本身不拥有旋钮。它从 `ctx.memory.settings()` 读 `maxSearchResults`、从 `ctx.memoryReview.settings()` 读 `confirmBeforeWrite`、从 `ctx.identity.settings()` 读身份开关与预算。它自己的 `config.maxSearchResults` 只在没有 store 组合时兜底。
 
@@ -410,7 +410,7 @@ profile patch 示例（把每个条目的默认值钉住；设置页写入的也
 | `memory-notes` | `@chenhw7/dsh-memory/notes` | 项目笔记 prompt 投影（渲染约定/踩坑进 `project-notes` 段落；0.6 起不写仓库文件），注册 `ctx.projectNotes`；会话创建时清理 ≤0.5.x 的文件导出残留 |
 | `memory-identity` | `@chenhw7/dsh-memory/identity` | 注册 `ctx.identity`：从 store 的身份表播种并读取两份自我文档（SOUL.md / USER.md） |
 | `memory-autorecall` | `@chenhw7/dsh-memory/context` | 系统提示注入（`memory` @6000 + `project-notes` @6001，位于工具指引之后）与消息尾部注入（一次性清单 + 每步召回围栏），持有 auto-recall 设置 |
-| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（设置「记忆」区经 `/api` 通道消费） |
+| `memory-remote` | `@chenhw7/dsh-memory/remote-service` | 记忆管理 UI 的 `@Remote` 服务（左侧栏 Memory 面板经 `/api` 通道消费） |
 
 **存储**：本 bundle **不**插入 `storage-json` / `storage-domain` 行。`dsh-web-app` bundle 已经提供它们（并在 `$DSH_HOME/storages` 下使用正确的根路径）。如果在这里重复插入，会覆盖已有配置（patch 会替换整行，后写覆盖先写）。memory store provider 将 `storageDomain` 服务作为 peer dependency 使用。
 

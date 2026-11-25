@@ -1,7 +1,7 @@
 /**
  * Memory management UI — browser half.
  *
- * Two surfaces over one store:
+ * Three surfaces over one bundle:
  *
  * 1. **Configuration**: one page on this bundle's card in Settings → Plugins
  *    (`plugins.bundle.config`, keyed by the package name), holding five
@@ -9,16 +9,15 @@
  *    automatic extraction. Each section is bound to the config form of the
  *    profile entry that declares those settings (`memory`, `memory-notes`,
  *    `memory-autorecall`, `memory-identity`, `memory-review`), so a write lands
- *    in the row that owns the field and applies on the Host's re-apply.
- * 2. **Content management** (phase 1): a dedicated "Memory" settings section
- *    (`settings.section`, id `memory`, order 25) browsing the whole web-profile
- *    memory store — an Overview tab with the health dashboard and a Manage tab
- *    with scope/workspace filters, BM25 search, category chips, and a
- *    read-only lazily loaded list with soft-decay markers.
- *    Configuration and content are different dimensions: the cards stay where
- *    they are, the section says so in its intro line.
- * 3. **Identity governance** (the identity layer): a read-only "Identity"
- *    settings section (id `identity`, order 26) rendering the agent's two
+ *    in the row that owns the field; editable fields are volatile and apply live.
+ * 2. **Memory management**: the sidebar's Memory panel. The panel is a `main`
+ *    occupant keyed `memory`, and the matching `sidebar.panellist` entry puts
+ *    its icon in the left column's global panel list; the page browses the
+ *    whole web-profile memory store (health dashboard, proposal queue, entry
+ *    management). Management and configuration are different dimensions: the
+ *    cards stay in Settings → Plugins, the page says so in its intro line.
+ * 3. **Identity governance** (the identity layer): the sidebar's Identity
+ *    panel (a second `main` occupant), rendering the agent's two
  *    self-documents — SOUL.md (its character) and USER.md (its understanding
  *    of the human) — with their retained version history, the revert valve,
  *    and a plain export. The documents are written by the agent through
@@ -45,11 +44,16 @@
 
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// Type-only: pulls the settings shell's SlotMap merge (the 'settings.section'
-// entry that hosts this section) and the ctx.configForms Context merge.
-// Cross-plugin collaboration goes through the service, never a value import
-// (client bundle purity gate).
+// Type-only: the config-page shell's SlotMap merge (`plugins.bundle.config`)
+// and the ctx.configForms Context merge. Cross-plugin collaboration goes
+// through the service, never a value import (client bundle purity gate).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: merges the frame's `main` slot into the client SlotMap — the
+// main-panel seat each management page renders into.
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: merges the left sidebar's `sidebar.panellist` slot into the
+// client SlotMap — the global panel icons that select those pages.
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 // Type-only: the plugins settings tab's SlotMap merge (settings.plugins.tab).
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 // Type-only: merges `ctx.slots` (SlotRegistry) into the client Context — the
@@ -69,6 +73,7 @@ import type { ModelCatalogView } from './NamespaceCard.tsx'
 import { MemorySectionController } from './memory-section-store.ts'
 import type { MemoryRemoteApi } from './memory-section-store.ts'
 import { IdentitySectionController } from './identity-section-store.ts'
+import { IdentityPanelIcon, MemoryPanelIcon } from './panel-icons.tsx'
 import { en, zh } from './locales.ts'
 
 /**
@@ -99,11 +104,17 @@ const NS = 'settings.memory'
 /** This bundle's package name — the key the Plugins page files its configuration under. */
 const BUNDLE_NAME = '@chenhw7/dsh-memory'
 
-/** Settings-section nav order — after Plugins (15) and Agent presets (20). */
-const SECTION_ORDER = 25
+/** Global panel order — after the context panel (20), before the SSH panel (40). */
+const MEMORY_PANEL_ORDER = 30
 
-/** The identity section's nav order — right after the Memory section. */
-const IDENTITY_SECTION_ORDER = 26
+/** The identity panel's order — right after the Memory panel. */
+const IDENTITY_PANEL_ORDER = 31
+
+/** The memory panel's `main` key, also the sidebar list id that selects it. */
+const MEMORY_PANEL_KEY = 'memory'
+
+/** The identity panel's `main` key, also the sidebar list id that selects it. */
+const IDENTITY_PANEL_KEY = 'identity'
 
 /** Structural face of the pieces of the client connection the loader needs. */
 interface ConnectionFace {
@@ -271,30 +282,50 @@ export function apply(ctx: ClientContext): void {
     rejectSuggestion: (id) => controller.rejectSuggestion(id),
   })
 
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'memory',
-    order: SECTION_ORDER,
-    label: () => ctx.locale.bind(NS)('nav'),
-    locale: NS,
-    inject: sectionInjected,
-  }, MemorySection))
+  // The memory management page: a `main` occupant keyed by the same id the
+  // sidebar's panel icon registers, so selecting the icon dispatches this page
+  // into the centre column. Registration is unconditional: this client half
+  // only loads when the bundle is composed, and the bundle's own patch inserts
+  // the rows the page reads — a settings-wire gate would make the page depend
+  // on an unrelated transport.
+  ctx.effect(() => {
+    const disposePage = ctx.slots.inject('main', () => ctx.slots.register({
+      name: 'main',
+      key: MEMORY_PANEL_KEY,
+      locale: NS,
+      inject: sectionInjected,
+    }, MemorySection))
+    const disposeIcon = ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+      name: 'sidebar.panellist',
+      id: MEMORY_PANEL_KEY,
+      order: MEMORY_PANEL_ORDER,
+      label: () => ctx.locale.bind(NS)('nav'),
+    }, MemoryPanelIcon))
+    return () => { disposeIcon(); disposePage() }
+  }, 'dsh-memory: memory panel')
 
-  // The identity governance section: a separate nav entry after Memory —
-  // the identity documents are the agent's own surface, not memory entries,
-  // and the settings-section contract keeps them addressable apart.
+  // The identity governance page: its own panel after Memory. The identity
+  // documents are the agent's own surface, not memory entries, and a separate
+  // panel keeps them addressable apart while staying out of Settings.
   const identityInjected = (): IdentitySectionInjected => ({
     hooks: { identitySection: identityController.store },
     load: () => identityController.load(),
     revert: (kind, version) => identityController.revert(kind, version),
   })
 
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'identity',
-    order: IDENTITY_SECTION_ORDER,
-    label: () => ctx.locale.bind(NS)('identityNav'),
-    locale: NS,
-    inject: identityInjected,
-  }, IdentitySection))
+  ctx.effect(() => {
+    const disposePage = ctx.slots.inject('main', () => ctx.slots.register({
+      name: 'main',
+      key: IDENTITY_PANEL_KEY,
+      locale: NS,
+      inject: identityInjected,
+    }, IdentitySection))
+    const disposeIcon = ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+      name: 'sidebar.panellist',
+      id: IDENTITY_PANEL_KEY,
+      order: IDENTITY_PANEL_ORDER,
+      label: () => ctx.locale.bind(NS)('identityNav'),
+    }, IdentityPanelIcon))
+    return () => { disposeIcon(); disposePage() }
+  }, 'dsh-memory: identity panel')
 }

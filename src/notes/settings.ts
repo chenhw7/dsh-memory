@@ -22,6 +22,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { liveValue, type LiveConfig } from '../live-config.ts'
 
 /** Whether the project-notes prompt section is injected. */
 export const DEFAULT_NOTES_ENABLED = true
@@ -53,10 +54,11 @@ function resolveBudget(
   share: number,
   fallback: number,
 ): number {
-  const own = value[key]
+  const own = liveValue(value[key] as number | undefined)
   if (typeof own === 'number' && own >= 0) return Math.trunc(own)
-  if (typeof value.notesCharLimit === 'number' && value.notesCharLimit >= 0) {
-    return Math.trunc(value.notesCharLimit * share)
+  const legacy = liveValue(value.notesCharLimit as number | undefined)
+  if (typeof legacy === 'number' && legacy >= 0) {
+    return Math.trunc(legacy * share)
   }
   return fallback
 }
@@ -67,10 +69,10 @@ function resolveBudget(
  * {@link resolveNotesSettings}'s deprecated-key fallback reads.
  */
 export const NOTES_FIELDS = {
-  notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED),
-  notesConventionsCharLimit: z.number().step(1).min(0),
-  notesPitfallsCharLimit: z.number().step(1).min(0),
-  notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE),
+  notesEnabled: z.boolean().default(DEFAULT_NOTES_ENABLED).volatile(),
+  notesConventionsCharLimit: z.number().step(1).min(0).volatile(),
+  notesPitfallsCharLimit: z.number().step(1).min(0).volatile(),
+  notesMaxEntriesPerFile: z.number().step(1).min(0).default(DEFAULT_NOTES_MAX_ENTRIES_PER_FILE).volatile(),
 }
 
 /** The builtin values, used when no notes entry is composed. */
@@ -96,12 +98,14 @@ export type NotesConfigValue = Partial<NotesSettings> & {
  * @param value - the `memory-notes` entry value, possibly partial.
  * @returns the fully-resolved notes settings.
  */
-export function resolveNotesSettings(value: NotesConfigValue | undefined): NotesSettings {
+export function resolveNotesSettings(value: NotesConfigValue | Partial<LiveConfig<NotesSettings>> | undefined): NotesSettings {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
+  const enabled = liveValue(v.notesEnabled as boolean | undefined)
+  const maxEntries = liveValue(v.notesMaxEntriesPerFile as number | undefined)
   return {
-    notesEnabled: typeof v.notesEnabled === 'boolean' ? v.notesEnabled : DEFAULT_NOTES_ENABLED,
+    notesEnabled: typeof enabled === 'boolean' ? enabled : DEFAULT_NOTES_ENABLED,
     notesConventionsCharLimit: resolveBudget(v, 'notesConventionsCharLimit', DEPRECATED_CONVENTIONS_SHARE, DEFAULT_NOTES_CONVENTIONS_CHAR_LIMIT),
     notesPitfallsCharLimit: resolveBudget(v, 'notesPitfallsCharLimit', 1 - DEPRECATED_CONVENTIONS_SHARE, DEFAULT_NOTES_PITFALLS_CHAR_LIMIT),
-    notesMaxEntriesPerFile: typeof v.notesMaxEntriesPerFile === 'number' && v.notesMaxEntriesPerFile >= 0 ? Math.trunc(v.notesMaxEntriesPerFile) : DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
+    notesMaxEntriesPerFile: typeof maxEntries === 'number' && maxEntries >= 0 ? Math.trunc(maxEntries) : DEFAULT_NOTES_MAX_ENTRIES_PER_FILE,
   }
 }

@@ -1,10 +1,10 @@
 /**
- * Memory content-management section — Settings → Memory. Phase 2 closes the
- * write loop on top of the phase-1 read-only browsing: three tabs keep the
- * three jobs apart — Overview holds the health dashboard; **Review** holds
- * the pending-proposal queue (adopt with edits / reject, P1-1); Manage holds
- * the filters, the lazily loaded entry list, and per-row write actions
- * (edit / delete / pin / archive — P1-7).
+ * Memory management page — the `main` panel behind the sidebar's Memory icon.
+ * Phase 2 closes the write loop on top of the phase-1 read-only browsing:
+ * three tabs keep the three jobs apart — Overview holds the health dashboard;
+ * **Review** holds the pending-proposal queue (adopt with edits / reject,
+ * P1-1); Manage holds the filters, the lazily loaded entry list, and per-row
+ * write actions (edit / delete / pin / archive — P1-7).
  *
  * Data flows exclusively through the injected controller store — this file
  * holds no connection and issues no RPCs. Every mutation repaints from the
@@ -61,7 +61,7 @@ export interface MemorySectionInjected {
 
 /** Full component props. */
 export type MemorySectionProps =
-  PropsRuntime<'settings.section'>
+  PropsRuntime<'main'>
   & PropsLocale<'settings.memory'>
   & InjectFace<MemorySectionInjected>
 
@@ -392,11 +392,26 @@ function SuggestionRow(props: {
 }
 
 /**
- * Render the Memory section content column.
+ * The sidebar's Memory panel: the page frame plus the content column.
+ * @param props - composed slot props.
+ * @returns the page.
+ */
+export function MemorySection(props: MemorySectionProps): ReactNode {
+  return (
+    <div className={css.panel}>
+      <div className={css.panelInner}>
+        <MemorySectionContent {...props} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Render the Memory page's content column.
  * @param props - composed slot props.
  * @returns the section.
  */
-export function MemorySection(props: MemorySectionProps): ReactNode {
+function MemorySectionContent(props: MemorySectionProps): ReactNode {
   const { useMemorySection, t, load } = props
   const state = useMemorySection(snapshot => snapshot)
 

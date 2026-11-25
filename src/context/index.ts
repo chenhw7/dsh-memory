@@ -60,6 +60,7 @@ import {
   resolveAutoRecallSettings,
 } from './settings.ts'
 import type { AutoRecallSettings } from './settings.ts'
+import type { LiveConfig } from '../live-config.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 // Type-only: merges the `compaction/*` SessionEventMap declaration so the
 // refreeze listener can narrow `compaction/end` and read its error field.
@@ -135,7 +136,7 @@ const SNAPSHOT_SCOPES: readonly MemoryScope[] = ['global', 'project', 'user']
 export type MemoryConfig = MemoryInjectionSettings & NotesSettings & AutoRecallSettings & IdentitySettings
 
 /** The `memory-autorecall` entry config — this plugin's own settings page. */
-export const Config: z<AutoRecallSettings> = z.object(AUTORECALL_FIELDS)
+export const Config = z.object(AUTORECALL_FIELDS)
 
 /**
  * Render one scope's entries as a bulleted list under a `## <scope>` heading.
@@ -293,13 +294,12 @@ export function readMemoryIndex(memory: MemoryStore, charLimit: number, exclude?
  *
  * Settings reach this plugin from two places: its own entry config (the
  * auto-recall slice) and the services that own the other three entries. The
- * host re-runs `apply` when a card commits a change, so every read here sees
- * the value the user just saved.
+ * editable knobs are `volatile` (a card commit updates the live refs in place,
+ * so every read here sees the value the user just saved without a restart).
  * @param ctx - Cordis context carrying the prompt registry.
  * @param config - the `memory-autorecall` entry config.
  */
-export function apply(ctx: Context, config: AutoRecallSettings = DEFAULT_AUTO_RECALL_SETTINGS): void {
-  const recall = resolveAutoRecallSettings(config)
+export function apply(ctx: Context, config: LiveConfig<AutoRecallSettings> = DEFAULT_AUTO_RECALL_SETTINGS): void {
 
   // Load-time loud gate for the identity entry: this plugin assembles the
   // identity sections, so it validates the seed directory before mounting.
@@ -322,7 +322,7 @@ export function apply(ctx: Context, config: AutoRecallSettings = DEFAULT_AUTO_RE
   const current = (): MemoryConfig => ({
     ...ctx.get('memory')?.settings() ?? DEFAULT_INJECTION_SETTINGS,
     ...ctx.get('projectNotes')?.settings() ?? DEFAULT_NOTES_SETTINGS,
-    ...recall,
+    ...resolveAutoRecallSettings(config),
     ...identitySettings(),
   })
 
@@ -428,8 +428,9 @@ export function apply(ctx: Context, config: AutoRecallSettings = DEFAULT_AUTO_RE
   ctx.on('session/created', freezeFor, { global: true })
   /**
    * The session's frozen snapshot, freezing it on first touch. Sessions created
-   * before this fiber (re)applied — a settings change re-runs `apply`, which
-   * replaces the per-session maps — have no entry yet; freezing lazily here
+   * before this fiber (re)applied — an ordinary (mount-time) config change
+   * restarts the entry and replaces the per-session maps — have no entry yet;
+   * freezing lazily here
    * keeps their sections filled instead of blanking them until the next
    * `session/created`.
    */
